@@ -1,23 +1,40 @@
-# Nachbesuch 6
+# Nachbesuch
 
-Native SwiftUI/SwiftData app für Haustür-Nachbesuche.
-**iOS 26 · Xcode 26 · Swift 6 language mode · Bundle-ID `at.volkshilfe.nachbesuch.v5`**
+Native Apps für Haustür-Nachbesuche auf iOS und Android.
+
+- `ios/` — produktive SwiftUI/SwiftData-App für iOS 26 mit Swift 6
+- `android/` — native Kotlin/Compose-App mit eigenem Build und [Portierungsstatus](android/porting-status.md)
+- `scripts/` — lokale Sicherheitsprüfungen für Git
+
+Die beiden Apps teilen dieselbe fachliche Bedeutung für Gebiete, Häuser, Türen,
+Tag 1/Tag 2, Backup und Export. Ihre Implementierungen und Build-Systeme bleiben
+klar getrennt.
+
+## Arbeiten an diesem Projekt
+
+    git clone https://github.com/joseph-kya/Nachbesuch-App.git && cd Nachbesuch-App
+    ln -sf ../../scripts/pre-commit .git/hooks/pre-commit   # blockt Felddaten im Commit
+
+    cd ios
+    xcodebuild -scheme NachbesuchV5 -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+
+    cd ../android
+    ./gradlew test
+
+- `next-steps.md` — was als Nächstes zu tun ist, in welcher Reihenfolge
+- `status.md` — was gerade läuft, was blockiert ist
+- `porting.md` — fachlicher Android-Portierungsplan und Paritätsvertrag
+- `android/API_KEY_SECURITY.md` — verbindliche Regeln für Google Maps auf Android
+
+---
+
+## iOS-App
+
+**iOS 26 · Xcode 26 · Swift 6 · Bundle-ID `at.volkshilfe.nachbesuch.v5`**
 
 Version 6 ist eine vollständige Überarbeitung von Version 5. Die **gespeicherte
 Datenform ist unverändert** — bestehende Installationen behalten ihre Gebiete,
 Häuser und Ergebnisse, ohne Backup-Import.
-
-## Arbeiten an diesem Projekt
-
-    git clone <url> && cd nachbesuch
-    ln -sf ../../scripts/pre-commit .git/hooks/pre-commit   # blockt Felddaten im Commit
-    xcodebuild -scheme NachbesuchV5 -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
-
-- `next-steps.md` — was als Nächstes zu tun ist, in welcher Reihenfolge
-- `status.md` — was gerade läuft, was blockiert ist
-- `porting.md` — geparkter Android-Plan, siehe Auslöser darin
-
----
 
 ## Die drei Tabs
 
@@ -425,13 +442,18 @@ Bewegung, sparsam eingesetzt:
 ## Aufbau
 
 ```
-App/          Einstieg, Schema + Wiederherstellung, RootView
-DesignSystem/ Maße, Bewegung, Oberflächen, Layout
-Location/     Standort + Kompass
-Map/          MKMapView-Brücke, Koordinator, Pin-Grafik, Kamera, Orte, Chrome
-Models/       House, Gebiet, DoorResult, DayScope, OutcomeTally
-Features/     Karte, Liste, Archiv, Bilanz, geteilte Ansichten
-Services/     Backup, Export, OSM-Import, Benennung, Suche, Index
+ios/                     iOS-App, Xcode-Projekt und XCTest-Suite
+  NachbesuchV5/
+    App/                 Einstieg, Schema + Wiederherstellung, RootView
+    DesignSystem/        Maße, Bewegung, Oberflächen, Layout
+    Location/            Standort + Kompass
+    Map/                 MKMapView, Koordinator, Pins, Kamera, Orte, Chrome
+    Models/              House, Gebiet, DoorResult, DayScope, OutcomeTally
+    Features/            Karte, Liste, Archiv, Bilanz, geteilte Ansichten
+    Services/            Backup, Export, OSM-Import, Benennung, Suche, Index
+  NachbesuchV5Tests/     iOS-Tests
+android/                 Android-App mit app, data, domain und ui Modulen
+scripts/                 versionierte Repository-Sicherheitsprüfungen
 ```
 
 Zwei Regeln tragen die Kartenleistung:
@@ -442,7 +464,8 @@ Zwei Regeln tragen die Kartenleistung:
 
 ## Tests
 
-74 Tests, grün im Swift-6-Modus, mit Schwerpunkt auf den oben korrigierten Fehlern:
+78 Tests grün und ein diagnostischer PDF-Test gezielt übersprungen, im Swift-6-Modus,
+mit Schwerpunkt auf den oben korrigierten Fehlern:
 Tag-Semantik, Änderungsstempel, Schutz beschädigter Daten, Gebiets-Invarianten,
 Schwerpunktberechnung, Straßennamen, Suche, Bilanz, Export-Umfang und Pin-Aufbau
 bis 10.000 Häuser. Für die Route zusätzlich: dass jedes Haus genau einmal besucht
@@ -454,7 +477,7 @@ erledigte fallen heraus, und die gezeichnete Linie läuft nach einem Übersprung
 rückwärts durch bereits erledigte Türen.
 
 ```bash
-xcodebuild test -project NachbesuchV5.xcodeproj -scheme NachbesuchV5 -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+xcodebuild test -project ios/NachbesuchV5.xcodeproj -scheme NachbesuchV5 -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 ```
 
 ### Testdaten für Leistungsmessungen (nur DEBUG)
@@ -470,10 +493,10 @@ Daten unberührt.
 Beispiel-PDF zum Ansehen der Layouts:
 
 ```bash
-TEST_RUNNER_NACHBESUCH_DUMP_PDF=1 xcodebuild test -only-testing:NachbesuchV5Tests/PDFDumpTests …
+TEST_RUNNER_NACHBESUCH_DUMP_PDF=1 xcodebuild test -project ios/NachbesuchV5.xcodeproj -scheme NachbesuchV5 -only-testing:NachbesuchV5Tests/PDFDumpTests …
 ```
 
 ## Starten
 
-`NachbesuchV5.xcodeproj` öffnen, iPhone oder Simulator wählen, Run.
+`ios/NachbesuchV5.xcodeproj` öffnen, iPhone oder Simulator wählen, Run.
 Beim ersten Start Standortzugriff erlauben.

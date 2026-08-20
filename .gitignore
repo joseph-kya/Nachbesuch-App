@@ -18,6 +18,18 @@ xcuserdata/
 .build/
 Packages/
 
+# ── Android / Gradle ────────────────────────────────────
+.gradle/
+.kotlin/
+.idea/
+*.iml
+local.properties
+secrets.properties
+captures/
+*.keystore
+*.jks
+data/schemas/
+
 # ── macOS ───────────────────────────────────────────────
 .DS_Store
 ._*

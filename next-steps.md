@@ -31,7 +31,8 @@ That only works if the agent stays inside the contract:
   proposals into `proposals.md` and stop** — do not start building them.
 - Change stored data shape (`SchemaV1`, `unitsData`, `boundaryData`, backup JSON). The
   "islands" decision removed the only reason to, and the frozen-shape comments in
-  `Models/House.swift:5-9` and `Models/Gebiet.swift:20-22` are still literally true.
+  `ios/NachbesuchV5/Models/House.swift:5-9` and
+  `ios/NachbesuchV5/Models/Gebiet.swift:20-22` are still literally true.
 - Touch anything marked 👤 — those need a physical device or an account you don't have.
 - Delete anything the owner might still need: the old app on the device, the original
   folder, a backup file, `porting.md`.
@@ -77,7 +78,7 @@ something:
    `PBXFileSystemSynchronizedRootGroup`: any `.swift` file placed in the folder is
    automatically part of the target. A stray scratch file compiles into the app. Keep
    temporary files out of the project tree entirely — use the scratch directory.
-4. **The map is a performance surface.** Anything touching `Map/` gets a seeded 2 000-pin
+4. **The map is a performance surface.** Anything touching `ios/NachbesuchV5/Map/` gets a seeded 2 000-pin
    check before it is considered done. Pins, clustering and pin-scale logic have all
    regressed before.
 5. **Test count is a fact, not a vibe.** Report the number the run printed. It has been
@@ -121,13 +122,13 @@ Last updated: <ISO timestamp> · HEAD: <sha> · Tests: <n> passing
 | **Purpose** | A private tool that colleagues use. **Not** an official Volkshilfe project. | The owner personally carries responsibility for the donor data. No organisational Apple account, no organisational repo, no claim on `at.volkshilfe.*`. |
 | **Maturity** | In production. Field-tested over two real rounds. | Field verdict: *"pretty perfect"* apart from GPS. Feature work is **not** the priority; safety and precision are. |
 | **Source control** | `git init` + private GitHub remote. | Part III §3 |
-| **Project layout** | Promote `Version 5` to a top-level folder; rename the app to **Nachbesuch**. | §4 |
+| **Project layout** | One repository with `ios/` and `android/`; promote `Version 5` to a top-level folder and rename the iOS app to **Nachbesuch**. | §4 |
 | **Bundle id** | `at.volkshilfe.nachbesuch.v5` → **`com.kyamakya.nachbesuch`** (no domain owned, so the `com.` form is right; Apple requires no ownership proof). | §4 — **data-destroying if done wrong** |
 | **Data flow between people** | **Islands.** Everyone draws their own territory and imports their own addresses. No coordinator hand-off, no sync. | Kills the "territory without results" export → **no schema change needed** |
 | **Distribution** | Free provisioning for now; 7-day expiry and a cable per colleague accepted. | TestFlight parked (§6.1) |
 | **Retention** | Manual delete only, for now. | Export-then-delete prompt parked behind a trigger (§6.2) |
 | **GPS** | Full precision while the map is visible **+** the puck visibly de-emphasises when the fix is untrustworthy. | §5 |
-| **Android port** | **Shelved**, with a trigger. | §6.3 |
+| **Android port** | Source stays in the repository; release/distribution is parked until its acceptance work is complete. | §6.3 |
 
 ## 1.2 Two consequences worth internalising
 
@@ -153,7 +154,7 @@ task touches either the folder or the app container.
 ### 2.1 Owner steps
 
 1. On the phone: **Archiv → ⋯ → Sicherung → „Backup erstellen"**
-   (`Features/Archiv/ArchiveScreen.swift:200-203` → `BackupService.makeBackup`).
+   (`ios/NachbesuchV5/Features/Archiv/ArchiveScreen.swift:200-203` → `BackupService.makeBackup`).
 2. Share the file off the device — AirDrop to the Mac, or Files → iCloud. Do **not**
    leave the only copy inside the app's own container.
 3. Tell the agent the path.
@@ -302,8 +303,9 @@ git init -b main
 # .gitignore and scripts/pre-commit written first, then:
 git add -A
 git status --short | head -80        # eyeball it — this is the last cheap moment
-git ls-files | wc -l                 # expect ~70–90, NOT thousands
-git ls-files | grep -iE "backup|DerivedData|\.png$" || echo "clean"
+git ls-files | wc -l                 # expect roughly 130–160, NOT thousands
+git ls-files | grep -iE '(^|/)(DerivedData|build)/|(backup|export).*\.(json|pdf)$' || echo "clean"
+git ls-files '*.png'                 # expect only deliberate source assets such as the app icon
 ```
 
 If `git ls-files | wc -l` is in the thousands, `DerivedData` or `build/` leaked in — fix
@@ -379,7 +381,7 @@ git log --oneline -15               # what actually happened
 git status                          # uncommitted work in flight
 git branch --show-current           # which item was in progress
 cat status.md                       # what the last session believed
-xcodebuild -scheme NachbesuchV5 -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test 2>&1 | tail -5
+xcodebuild -project ios/NachbesuchV5.xcodeproj -scheme NachbesuchV5 -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test 2>&1 | tail -5
 ```
 
 Trust, in this order: the test run > `git log` > `status.md` > any remembered summary. If
@@ -419,6 +421,7 @@ jobs:
       - name: Test
         run: |
           xcodebuild test \
+            -project ios/NachbesuchV5.xcodeproj \
             -scheme NachbesuchV5 \
             -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
             -resultBundlePath TestResults.xcresult \
@@ -445,20 +448,22 @@ Keep it as the main README. Add a short section at the top:
 ```markdown
 ## Arbeiten an diesem Projekt
 
-    git clone <url> && cd nachbesuch
+    git clone https://github.com/joseph-kya/Nachbesuch-App.git && cd Nachbesuch-App
     ln -sf ../../scripts/pre-commit .git/hooks/pre-commit   # blockt Felddaten im Commit
-    xcodebuild -scheme NachbesuchV5 -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+    xcodebuild -project ios/NachbesuchV5.xcodeproj -scheme NachbesuchV5 -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+    (cd android && ./gradlew test)
 
 - `next-steps.md` — was als Nächstes zu tun ist, in welcher Reihenfolge
 - `status.md` — was gerade läuft, was blockiert ist
-- `porting.md` — geparkter Android-Plan, siehe Auslöser darin
+- `porting.md` — fachlicher Android-Portierungsplan und Paritätsvertrag
+- `android/porting-status.md` — aktueller Android-Implementierungsstand
 ```
 
 ### 3.11 Acceptance for Task 2
 
 - [ ] `git log --oneline` shows the baseline commit and tag `v6.0-feld`
-- [ ] `git ls-files | wc -l` is plausible (~70–90 files)
-- [ ] `git ls-files | grep -iE "backup|DerivedData"` is empty
+- [ ] `git ls-files | wc -l` is plausible for both platforms (~130–160 files)
+- [ ] no generated `build/` or `DerivedData/` path and no backup/export JSON or PDF is tracked
 - [ ] The pre-commit hook is installed and demonstrably blocks a test backup file
       (prove it: `touch test-backup.json && git add -f test-backup.json && git commit` must fail;
       then `git reset` and delete the file)
@@ -492,9 +497,9 @@ do not migrate themselves; the backup file from Task 1 is the only bridge.
 **`UserDefaults` does not survive either.** Two things live there:
 
 - the persisted camera and the `map.didEverCenterOnUser` flag
-  (`Map/MapCameraStore.swift:17-21`) → the app will centre on the user once more, as if
+  (`ios/NachbesuchV5/Map/MapCameraStore.swift:17-21`) → the app will centre on the user once more, as if
   freshly installed. Harmless, but expected — do not treat it as a bug afterwards.
-- **any active recommended route** (`Route/RouteStore.swift`, keys `route.<uuid>`) →
+- **any active recommended route** (`ios/NachbesuchV5/Route/RouteStore.swift`, keys `route.<uuid>`) →
   👤 **finish or end the current route before migrating**, or the plan is lost while the
   houses remain.
 
@@ -508,7 +513,7 @@ do not migrate themselves; the backup file from Task 1 is the only bridge.
    ```bash
    cd ~/Documents && cp -R "Nachbesuchs-app-code-v2.8/Version 5" Nachbesuch
    ```
-5. In the new folder, edit `NachbesuchV5.xcodeproj/project.pbxproj`:
+5. In the new folder, edit `ios/NachbesuchV5.xcodeproj/project.pbxproj`:
    - `PRODUCT_BUNDLE_IDENTIFIER = at.volkshilfe.nachbesuch.v5;` → `com.kyamakya.nachbesuch;`
    - `PRODUCT_BUNDLE_IDENTIFIER = at.volkshilfe.nachbesuch.v5.tests;` → `com.kyamakya.nachbesuch.tests;`
    - `INFOPLIST_KEY_CFBundleDisplayName = NachbesuchV5;` → `Nachbesuch;`
@@ -517,9 +522,9 @@ do not migrate themselves; the backup file from Task 1 is the only bridge.
    There are **two** occurrences of the app id (Debug and Release) and two of the test id.
    Use an asserting replacement, then verify:
    ```bash
-   grep -c "com.kyamakya.nachbesuch;" NachbesuchV5.xcodeproj/project.pbxproj        # 2
-   grep -c "com.kyamakya.nachbesuch.tests;" NachbesuchV5.xcodeproj/project.pbxproj  # 2
-   grep -c "at.volkshilfe" NachbesuchV5.xcodeproj/project.pbxproj                   # 0
+   grep -c "com.kyamakya.nachbesuch;" ios/NachbesuchV5.xcodeproj/project.pbxproj        # 2
+   grep -c "com.kyamakya.nachbesuch.tests;" ios/NachbesuchV5.xcodeproj/project.pbxproj  # 2
+   grep -c "at.volkshilfe" ios/NachbesuchV5.xcodeproj/project.pbxproj                   # 0
    ```
 6. Update everything else that hard-codes the old id or version:
    ```bash
@@ -527,13 +532,13 @@ do not migrate themselves; the backup file from Task 1 is the only bridge.
    ```
    At minimum `README.md`, `next-steps.md`, `porting.md` and any `simctl` command.
    Align the two Overpass `User-Agent` strings —
-   `Services/AreaHouseImportService.swift` currently sends `"Nachbesuch-iOS/2.8"` while
-   `Route/WalkingNetwork.swift` derives one from `CFBundleShortVersionString`. Make both
+   `ios/NachbesuchV5/Services/AreaHouseImportService.swift` currently sends `"Nachbesuch-iOS/2.8"` while
+   `ios/NachbesuchV5/Route/WalkingNetwork.swift` derives one from `CFBundleShortVersionString`. Make both
    read `Nachbesuch-iOS/<MARKETING_VERSION>` from the bundle. Overpass mirrors block
    anonymous or inconsistent clients, so this is not cosmetic.
 7. Build and test:
    ```bash
-   xcodebuild -scheme NachbesuchV5 -destination 'platform=iOS Simulator,name=iPhone 17 Pro' clean build test
+   xcodebuild -project ios/NachbesuchV5.xcodeproj -scheme NachbesuchV5 -destination 'platform=iOS Simulator,name=iPhone 17 Pro' clean build test
    ```
    Expect the current count passing, 0 failing, 0 warnings.
 8. 👤 Owner, on the device, in this order:
@@ -568,7 +573,7 @@ buildings.
 
 ### 5.1 What the code does today
 
-`Location/LocationService.swift:57-66`:
+`ios/NachbesuchV5/Location/LocationService.swift:57-66`:
 
 ```swift
 manager.activityType = .fitness
@@ -622,9 +627,9 @@ private struct AccuracyProfile: Equatable {
 - Hold `mapVisible` and `following` as private state; recompute and apply on either
   change; skip the `CLLocationManager` write when the resolved profile is unchanged.
 - Add `func setMapVisible(_ visible: Bool)`.
-- Call it from `Map/MapScreen.swift:381-383`, next to the existing
+- Call it from `ios/NachbesuchV5/Map/MapScreen.swift:381-383`, next to the existing
   `location.beginUsing()` / `endUsing()` pair.
-- **Do not** call it from `Features/Liste/ListScreen.swift:329-332` — the list wants a
+- **Do not** call it from `ios/NachbesuchV5/Features/Liste/ListScreen.swift:329-332` — the list wants a
   position for distance sorting, not metre precision, and it is often open with the phone
   in a pocket.
 - Keep `activityType = .fitness` and `pausesLocationUpdatesAutomatically = false`; the
@@ -634,7 +639,7 @@ private struct AccuracyProfile: Equatable {
 
 Nothing fixes multipath. Between 19th-century Viennese blocks the phone genuinely does not
 know which side of the street it is on, and the right response is to stop pretending. The
-halo already grows (`Map/MapCoordinator.swift:424-425` → `Map/UserLocationPuck.swift:126-128`),
+halo already grows (`ios/NachbesuchV5/Map/MapCoordinator.swift:424-425` → `ios/NachbesuchV5/Map/UserLocationPuck.swift:126-128`),
 but a big faint ring is easy to miss.
 
 ```swift
@@ -661,7 +666,7 @@ Presentation in `UserLocationPuckView`:
 - `.uncertain` — hollow core (blue ring, no fill), overall alpha ≈ 0.55, slightly stronger
   halo stroke. **Not** red, **no** warning icon: this is reduced confidence, not an error,
   and it happens constantly in a street canyon.
-- Transition with `Animation.appFeedback` semantics (`DesignSystem/Motion.swift`) — no
+- Transition with `Animation.appFeedback` semantics (`ios/NachbesuchV5/DesignSystem/Motion.swift`) — no
   bounce, ~0.24 s; cross-fade only under Reduce Motion.
 - Accessibility: when uncertain, the label becomes `„Dein Standort, ungenau"`.
 
@@ -745,7 +750,7 @@ Launch time unchanged within noise. The file imports cleanly via the existing re
 
 ### B2 — A test for the legacy v1 backup importer
 
-**Why:** `Services/BackupService.swift` carries a whole `LegacyAppBackup` reader
+**Why:** `ios/NachbesuchV5/Services/BackupService.swift` carries a whole `LegacyAppBackup` reader
 (`days:` instead of `gebiete:`, reduced fields) with **no test at all**. It is a data path
 that runs on a user's only copy of their work.
 
@@ -933,14 +938,14 @@ Deliberately **not** automatic deletion after N days: that risks deleting work s
 still needs.
 
 ### 6.3 The Android port
-**Parked because:** exactly one colleague uses Android, and `porting.md` is 13 milestones
-followed by two codebases maintained forever — every change to the day-1/day-2 semantics,
-the export, the route, done and tested twice.
-**Trigger:** **three or more** Android users, or Volkshilfe adopting the project.
-**The asymmetry that will decide it:** an Android APK installs once and never expires,
-while iOS colleagues need a cable every 7 days. If the Android count grows, the port stops
-being about reach and becomes the *easier* distribution path.
-`porting.md` stays current — do not delete it.
+The Android implementation is part of this repository under `android/`; do not delete or
+split it into a second repository. `porting.md` is the parity contract and
+`android/porting-status.md` records what is implemented and still missing.
+
+**Release remains parked until:** backup fixture round-trip, accessibility audit,
+baseline profile/performance work, CI/lint and physical-device acceptance are complete.
+Every shared semantic change — especially day-1/day-2 behaviour, backup, export and
+route rules — must be implemented and tested on both platforms.
 
 ### 6.4 The iOS 26 minimum
 **Blocked, not parked** — see Part VI.

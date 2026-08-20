@@ -26,7 +26,7 @@ this project.
    lookup.
 3. **Work milestone by milestone.** Each milestone below has an *Exit criteria*
    section. Do not start milestone N+1 until N's criteria hold and the build is green.
-4. **Port the tests first where they exist.** `NachbesuchV5Tests/` contains 74+ tests
+4. **Port the tests first where they exist.** `ios/NachbesuchV5Tests/` contains the iOS tests
    that pin the domain semantics. They are pure-logic tests and translate almost
    mechanically to JVM unit tests. Porting them first gives you an executable spec.
 5. **Never widen scope silently.** If a section is blocked (missing key, unavailable
@@ -87,7 +87,7 @@ at a time.
 Every Swift file, what it does, and where its behaviour lands on Android. `LOC` is the
 iOS line count — a rough complexity signal, not a target.
 
-### 2.1 Models — `NachbesuchV5/Models/`
+### 2.1 Models — `ios/NachbesuchV5/Models/`
 
 | File | LOC | Responsibility | Android target |
 |---|---|---|---|
@@ -101,7 +101,7 @@ iOS line count — a rough complexity signal, not a target.
 | `StoredCoordinate.swift` | 25 | `{latitude, longitude}` JSON, plausibility check | `domain/model/StoredCoordinate.kt` |
 | `AppCoders.swift` | 37 | Every JSON coder + its compatibility constraints | `data/json/AppJson.kt` — **read §4.3 before touching** |
 
-### 2.2 App shell — `NachbesuchV5/App/`
+### 2.2 App shell — `ios/NachbesuchV5/App/`
 
 | File | LOC | Responsibility | Android target |
 |---|---|---|---|
@@ -111,7 +111,7 @@ iOS line count — a rough complexity signal, not a target.
 | `AppAppearance.swift` | 155 | Colour/typography tokens | `ui/theme/` (Color.kt, Type.kt, Theme.kt) |
 | `DebugSeed.swift` | 101 | `NACHBESUCH_SEED=n` test data generator | `debug/DebugSeed.kt`, triggered by intent extra — see §13.2 |
 
-### 2.3 Map — `NachbesuchV5/Map/` (2 578 LOC, the hardest part)
+### 2.3 Map — `ios/NachbesuchV5/Map/` (2 578 LOC, the hardest part)
 
 | File | LOC | Responsibility | Android target |
 |---|---|---|---|
@@ -126,7 +126,7 @@ iOS line count — a rough complexity signal, not a target.
 | `UserLocationPuck.swift` | 218 | Custom location dot + heading cone | `ui/map/markers/UserPuck.kt` |
 | `MapPointsOfInterest.swift` | 67 | POI filter presets | `ui/map/PoiPresets.kt` (map style JSON, see §7.6) |
 
-### 2.4 Route — `NachbesuchV5/Route/` (1 157 LOC)
+### 2.4 Route — `ios/NachbesuchV5/Route/` (1 157 LOC)
 
 | File | LOC | Responsibility | Android target |
 |---|---|---|---|
@@ -304,7 +304,7 @@ Room `Flow` queries replace SwiftData's `@Query`. Two rules:
 
 ### 4.3 JSON — the cross-platform trap ⚠️
 
-Read `Models/AppCoders.swift` first. There are **two different date formats** in play,
+Read `ios/NachbesuchV5/Models/AppCoders.swift` first. There are **two different date formats** in play,
 and getting them wrong silently corrupts timestamps by 31 years.
 
 | Payload | iOS coder | Date encoding | Kotlin equivalent |
@@ -354,7 +354,7 @@ Additional constraints:
 
 ### 4.4 Backup format (cross-platform interchange)
 
-`Services/BackupService.swift:1-70` defines the envelope:
+`ios/NachbesuchV5/Services/BackupService.swift:1-70` defines the envelope:
 
 ```json
 {
@@ -390,7 +390,7 @@ vice versa. Verify by hand at least once before shipping.
 
 ### 4.5 Corrupt-store recovery
 
-`App/AppSchema.swift:38-80` treats an unopenable store as a first-class state, not a
+`ios/NachbesuchV5/App/AppSchema.swift:38-80` treats an unopenable store as a first-class state, not a
 crash: the app still launches, on a scratch in-memory container, and offers the user a
 copy of the store file. Reproduce this:
 
@@ -1353,11 +1353,12 @@ Do not guess these — ask, and record the answer here.
 
 ## 18. First actions for the executing agent
 
-1. Read, in this order: `Models/DoorResult.swift`, `Models/House.swift`,
-   `Models/Gebiet.swift`, `App/AppSchema.swift`, `Map/MapPinSnapshot.swift`,
-   `Route/RoutePlanner.swift`. That is ~1 000 lines and it is the heart of the app.
-2. Read `README.md` in this folder — it documents every fixed bug and the reasoning
+1. Read, in this order: `ios/NachbesuchV5/Models/DoorResult.swift`,
+   `ios/NachbesuchV5/Models/House.swift`, `ios/NachbesuchV5/Models/Gebiet.swift`,
+   `ios/NachbesuchV5/App/AppSchema.swift`, `ios/NachbesuchV5/Map/MapPinSnapshot.swift`,
+   `ios/NachbesuchV5/Route/RoutePlanner.swift`. That is ~1 000 lines and it is the heart of the app.
+2. Read `README.md` at the repository root — it documents every fixed bug and the reasoning
    behind the current behaviour. Treat it as the change log of things not to undo.
-3. Create `porting-status.md` with the milestone list from §14 and all items unchecked.
+3. Keep `android/porting-status.md` current against the milestone list from §14.
 4. Ask the user the §16 questions.
 5. Start M0.
