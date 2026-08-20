@@ -1,0 +1,14 @@
+#!/bin/sh
+# Blocks staged files that look like exported field data. Donor addresses and
+# outcomes must never reach the remote, private repo or otherwise be committed.
+if git diff --cached --name-only | grep -qiE '(backup|export).*\.(json|pdf)$'; then
+    echo "✋ Ein Backup- oder Export-File ist gestaged. Das enthält Spender-Adressen."
+    echo "   Prüfe: git diff --cached --name-only"
+    exit 1
+fi
+# A crude but effective check for coordinates pasted into source
+if git diff --cached -U0 | grep -qE '^\+.*"(48|47)\.[0-9]{4,}, ?1[5-7]\.[0-9]{4,}"'; then
+    echo "⚠️  Sieht nach echten Koordinaten im Code aus. Wenn das Testdaten sind: --no-verify"
+    exit 1
+fi
+exit 0

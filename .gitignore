@@ -1,0 +1,37 @@
+# ── Xcode ───────────────────────────────────────────────
+build/
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# ── Swift Package Manager ───────────────────────────────
+.swiftpm/
+.build/
+Packages/
+
+# ── macOS ───────────────────────────────────────────────
+.DS_Store
+._*
+
+# ── Agent / tooling scratch ─────────────────────────────
+*.log
+/scratch/
+# Screenshots are verification artefacts, not source. Real app icons are
+# explicitly force-added with a comment in the staging command.
+*.png
+
+# ── FIELD DATA — never commit ───────────────────────────
+# Backup files contain donor addresses, outcomes and free-text notes.
+*backup*.json
+*Backup*.json
+backups/
+*.nachbesuch-backup.json

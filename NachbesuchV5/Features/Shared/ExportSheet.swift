@@ -1,0 +1,180 @@
+import SwiftData
+import SwiftUI
+
+/// Export a territory — or a hand-picked selection — as PDF or text.
+struct ExportSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppNoticeCenter.self) private var notices
+
+    let gebiet: Gebiet
+    let houses: [House]
+    let scope: DayScope
+    /// Set when the caller already picked the houses by hand, so the sheet doesn't
+    /// quietly drop some of them again.
+    var isPreselected = false
+
+    @AppStorage("export.visitedOnly") private var visitedOnly = true
+    @AppStorage("export.includeNotes") private var includeNotes = true
+
+    @State private var document: ExportDocument?
+    @State private var pdfURL: URL?
+    @State private var isBuilding = true
+
+    private var options: ExportOptions {
+        ExportOptions(visitedOnly: visitedOnly && !isPreselected, includeNotes: includeNotes)
+    }
+
+    private struct BuildKey: Hashable {
+        let gebietID: UUID
+        let scope: DayScope
+        let count: Int
+        let newestUpdate: Date?
+        let visitedOnly: Bool
+        let includeNotes: Bool
+    }
+
+    private var buildKey: BuildKey {
+        BuildKey(
+            gebietID: gebiet.id,
+            scope: scope,
+            count: houses.count,
+            newestUpdate: houses.max(by: { $0.updatedAt < $1.updatedAt })?.updatedAt,
+            visitedOnly: options.visitedOnly,
+            includeNotes: options.includeNotes
+        )
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                scopeSection
+                if !isPreselected { rangeSection }
+                contentSection
+                shareSection
+            }
+            .navigationTitle("Exportieren")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Fertig") { dismiss() }.fontWeight(.semibold)
+                }
+            }
+            .task(id: buildKey) { await rebuild() }
+        }
+    }
+
+    // MARK: Sections
+
+    private var scopeSection: some View {
+        Section {
+            LabeledContent("Gebiet", value: gebiet.displayName)
+            LabeledContent("Zeitraum", value: gebiet.formattedDateRange)
+            if gebiet.isTwoDay {
+                LabeledContent("Tag", value: scope.title)
+            }
+        }
+    }
+
+    private var rangeSection: some View {
+        Section {
+            Toggle("Nur besuchte Adressen", isOn: $visitedOnly)
+        } header: {
+            Text("Umfang")
+        } footer: {
+            if let document {
+                Text(visitedOnly
+                     ? "\(document.includedHouses) von \(document.totalHouses) Adressen — Häuser ohne Eintrag bleiben weg."
+                     : "Alle \(document.totalHouses) Adressen, auch die ohne Eintrag.")
+            } else {
+                Text("Häuser ohne einen einzigen Eintrag werden weggelassen.")
+            }
+        }
+    }
+
+    private var contentSection: some View {
+        Section {
+            Toggle("Notizen einbeziehen", isOn: $includeNotes)
+
+            if let document, !document.isEmpty {
+                // Only the outcomes that actually occurred, so this never shows a
+                // column of zeroes.
+                ForEach(document.summary.lines, id: \.label) { line in
+                    LabeledContent(line.label) {
+                        Text("\(line.value)").monospacedDigit()
+                    }
+                }
+            } else if isBuilding {
+                LabeledContent("Haushalte", value: "—")
+                    .redacted(reason: .placeholder)
+            }
+        } header: {
+            Text("Inhalt")
+        } footer: {
+            Text("Notizen sind interne Stichworte und landen sonst mit im Dokument.")
+        }
+    }
+
+    @ViewBuilder
+    private var shareSection: some View {
+        Section {
+            if let document, document.isEmpty {
+                ContentUnavailableView {
+                    Label("Nichts zu exportieren", systemImage: "tray")
+                } description: {
+                    Text(visitedOnly
+                         ? "In diesem Zeitraum wurde noch keine Adresse besucht. Schalte „Nur besuchte Adressen“ aus, um die Arbeitsliste zu exportieren."
+                         : "Für dieses Gebiet sind keine Adressen erfasst.")
+                }
+            } else {
+                if let pdfURL {
+                    ShareLink(item: pdfURL) {
+                        Label("PDF teilen", systemImage: "doc.text")
+                            .frame(minHeight: AppTouch.minimum)
+                    }
+                } else {
+                    HStack {
+                        Label("PDF wird erstellt …", systemImage: "doc.text")
+                        Spacer()
+                        ProgressView().controlSize(.small)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+
+                if let document {
+                    ShareLink(item: DayExportService.makeText(document)) {
+                        Label("Als Text teilen", systemImage: "text.alignleft")
+                            .frame(minHeight: AppTouch.minimum)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Build
+
+    private func rebuild() async {
+        isBuilding = true
+        // The old file is stale the moment an option changes; drop it so the button
+        // cannot hand out a document that no longer matches the settings.
+        pdfURL = nil
+        defer { isBuilding = false }
+
+        let built = await DayExportService.makeDocument(
+            gebiet: gebiet,
+            houses: houses,
+            scope: scope,
+            options: options
+        )
+        guard !Task.isCancelled else { return }
+        document = built
+        guard !built.isEmpty else { return }
+
+        do {
+            let url = try DayExportService.makePDF(built)
+            guard !Task.isCancelled else { return }
+            pdfURL = url
+        } catch {
+            notices.report(error, context: "PDF konnte nicht erstellt werden")
+        }
+    }
+}
