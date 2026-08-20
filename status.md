@@ -1,12 +1,12 @@
 # Status
 
-Last updated: 2026-08-21T00:23:00+02:00 · HEAD: pending · Tests: blocked by CoreSimulator
+Last updated: 2026-08-21T00:24:00+02:00 · HEAD: cb610f7 (baseline; status update follows) · Tests: not completed — CoreSimulator unavailable
 
 ## In flight
-- [ ] T2 — Version control · baseline commit and tag in progress
+- [ ] User work — Android import/map edits are present but intentionally uncommitted; inspect and commit separately.
 
 ## Done
-- (none yet)
+- [x] T2 — Version control · `cb610f7` · 135 files, `v6.0-feld`, hook installed and demonstrated
 
 ## Blocked
 - T1 — needs 👤: create the backup on the production phone, copy it outside the app container, provide its path, and make a second copy.
@@ -17,3 +17,4 @@ Last updated: 2026-08-21T00:23:00+02:00 · HEAD: pending · Tests: blocked by Co
 ## Notes for the next session
 - Repository root is `Version 5/` under the current snapshot until Task 3 promotes it to `~/Documents/Nachbesuch/`.
 - The baseline tag `v6.0-feld` must remain the exact field-tested code snapshot; do not rewrite it.
+- The acceptance grep for `backup` also matches required production source names; no backup/export JSON or PDF is tracked.
