@@ -222,14 +222,16 @@ struct ListScreen: View {
             // ~56 pt of the list, so the row the user had just changed became
             // untappable for the whole undo window.
             .safeAreaBar(edge: .bottom, spacing: 0) {
-                if let undo {
-                    UndoBanner(label: undo.label) { performUndo(undo) }
-                        .padding(.horizontal, AppSpacing.regular)
-                        .padding(.bottom, AppSpacing.tight)
-                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                ZStack {
+                    if let undo {
+                        UndoBanner(label: undo.label) { performUndo(undo) }
+                            .padding(.horizontal, AppSpacing.regular)
+                            .padding(.bottom, AppSpacing.tight)
+                            .transition(.appBanner(edge: .bottom, reduceMotion: reduceMotion))
+                    }
                 }
+                .animation(.appFeedback(reduceMotion: reduceMotion), value: undo?.id)
             }
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: undo?.id)
             .sensoryFeedback(.selection, trigger: collapsedSections)
             .navigationTitle("Nachbesuche")
             .navigationBarTitleDisplayMode(.inline)

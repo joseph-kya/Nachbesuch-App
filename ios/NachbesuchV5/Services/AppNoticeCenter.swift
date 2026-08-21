@@ -116,7 +116,7 @@ struct AppNoticeBanner: View {
             .padding(.horizontal, AppSpacing.regular)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isStaticText)
-            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+            .transition(.appBanner(edge: .top, reduceMotion: reduceMotion))
             .animation(.appFeedback(reduceMotion: reduceMotion), value: notice.id)
         }
     }

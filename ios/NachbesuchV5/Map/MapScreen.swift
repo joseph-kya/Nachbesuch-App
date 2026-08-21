@@ -140,7 +140,7 @@ struct MapScreen: View {
 
     private func beginRoute() {
         guard gebiet != nil, !openHouseIDs.isEmpty else { return }
-        withAnimation(.appFeedback(reduceMotion: reduceMotion)) { routePhase = .choosingStart }
+        routePhase = .choosingStart
     }
 
     private func planRoute(from start: CLLocationCoordinate2D) {
@@ -149,7 +149,7 @@ struct MapScreen: View {
             .filter(\.hasOpenWork)
             .map { RouteStop(houseID: $0.id, latitude: $0.latitude, longitude: $0.longitude) }
         guard !stops.isEmpty else { return }
-        withAnimation(.appFeedback(reduceMotion: reduceMotion)) { routePhase = .running }
+        routePhase = .running
         let plannedFor = gebiet.id
         planTask?.cancel()
         planTask = Task {
@@ -184,7 +184,7 @@ struct MapScreen: View {
     private func focusNextStop() {
         guard let pin = nextStopPin else { return }
         if !showsRouteOverlay {
-            withAnimation(.appFeedback(reduceMotion: reduceMotion)) { showsRouteOverlay = true }
+            showsRouteOverlay = true
         }
         cameraCommand = .region(
             center: pin.coordinate,
@@ -259,7 +259,7 @@ struct MapScreen: View {
         planTask?.cancel()
         planTask = nil
         route.end(for: gebiet.id)
-        withAnimation(.appFeedback(reduceMotion: reduceMotion)) { routePhase = .off }
+        routePhase = .off
     }
 
     /// Distance to the next stop, but only when it is a plausible walking figure.
@@ -405,6 +405,51 @@ struct MapScreen: View {
 
     // MARK: - Chrome
 
+    /// Everything that decides **which** panels the top chrome shows.
+    ///
+    /// One key, one `.animation`. The previous shape stacked two `.animation(_:value:)`
+    /// modifiers on this container, and `.animation(_:value:)` does not merely animate
+    /// when its value changes — it sets the animation for its whole subtree, applying
+    /// `nil` when the value is unchanged. Two of them therefore both fired when one
+    /// action changed both values, and any change *not* named by either was stripped
+    /// of the ambient `withAnimation` transaction coming from the call site.
+    private struct TopChromeLayout: Equatable {
+        let isSelecting: Bool
+        let showsGuide: Bool
+    }
+
+    private var topChromeLayout: TopChromeLayout {
+        TopChromeLayout(isSelecting: isSelecting, showsGuide: showsGuide)
+    }
+
+    /// The same for the bottom chrome — and this is where the bug actually bit:
+    /// neither of the old keys named `routePhase` or `isAwayFromTerritory`, so the
+    /// route cards and the territory button were silently stripped of animation
+    /// despite both the call site and the view being written as if they animated.
+    private struct BottomChromeLayout: Equatable {
+        let mode: MapMode
+        let isSelecting: Bool
+        let routePhase: RoutePhase
+        let showsTerritoryButton: Bool
+    }
+
+    private var bottomChromeLayout: BottomChromeLayout {
+        BottomChromeLayout(
+            mode: mode,
+            isSelecting: isSelecting,
+            routePhase: routePhase,
+            showsTerritoryButton: showsTerritoryButton
+        )
+    }
+
+    private var showsGuide: Bool {
+        !hasSeenGuide && houses.isEmpty && mode == .browsing && gebiet != nil
+    }
+
+    private var showsTerritoryButton: Bool {
+        mode == .browsing && !isSelecting && isAwayFromTerritory
+    }
+
     /// Insets handed to MapKit so its legal attribution, scale and compass are never
     /// covered. The HIG requires 7 pt at the sides and 10 pt above/below the Apple
     /// logo and legal link — obscuring them is an App Review rejection.
@@ -445,13 +490,16 @@ struct MapScreen: View {
                     )
                 }
 
-                if !hasSeenGuide, houses.isEmpty, mode == .browsing, gebiet != nil {
+                if showsGuide {
                     MapGuideCard(
                         namespace: glass,
                         onAddHouse: { setMode(.placingHouse) },
                         onDrawArea: beginDrawingArea,
                         onDismiss: { hasSeenGuide = true }
                     )
+                    // Standalone: `map.guide` has no partner to morph into, so the
+                    // container's `.matchedGeometry` default does not apply here.
+                    .standaloneGlassTransition(reduceMotion: reduceMotion)
                 }
             }
         }
@@ -460,16 +508,16 @@ struct MapScreen: View {
         // The summary bar and the selection bar share a glass id, so switching modes
         // reshapes one panel rather than dissolving two unrelated ones.
         .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: isSelecting)
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: hasSeenGuide)
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: topChromeLayout)
     }
 
     @ViewBuilder
     private var bottomChrome: some View {
         GlassEffectContainer(spacing: AppSpacing.snug) {
             VStack(alignment: .trailing, spacing: AppSpacing.snug) {
-                if mode == .browsing, !isSelecting, isAwayFromTerritory {
+                if showsTerritoryButton {
                     TerritoryButton(namespace: glass, action: showTerritory)
+                        .standaloneGlassTransition(reduceMotion: reduceMotion)
                 }
 
                 if mode == .browsing, !isSelecting {
@@ -480,6 +528,7 @@ struct MapScreen: View {
                         namespace: glass,
                         action: toggleFollow
                     )
+                    .standaloneGlassTransition(reduceMotion: reduceMotion)
                 }
 
                 switch routePhase {
@@ -490,22 +539,16 @@ struct MapScreen: View {
                             guard let coordinate = location.location?.coordinate else { return }
                             planRoute(from: coordinate)
                         },
-                        onPickOnMap: {
-                            withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
-                                routePhase = .pickingOnMap
-                            }
-                        },
-                        onCancel: {
-                            withAnimation(.appFeedback(reduceMotion: reduceMotion)) { routePhase = .off }
-                        }
+                        onPickOnMap: { routePhase = .pickingOnMap },
+                        onCancel: { routePhase = .off }
                     )
+                    .transition(.appChrome(reduceMotion: reduceMotion))
                 case .pickingOnMap:
                     RouteStartPicker(
                         onConfirm: { planRoute(from: camera.region.center) },
-                        onCancel: {
-                            withAnimation(.appFeedback(reduceMotion: reduceMotion)) { routePhase = .off }
-                        }
+                        onCancel: { routePhase = .off }
                     )
+                    .transition(.appChrome(reduceMotion: reduceMotion))
                 case .running:
                     let remaining = route.remaining(openHouseIDs: openHouseIDs)
                     RouteBar(
@@ -516,16 +559,13 @@ struct MapScreen: View {
                         isStraightLine: route.fellBackToStraightLines,
                         isPlanning: route.isPlanning,
                         showsOverlay: showsRouteOverlay,
-                        onToggleOverlay: {
-                            withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
-                                showsRouteOverlay.toggle()
-                            }
-                        },
+                        onToggleOverlay: { showsRouteOverlay.toggle() },
                         onFocusNext: focusNextStop,
                         canSkip: remaining.count > 1,
                         onSkip: skipNextStop,
                         onEnd: endRoute
                     )
+                    .transition(.appChrome(reduceMotion: reduceMotion))
                 case .off:
                     EmptyView()
                 }
@@ -557,8 +597,7 @@ struct MapScreen: View {
         .padding(.horizontal, AppSpacing.regular)
         .safeAreaPadding(.bottom, AppSpacing.snug)
         .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: mode)
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: isSelecting)
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: bottomChromeLayout)
     }
 
     /// Deliberately short.
@@ -659,9 +698,7 @@ struct MapScreen: View {
             || abs(territory.center.longitude - region.center.longitude) > longitudeReach
         // Only touch state on a real change: this runs every time the camera settles.
         if away != isAwayFromTerritory {
-            withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
-                isAwayFromTerritory = away
-            }
+            isAwayFromTerritory = away
         }
     }
 
@@ -820,7 +857,7 @@ struct MapScreen: View {
     // MARK: - Modes
 
     private func setMode(_ newMode: MapMode) {
-        withAnimation(.appFeedback(reduceMotion: reduceMotion)) { mode = newMode }
+        mode = newMode
     }
 
     private func primaryAction() {
@@ -844,10 +881,8 @@ struct MapScreen: View {
     }
 
     private func cancelDrawing() {
-        withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
-            mode = .browsing
-            draftBoundary = []
-        }
+        mode = .browsing
+        draftBoundary = []
     }
 
     private func addBoundaryPoint() {
@@ -878,12 +913,12 @@ struct MapScreen: View {
 
     private func enterSelection() {
         guard !prepared.pinsByID.isEmpty else { return }
-        withAnimation(.appFeedback(reduceMotion: reduceMotion)) { selectedHouseIDs = [] }
+        selectedHouseIDs = []
         UISelectionFeedbackGenerator().selectionChanged()
     }
 
     private func exitSelection() {
-        withAnimation(.appFeedback(reduceMotion: reduceMotion)) { selectedHouseIDs = nil }
+        selectedHouseIDs = nil
     }
 
     private func toggleSelectAll() {

@@ -305,6 +305,7 @@ struct MapSelectionBar: View {
 // MARK: - Boundary drawing
 
 struct BoundaryDrawingBar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let pointCount: Int
     let namespace: Namespace.ID
     let onCancel: () -> Void
@@ -365,7 +366,7 @@ struct BoundaryDrawingBar: View {
                 .glassEffectID("map.drawSave", in: namespace)
                 .accessibilityLabel("Gebiet speichern")
             }
-            .animation(.appFeedback(reduceMotion: false), value: pointCount)
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: pointCount)
         }
     }
 }
@@ -607,7 +608,9 @@ struct TerritoryButton: View {
         .controlSize(.large)
         .buttonBorderShape(.circle)
         .glassEffectID("map.territory", in: namespace)
-        .transition(reduceMotion ? .opacity : .scale(scale: 0.7).combined(with: .opacity))
+        // Entry/exit is owned by the caller's `standaloneGlassTransition`, so the
+        // glass shape and the view animate as one thing instead of a SwiftUI scale
+        // fighting a glass morph.
         .accessibilityLabel("Zum Gebiet")
         .accessibilityHint("Zeigt das ganze Gebiet auf der Karte")
     }
@@ -702,6 +705,30 @@ struct RouteBar: View {
 
     /// Clamped: houses deleted under a running route used to push this past the
     /// total and read "13/12".
+    /// Everything that changes what the bar *says*, in one key.
+    ///
+    /// Chrome layout lives in `MapScreen`'s container key; this is the other half of
+    /// the same rule. `showsOverlay` in particular used to be toggled inside a
+    /// `withAnimation` at the call site, which the container's `.animation(_:value:)`
+    /// stripped before it ever reached the symbol.
+    private struct ContentKey: Equatable {
+        let remainingCount: Int
+        let nextAddress: String?
+        let showsOverlay: Bool
+        let isPlanning: Bool
+        let isStraightLine: Bool
+    }
+
+    private var contentKey: ContentKey {
+        ContentKey(
+            remainingCount: remainingCount,
+            nextAddress: nextAddress,
+            showsOverlay: showsOverlay,
+            isPlanning: isPlanning,
+            isStraightLine: isStraightLine
+        )
+    }
+
     private var position: String {
         let index = min(max(totalCount - remainingCount + 1, 1), totalCount)
         return "\(index)/\(totalCount)"
@@ -756,7 +783,6 @@ struct RouteBar: View {
             .disabled(nextAddress == nil)
             .accessibilityLabel("Nächstes Haus \(nextAddress ?? ""), \(position)")
             .accessibilityHint("Springt auf der Karte zum nächsten Haus")
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: remainingCount)
 
             // Compact circular controls. Large ones squeezed the street name down to
             // three characters on a narrow phone.
@@ -785,6 +811,7 @@ struct RouteBar: View {
         .padding(.trailing, 8)
         .padding(.vertical, 8)
         .mapChrome()
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: contentKey)
         .accessibilityElement(children: .contain)
     }
 }
