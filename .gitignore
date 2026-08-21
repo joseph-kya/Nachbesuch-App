@@ -28,7 +28,7 @@ secrets.properties
 captures/
 *.keystore
 *.jks
-data/schemas/
+**/data/schemas/
 
 # ── macOS ───────────────────────────────────────────────
 .DS_Store
