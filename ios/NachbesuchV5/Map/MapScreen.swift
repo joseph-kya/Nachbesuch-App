@@ -51,6 +51,10 @@ struct MapScreen: View {
     @State private var dropHouseID: UUID?
     @State private var isFollowingUser = false
     @State private var isAwayFromTerritory = false
+    /// Measured heights of the floating chrome, so the map's legal attribution can be
+    /// kept clear of it at any text size. See `chromeInsets`.
+    @State private var topChromeHeight: CGFloat = 132
+    @State private var bottomChromeHeight: CGFloat = 108
 
     // Presentation — one route, one sheet. Six independent `isPresented` flags on a
     // single view is how the importer→confirmation race got in.
@@ -453,8 +457,21 @@ struct MapScreen: View {
     /// Insets handed to MapKit so its legal attribution, scale and compass are never
     /// covered. The HIG requires 7 pt at the sides and 10 pt above/below the Apple
     /// logo and legal link — obscuring them is an App Review rejection.
+    ///
+    /// **Measured, not assumed.** These were hardcoded at 132/108, which is only
+    /// correct at the default text size. At accessibility sizes the summary card is
+    /// several times taller and the action bar wraps, so MapKit went on positioning
+    /// the attribution as though the chrome were 132 pt tall and the "Rechtl.
+    /// Informationen" link ended up underneath the floating buttons — the exact
+    /// rejection this comment warns about. The fallbacks below are the old constants,
+    /// used only for the frames before the chrome has been measured.
     private var chromeInsets: UIEdgeInsets {
-        UIEdgeInsets(top: 132, left: 7, bottom: 108, right: 7)
+        UIEdgeInsets(
+            top: max(topChromeHeight, 132),
+            left: 7,
+            bottom: max(bottomChromeHeight, 108),
+            right: 7
+        )
     }
 
     /// Co-located glass lives in ONE container: Apple warns that many separate
@@ -505,6 +522,9 @@ struct MapScreen: View {
         }
         .padding(.horizontal, AppSpacing.regular)
         .safeAreaPadding(.top, AppSpacing.tight)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            topChromeHeight = height
+        }
         // The summary bar and the selection bar share a glass id, so switching modes
         // reshapes one panel rather than dissolving two unrelated ones.
         .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
@@ -596,6 +616,9 @@ struct MapScreen: View {
         }
         .padding(.horizontal, AppSpacing.regular)
         .safeAreaPadding(.bottom, AppSpacing.snug)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            bottomChromeHeight = height
+        }
         .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
         .animation(.appFeedback(reduceMotion: reduceMotion), value: bottomChromeLayout)
     }

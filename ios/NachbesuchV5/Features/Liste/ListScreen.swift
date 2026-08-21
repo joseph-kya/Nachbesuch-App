@@ -603,26 +603,62 @@ private struct StreetHeader: View {
     let section: StreetSection
 
     var body: some View {
+        // Both candidates used to be `HStack`s. When neither fits, `ViewThatFits`
+        // takes the last one and lets it overflow — at accessibility sizes the
+        // progress column was clipped off the right edge mid-digit. The stacked
+        // variant is a layout that always fits, so there is a real last resort.
         ViewThatFits(in: .horizontal) {
             headerLayout(compact: true)
             headerLayout(compact: false)
+            stackedLayout
         }
         .contentShape(.rect)
     }
 
+    private var stackedLayout: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: AppSpacing.snug) {
+                streetIcon
+                Text(section.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.primary)
+            }
+            Text("\(section.houseCount) \(section.houseCount == 1 ? "Adresse" : "Adressen") · \(section.completedCount)/\(section.unitCount)")
+                .font(.caption2)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+            ProgressView(value: section.progress)
+                .tint(section.openCount == 0 ? .green : .red)
+                .animation(.appSettle(reduceMotion: reduceMotion), value: section.progress)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var streetIcon: some View {
+        ZStack {
+            Circle().fill(Color.accentColor.opacity(0.13))
+            Image(systemName: "road.lanes")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+        }
+        .frame(width: 34, height: 34)
+    }
+
     private func headerLayout(compact: Bool) -> some View {
         HStack(alignment: compact ? .center : .firstTextBaseline, spacing: AppSpacing.snug) {
-            ZStack {
-                Circle().fill(Color.accentColor.opacity(0.13))
-                Image(systemName: "road.lanes")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
-            }
-            .frame(width: 34, height: 34)
+            streetIcon
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(section.title)
                     .font(.subheadline.weight(.semibold))
+                    // `Color.primary`, not `.primary`. A `Section` header inherits
+                    // the list's secondary header style, and bare `.primary` is
+                    // `HierarchicalShapeStyle.primary` — the *first level of the
+                    // inherited style*, which here is still the grey header colour.
+                    // `Color.primary` is the absolute label colour and actually wins,
+                    // so the street name stops rendering dimmer than the addresses
+                    // beneath it.
+                    .foregroundStyle(Color.primary)
                     .lineLimit(compact ? 1 : 2)
                 Text("\(section.houseCount) \(section.houseCount == 1 ? "Adresse" : "Adressen")")
                     .font(.caption2)

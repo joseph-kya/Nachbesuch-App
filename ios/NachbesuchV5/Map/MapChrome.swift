@@ -88,10 +88,12 @@ struct StatStrip: View {
     }
 
     var body: some View {
-        // At accessibility sizes the row becomes a column instead of shrinking the
-        // numbers into illegibility.
+        // At accessibility sizes the figures **wrap** rather than stacking into a
+        // single column. Five rows of one statistic each pushed the summary card to
+        // roughly 40 % of the screen on a map whose entire point is the map; wrapping
+        // fits the same five figures into two or three rows.
         let layout = isStacked
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            ? AnyLayout(FlowLayout(spacing: AppSpacing.snug))
             : AnyLayout(HStackLayout(spacing: AppSpacing.snug))
 
         layout {
@@ -100,6 +102,9 @@ struct StatStrip: View {
             }
             if !isStacked { Spacer(minLength: 0) }
         }
+        // Without this the wrapped block sized to its content and the card centred
+        // it, so the figures floated away from the title they belong to.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .font(.caption.weight(.medium))
     }
 
@@ -179,6 +184,12 @@ struct MapActionBar<Menu: View>: View {
                     Image(systemName: isPlacing ? "checkmark" : "plus")
                         .contentTransition(.symbolEffect(.replace))
                     Text(isPlacing ? "Hier eintragen" : "Haus hinzufügen")
+                        // At accessibility sizes this wrapped to three lines and
+                        // hyphenated mid-word — "Haus + hinzufü-gen" — with the icon
+                        // stranded on the second line. One line that scales down is
+                        // legible; a hyphenated fragment is not.
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
                 }
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity, minHeight: 26)
