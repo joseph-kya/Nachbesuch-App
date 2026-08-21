@@ -140,7 +140,11 @@ fun ArchiveSurface(
                 Text("Archiv", style = MaterialTheme.typography.headlineLarge)
                 Text("Alle Gebiete und Arbeitstage", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            FloatingActionButton(onClick = onCreateGebiet) {
+            FloatingActionButton(
+                onClick = onCreateGebiet,
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary
+            ) {
                 Icon(Icons.Default.Add, contentDescription = "Gebiet anlegen")
             }
         }

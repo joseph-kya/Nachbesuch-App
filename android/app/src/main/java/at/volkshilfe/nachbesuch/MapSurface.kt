@@ -106,6 +106,8 @@ import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
 import at.volkshilfe.nachbesuch.domain.route.PlannedRoute
 import at.volkshilfe.nachbesuch.domain.route.RoutePlanner
 import at.volkshilfe.nachbesuch.domain.route.RouteStop
+import at.volkshilfe.nachbesuch.ui.theme.ChromeIconButton
+import at.volkshilfe.nachbesuch.ui.theme.VolkshilfeRed
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
@@ -142,7 +144,9 @@ import kotlin.math.cos
 import kotlin.math.floor
 
 private val Vienna = SavedCamera(48.2082, 16.3738, 14.5)
-private val Accent = Color(0xFFFF3B45)
+// Same red as the rest of the app's chrome — this used to be a second,
+// slightly different constant living only on the map.
+private val Accent = VolkshilfeRed
 private val RouteBlue = Color(0xFF147EFB)
 
 private enum class MapMode { BROWSING, PLACING_HOUSE, DRAWING_AREA, SELECTING }
@@ -513,11 +517,11 @@ fun MapSurface(
             AnimatedVisibility(mode == MapMode.BROWSING && routePhase == RoutePhase.OFF) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (boundary.isNotEmpty() || houses.isNotEmpty()) {
-                        FloatingActionButton(onClick = ::frameTerritory, containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
-                            Icon(Icons.Default.Layers, contentDescription = "Zum Gebiet")
+                        ChromeIconButton(onClick = ::frameTerritory) {
+                            Icon(Icons.Default.Layers, contentDescription = "Zum Gebiet", tint = MaterialTheme.colorScheme.onSurface)
                         }
                     }
-                    FloatingActionButton(
+                    ChromeIconButton(
                         onClick = {
                             val fix = location
                             if (fix != null) {
@@ -525,9 +529,13 @@ fun MapSurface(
                                 moveTo(StoredCoordinate(fix.latitude, fix.longitude), 16f)
                             }
                         },
-                        containerColor = if (following) Accent else MaterialTheme.colorScheme.surfaceContainerHigh
+                        tint = if (following) Accent else MaterialTheme.colorScheme.surfaceContainerHigh
                     ) {
-                        Icon(if (following) Icons.Default.LocationSearching else Icons.Default.MyLocation, "Zu meinem Standort")
+                        Icon(
+                            if (following) Icons.Default.LocationSearching else Icons.Default.MyLocation,
+                            "Zu meinem Standort",
+                            tint = if (following) Color.White else MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 }
             }
