@@ -73,6 +73,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -442,6 +443,8 @@ fun MapSurface(
             }
             if (clustered) {
                 clusters.forEach { cluster ->
+                  // Same identity rule as the house markers below.
+                  key(cluster.key) {
                     Marker(
                         state = rememberMarkerState(key = cluster.key, position = cluster.center),
                         icon = bitmapCache.cluster(cluster.houses.size, cluster.houses.any { it.tally(scope).open > 0 }),
@@ -455,9 +458,21 @@ fun MapSurface(
                             true
                         }
                     )
+                  }
                 }
             } else {
                 visibleHouses.forEach { house ->
+                  // `key` is load-bearing, not tidiness. A marker's icon comes from
+                  // this parameter but its position lives in a MarkerState that
+                  // `rememberMarkerState` creates once per composition *slot* — it
+                  // takes no inputs, so it is never rebuilt when the slot's house
+                  // changes. Emitted positionally, any reordering of the corpus
+                  // therefore handed slot i the new house's icon while it kept the
+                  // old house's position: the pin you edited kept a stale icon and
+                  // the new one appeared somewhere else entirely. Keying by id
+                  // gives every house its own slot for as long as it exists, which
+                  // is the identity model the iOS annotations already have.
+                  key(house.id) {
                     val selected = house.id in selectedIDs
                     Marker(
                         state = rememberMarkerState(key = house.id, position = LatLng(house.latitude, house.longitude)),
@@ -486,6 +501,7 @@ fun MapSurface(
                             true
                         }
                     )
+                  }
                 }
             }
             draftBoundary.forEachIndexed { index, point ->

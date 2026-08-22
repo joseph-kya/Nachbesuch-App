@@ -9,6 +9,7 @@ import at.volkshilfe.nachbesuch.domain.map.PinStacking
 import at.volkshilfe.nachbesuch.domain.model.DayScope
 import at.volkshilfe.nachbesuch.domain.model.DoorResult
 import at.volkshilfe.nachbesuch.domain.model.House
+import at.volkshilfe.nachbesuch.domain.model.MapPinSnapshotBuilder
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -243,5 +244,43 @@ class PinStackingTest {
         assertTrue(
             PinStacking.radiusPx(PinScale.DOT, 2f) < PinStacking.radiusPx(PinScale.FULL, 2f)
         )
+    }
+}
+
+class MarkerOutcomeParityTest {
+
+    private fun house(doors: List<DoorResult>) =
+        House(address = "Teststraße 1", latitude = 46.62, longitude = 14.31, gebietID = "G1", units = doors)
+
+    @Test
+    fun `the map and the list agree on every scope`() {
+        // The map's bitmap cache used to carry its own copy of this rule, and it
+        // had drifted from the shared one. Anything that can render a house must
+        // reach the same verdict, or a pin and its row contradict each other.
+        val cases = listOf(
+            listOf(DoorResult(label = "H", outcome = VisitOutcome.NOT_HOME, updatedAt = 1L)),
+            listOf(DoorResult(label = "H", outcome = VisitOutcome.JOINED, updatedAt = 1L)),
+            listOf(
+                DoorResult(label = "1", outcome = VisitOutcome.JOINED, updatedAt = 1L),
+                DoorResult(label = "2", outcome = VisitOutcome.NOT_HOME, updatedAt = 2L)
+            ),
+            listOf(DoorResult(label = "H"))
+        )
+        for (doors in cases) {
+            for (scope in DayScope.entries) {
+                val fromList = HouseListBuilder.rows(listOf(house(doors)), scope).single().markerOutcome
+                val fromMap = MapPinSnapshotBuilder.markerOutcome(doors, scope)
+                assertEquals("scope=$scope doors=$doors", fromMap, fromList)
+            }
+        }
+    }
+
+    @Test
+    fun `a pending revisit is unrecorded in Tag 2, not a fresh red pin`() {
+        // The deleted copy returned NOT_HOME here, so the pin stayed red in Tag 2
+        // while the list showed the door as still to do.
+        val doors = listOf(DoorResult(label = "H", outcome = VisitOutcome.NOT_HOME, updatedAt = 1L))
+        assertNull(MapPinSnapshotBuilder.markerOutcome(doors, DayScope.DAY_2))
+        assertEquals(VisitOutcome.NOT_HOME, MapPinSnapshotBuilder.markerOutcome(doors, DayScope.DAY_1))
     }
 }
