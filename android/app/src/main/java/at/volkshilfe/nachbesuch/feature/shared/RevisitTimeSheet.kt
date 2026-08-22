@@ -25,9 +25,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -72,7 +70,10 @@ fun RevisitTimeSheet(
         initialMinute = initial.minute,
         is24Hour = true
     )
-    var showsPastWarning by remember { mutableStateOf(false) }
+
+    // Recomputed as the wheel turns, so the "morgen" hint and the booked value can
+    // never disagree about which day they mean.
+    val pickedAt = RevisitPlanner.instantFor(picker.hour, picker.minute, System.currentTimeMillis(), zone)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -103,14 +104,14 @@ fun RevisitTimeSheet(
             Text("Genaue Zeit", style = MaterialTheme.typography.titleSmall)
             TimePicker(state = picker)
 
-            if (showsPastWarning) {
-                // The wheel only edits hour and minute, so a time earlier than now
-                // can only mean tomorrow — say so rather than booking a reminder
-                // that has already passed.
+            // The wheel only carries an hour and a minute, so a time already past
+            // means tomorrow. That is often exactly right — it is 23:50 and the
+            // door said "come by after midnight" — but it must never be silent.
+            if (RevisitPlanner.isNextDay(pickedAt, System.currentTimeMillis(), zone)) {
                 Text(
-                    "Diese Zeit ist bereits vorbei.",
+                    "Morgen um ${RevisitPlanner.clockText(pickedAt, zone)}.",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.error
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
 
@@ -122,15 +123,7 @@ fun RevisitTimeSheet(
                         Text("Zeit entfernen", color = MaterialTheme.colorScheme.error)
                     }
                 }
-                TextButton(onClick = {
-                    val booked = RevisitPlanner.instantFor(picker.hour, picker.minute, System.currentTimeMillis(), zone)
-                    if (booked == null) {
-                        showsPastWarning = true
-                    } else {
-                        onPick(booked)
-                        onDismiss()
-                    }
-                }) { Text("Übernehmen") }
+                TextButton(onClick = { onPick(pickedAt); onDismiss() }) { Text("Übernehmen") }
             }
         }
     }
