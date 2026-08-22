@@ -8,10 +8,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -21,7 +26,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -30,18 +37,23 @@ import at.volkshilfe.nachbesuch.domain.model.House
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
 import at.volkshilfe.nachbesuch.ui.theme.GlassRow
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun HouseDetailSheet(
     house: House,
     scope: DayScope,
     onScopeChange: (DayScope) -> Unit,
     onOutcome: (String, VisitOutcome?) -> Unit,
+    onFillOpenDoors: (VisitOutcome?) -> Unit,
+    onRenameUnit: (String, String) -> Unit,
     onResize: (Int) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
 ) {
     var countText by remember(house.id, house.units.size) { mutableStateOf(house.units.size.toString()) }
+    var renameTarget by remember { mutableStateOf<String?>(null) }
+    val openDoorCount = house.units.count { it.isOpen(scope) }
+
     ModalBottomSheet(onDismissRequest = onDismiss) {
         LazyColumn(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
@@ -64,6 +76,40 @@ fun HouseDetailSheet(
                                 label = { Text(label) }
                             )
                         }
+                }
+            }
+            // Bulk action: mark every still-open door in the visible scope at once.
+            if (!house.isDamaged && openDoorCount > 0 && scope != DayScope.COMBINED) {
+                item {
+                    GlassRow {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Alle offenen Türen", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "$openDoorCount Türen in ${if (scope == DayScope.DAY_1) "Tag 1" else "Tag 2"} auf einen Status setzen",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            VisitOutcome.entries.forEach { outcome ->
+                                FilterChip(
+                                    selected = false,
+                                    onClick = { onFillOpenDoors(outcome) },
+                                    label = { Text("${outcome.emoji} ${outcome.shortTitle}") }
+                                )
+                            }
+                        }
+                    }
                 }
             }
             if (house.isApartmentBuilding) {
@@ -97,27 +143,42 @@ fun HouseDetailSheet(
             items(house.units, key = { it.id }) { door ->
                 GlassRow {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column(Modifier.weight(1f)) {
-                            Text(door.label, style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                door.displayOutcome(scope)?.germanTitle ?: "Noch offen",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(door.label, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    door.displayOutcome(scope)?.germanTitle ?: "Noch offen",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            IconButton(onClick = { renameTarget = door.id }, enabled = !house.isDamaged) {
+                                Icon(Icons.Default.Edit, contentDescription = "${door.label} umbenennen")
+                            }
                         }
                         Text(door.displayOutcome(scope)?.emoji ?: "○", style = MaterialTheme.typography.headlineSmall)
                     }
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // Labelled chips instead of bare emoji buttons: the current
+                    // state is highlighted, every option says what it does.
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        val current = door.displayOutcome(scope)
                         VisitOutcome.entries.forEach { outcome ->
-                            TextButton(
+                            FilterChip(
+                                selected = current == outcome,
                                 onClick = { onOutcome(door.id, outcome) },
-                                enabled = !house.isDamaged
-                            ) { Text(outcome.emoji) }
+                                enabled = !house.isDamaged,
+                                label = { Text("${outcome.emoji} ${outcome.shortTitle}") }
+                            )
                         }
-                        TextButton(
+                        FilterChip(
+                            selected = current == null,
                             onClick = { onOutcome(door.id, null) },
-                            enabled = !house.isDamaged
-                        ) { Text("Offen") }
+                            enabled = !house.isDamaged,
+                            label = { Text("○ Offen") }
+                        )
                     }
                 }
             }
@@ -129,4 +190,37 @@ fun HouseDetailSheet(
             item { androidx.compose.foundation.layout.Spacer(Modifier.padding(bottom = 20.dp)) }
         }
     }
+
+    renameTarget?.let { unitID ->
+        val door = house.units.firstOrNull { it.id == unitID }
+        RenameDoorDialog(
+            currentLabel = door?.label.orEmpty(),
+            onConfirm = { label ->
+                onRenameUnit(unitID, label)
+                renameTarget = null
+            },
+            onDismiss = { renameTarget = null }
+        )
+    }
+}
+
+@Composable
+private fun RenameDoorDialog(currentLabel: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    var label by rememberSaveable { mutableStateOf(currentLabel) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tür umbenennen") },
+        text = {
+            OutlinedTextField(
+                value = label,
+                onValueChange = { label = it.take(40) },
+                singleLine = true,
+                label = { Text("Bezeichnung") }
+            )
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(label) }, enabled = label.trim().isNotEmpty()) { Text("Speichern") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } }
+    )
 }

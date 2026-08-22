@@ -16,6 +16,9 @@ import android.location.Location
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.LruCache
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -33,8 +36,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -64,6 +69,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -72,6 +78,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,14 +88,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
+import at.volkshilfe.nachbesuch.data.prefs.AppSettingsStore
 import at.volkshilfe.nachbesuch.data.prefs.MapCameraStore
 import at.volkshilfe.nachbesuch.data.prefs.MapLoadGuard
 import at.volkshilfe.nachbesuch.data.prefs.MapLoadPermit
+import at.volkshilfe.nachbesuch.data.prefs.RouteStore
 import at.volkshilfe.nachbesuch.data.prefs.SavedCamera
 import at.volkshilfe.nachbesuch.data.importing.AreaHouseImportService
 import at.volkshilfe.nachbesuch.data.importing.AreaImportResult
@@ -101,12 +113,14 @@ import at.volkshilfe.nachbesuch.domain.map.PinScalePolicy
 import at.volkshilfe.nachbesuch.domain.model.DayScope
 import at.volkshilfe.nachbesuch.domain.model.Gebiet
 import at.volkshilfe.nachbesuch.domain.model.House
+import at.volkshilfe.nachbesuch.domain.model.MapPinSnapshotBuilder
 import at.volkshilfe.nachbesuch.domain.model.StoredCoordinate
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
 import at.volkshilfe.nachbesuch.domain.route.PlannedRoute
 import at.volkshilfe.nachbesuch.domain.route.RoutePlanner
 import at.volkshilfe.nachbesuch.domain.route.RouteStop
 import at.volkshilfe.nachbesuch.ui.theme.ChromeIconButton
+import at.volkshilfe.nachbesuch.ui.theme.ChromePanel
 import at.volkshilfe.nachbesuch.ui.theme.VolkshilfeRed
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
@@ -142,6 +156,7 @@ import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.cos
 import kotlin.math.floor
+import kotlin.math.roundToInt
 
 private val Vienna = SavedCamera(48.2082, 16.3738, 14.5)
 // Same red as the rest of the app's chrome — this used to be a second,
@@ -168,13 +183,17 @@ fun MapSurface(
     onBoundaryChanged: (List<StoredCoordinate>) -> Unit = {},
     onDeleteHouses: (Set<String>) -> Unit = {},
     onImportHouses: (List<ImportedAreaAddress>) -> Unit = {},
+    routeStore: RouteStore? = null,
+    settingsStore: AppSettingsStore? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
+    val darkTheme = isSystemInDarkTheme()
     val coroutineScope = rememberCoroutineScope()
     val cameraStore = remember { MapCameraStore(context) }
     val mapLoadGuard = remember { MapLoadGuard(context) }
-    val overpassClient = remember { OverpassClient(context) }
+    val overpassClient = remember { OverpassClient(context, appVersion = "1.0") }
     val areaImportService = remember { AreaHouseImportService() }
     val bitmapCache = remember { GooglePinBitmapCache(context) }
     val clusterGate = remember { ClusterGate() }
@@ -184,7 +203,12 @@ fun MapSurface(
 
     var mapLoaded by remember { mutableStateOf(false) }
     var mode by rememberSaveable { mutableStateOf(MapMode.BROWSING) }
-    var poiPreset by rememberSaveable { mutableStateOf(PoiPreset.ESSENTIAL) }
+    // Style toggles persist across launches like the iOS @AppStorage keys; the
+    // loaded flag stops the defaults from overwriting the stored values first.
+    var settingsLoaded by remember { mutableStateOf(false) }
+    var poiEssential by rememberSaveable { mutableStateOf(true) }
+    var poiAll by rememberSaveable { mutableStateOf(false) }
+    val poiPreset = if (poiAll) PoiPreset.ALL else if (poiEssential) PoiPreset.ESSENTIAL else PoiPreset.OFF
     var satellite by rememberSaveable { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
     var selectedIDs by rememberSaveable { mutableStateOf(setOf<String>()) }
@@ -202,17 +226,43 @@ fun MapSurface(
     var routePhase by rememberSaveable { mutableStateOf(RoutePhase.OFF) }
     var route by remember { mutableStateOf<PlannedRoute?>(null) }
     var routeOrder by remember { mutableStateOf(emptyList<String>()) }
+    var skippedStops by remember { mutableStateOf(emptyList<String>()) }
     var routeVisible by rememberSaveable { mutableStateOf(true) }
     var routeStatus by remember { mutableStateOf<String?>(null) }
     var routeJob by remember { mutableStateOf<Job?>(null) }
+    var routeRestored by remember { mutableStateOf(false) }
     var cameraWriteSequence by remember { mutableIntStateOf(0) }
     var mapPermit by remember { mutableStateOf<MapLoadPermit?>(null) }
+    var stackedCluster by remember { mutableStateOf<RenderCluster?>(null) }
 
     val apiKeyMissing = remember { googleMapsKeyIsMissing(context) }
     val openHouses = remember(houses, scope) { houses.filter { it.tally(scope).open > 0 } }
     val nextHouse = remember(routeOrder, houses, scope) {
         routeOrder.asSequence().mapNotNull { id -> houses.firstOrNull { it.id == id } }
             .firstOrNull { it.tally(scope).open > 0 }
+    }
+
+    LaunchedEffect(settingsStore) {
+        settingsStore?.restore()?.let { values ->
+            satellite = values.satellite
+            poiEssential = values.poiEssential
+            poiAll = values.poiAll
+            routeVisible = values.routeVisible
+        }
+        settingsLoaded = true
+    }
+    LaunchedEffect(settingsLoaded, satellite, poiEssential, poiAll, routeVisible) {
+        if (!settingsLoaded || settingsStore == null) return@LaunchedEffect
+        settingsStore.record(
+            AppSettingsStore.Values(
+                satellite = satellite,
+                poiEssential = poiEssential,
+                poiAll = poiAll,
+                routeVisible = routeVisible,
+                exportVisitedOnly = true,
+                exportIncludeNotes = true
+            )
+        )
     }
 
     LaunchedEffect(apiKeyMissing) {
@@ -231,20 +281,55 @@ fun MapSurface(
         if (points.isEmpty()) return
         if (points.size == 1) return moveTo(points.first())
         val builder = LatLngBounds.builder()
-        points.filter { it.isPlausible }.forEach { builder.include(LatLng(it.latitude, it.longitude)) }
+        var included = 0
+        points.filter { it.isPlausible }.forEach { builder.include(LatLng(it.latitude, it.longitude)); included++ }
+        // All points implausible (or degenerate single point): fall back to a
+        // plain centre move instead of letting LatLngBounds.build() throw.
+        if (included <= 1) {
+            points.firstOrNull()?.let(::moveTo)
+            return
+        }
         coroutineScope.launch { camera.animate(CameraUpdateFactory.newLatLngBounds(builder.build(), 84), 220) }
+    }
+
+    fun persistRoute() {
+        val store = routeStore ?: return
+        val territoryID = gebiet?.id ?: return
+        coroutineScope.launch(Dispatchers.IO) {
+            store.save(territoryID, route, routeOrder, skippedStops, routeStatus)
+        }
+    }
+
+    fun endRoute() {
+        routeJob?.cancel()
+        route = null
+        routeOrder = emptyList()
+        skippedStops = emptyList()
+        routeStatus = null
+        routePhase = RoutePhase.OFF
+        val store = routeStore
+        val territoryID = gebiet?.id
+        if (store != null && territoryID != null) {
+            coroutineScope.launch(Dispatchers.IO) { store.clear(territoryID) }
+        }
     }
 
     fun planRoute(start: StoredCoordinate) {
         val stops = openHouses.map { RouteStop(it.id, StoredCoordinate(it.latitude, it.longitude)) }
         if (stops.isEmpty()) return
         routeJob?.cancel()
-        route = RoutePlanner.plan(start, stops)
-        routeOrder = route!!.stops.map { it.id }
-        routeStatus = "Luftlinie · Gehwege werden gesucht …"
         routePhase = RoutePhase.RUNNING
         routeVisible = true
+        routeStatus = "Route wird berechnet …"
+        // The air-distance plan runs off the main thread; up to 400 stops of
+        // nearest-neighbour plus bounded 2-opt must never block a gesture.
         routeJob = coroutineScope.launch {
+            val planned = withContext(Dispatchers.Default) { RoutePlanner.plan(start, stops) }
+            route = planned
+            routeOrder = planned.stops.map { it.id }
+            skippedStops = emptyList()
+            routeStatus = "Luftlinie · Gehwege werden gesucht …"
+            persistRoute()
             val network = withContext(Dispatchers.IO) { overpassClient.load(listOf(start) + stops.map { it.coordinate }) }
             val graph = (network as? WalkingNetworkResult.Ready)?.graph
             if (graph == null) {
@@ -252,15 +337,87 @@ fun MapSurface(
                     WalkingNetworkResult.AreaTooLarge -> "Luftlinie · Gebiet zu groß für Gehwege"
                     else -> "Luftlinie · Gehwege offline nicht verfügbar"
                 }
+                persistRoute()
                 return@launch
             }
             val upgraded = withContext(Dispatchers.Default) { RoutePlanner.plan(start, stops, graph) }
             if (upgraded.followsStreets) {
                 route = upgraded
                 routeOrder = upgraded.stops.map { it.id }
+                skippedStops = emptyList()
                 routeStatus = "Gehwegroute"
+                persistRoute()
             }
         }
+    }
+
+    // A route belongs to exactly one territory. Switching territories suspends
+    // the active route (persisted, so returning restores it) instead of letting
+    // its stops leak into the other territory's plan.
+    LaunchedEffect(gebiet?.id) {
+        if (routePhase == RoutePhase.RUNNING && route != null) {
+            persistRoute()
+            routeJob?.cancel()
+            route = null
+            routeOrder = emptyList()
+            skippedStops = emptyList()
+            routeStatus = null
+            routePhase = RoutePhase.OFF
+        }
+        routeRestored = false
+    }
+
+    // Restore the persisted route once the territory's house list has arrived.
+    LaunchedEffect(mapLoaded, gebiet?.id, houses, routeRestored) {
+        val store = routeStore
+        val territoryID = gebiet?.id
+        if (store == null || territoryID == null || !mapLoaded) return@LaunchedEffect
+        if (routeRestored) return@LaunchedEffect
+        // Wait for the real list so freshly loaded houses are not mistaken
+        // for deleted stops.
+        if (houses.isEmpty()) return@LaunchedEffect
+        routeRestored = true
+        val restored = withContext(Dispatchers.IO) { store.restore(territoryID) } ?: return@LaunchedEffect
+        if (route != null || restored.order.isEmpty()) return@LaunchedEffect
+        // Drop stops whose houses were deleted while the app was closed.
+        val knownIDs = houses.mapTo(HashSet()) { it.id }
+        val pending = restored.order.filterNot { it in restored.skipped }.filter { it in knownIDs }
+        val skipped = restored.skipped.filter { it in knownIDs }
+        if (pending.isEmpty() && skipped.isEmpty()) {
+            withContext(Dispatchers.IO) { store.clear(territoryID) }
+            return@LaunchedEffect
+        }
+        route = restored.route
+        routeOrder = pending + skipped
+        skippedStops = skipped
+        routeStatus = restored.status ?: "Gehwegroute"
+        routePhase = RoutePhase.RUNNING
+        routeVisible = true
+    }
+
+    // Audit: prune deleted houses from the live route so the plan never
+    // references pins that no longer exist (iOS auditRoute parity).
+    LaunchedEffect(houses, routePhase) {
+        if (routePhase != RoutePhase.RUNNING) return@LaunchedEffect
+        val knownIDs = houses.mapTo(HashSet()) { it.id }
+        val pruned = routeOrder.filter { it in knownIDs }
+        if (pruned.size != routeOrder.size) {
+            routeOrder = pruned
+            persistRoute()
+        }
+    }
+
+    // Auto-finish notice with haptic feedback when every stop is resolved.
+    var previouslyRemaining by remember { mutableIntStateOf(-1) }
+    val remainingCount = routeOrder.count { id ->
+        id !in skippedStops && houses.firstOrNull { it.id == id }?.tally(scope)?.open.let { (it ?: 0) > 0 }
+    }
+    LaunchedEffect(routePhase, remainingCount) {
+        if (routePhase != RoutePhase.RUNNING) return@LaunchedEffect
+        if (previouslyRemaining in 1..Int.MAX_VALUE && remainingCount == 0) {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+        previouslyRemaining = remainingCount
     }
 
     LaunchedEffect(mapLoaded) {
@@ -319,9 +476,12 @@ fun MapSurface(
     }
 
     val visibleHouses = remember(houses, visibleBounds, clustered) {
+        // Sorted by id so a house edit only recomposes that one marker, not the
+        // whole sheet of them (order is otherwise irrelevant on the map).
         val bounds = visibleBounds
-        if (bounds == null || houses.size <= 1_200) houses
+        val base = if (bounds == null || houses.size <= 1_200) houses
         else houses.filter { bounds.containsPadded(it.latitude, it.longitude, 0.16) }
+        base.sortedBy { it.id }
     }
     val clusters = remember(visibleHouses, visibleBounds, clustered) {
         if (!clustered) emptyList() else makeClusters(visibleHouses, visibleBounds?.visibleWidthMetres() ?: 3_200.0)
@@ -344,7 +504,8 @@ fun MapSurface(
             myLocationButtonEnabled = false,
             rotationGesturesEnabled = true,
             scrollGesturesEnabled = true,
-            tiltGesturesEnabled = true,
+            // A canvassing map is a plan view (same rule as iOS).
+            tiltGesturesEnabled = false,
             zoomControlsEnabled = false,
             zoomGesturesEnabled = true
         )
@@ -380,6 +541,18 @@ fun MapSurface(
                 )
             }
             if (mode == MapMode.DRAWING_AREA && draftBoundary.size >= 2) {
+                // Live preview: filled shape once three points exist (like iOS),
+                // dashed-feel thin line while only two corners are set.
+                if (draftBoundary.size >= 3) {
+                    Polygon(
+                        points = draftBoundary.map { LatLng(it.latitude, it.longitude) },
+                        fillColor = Accent.copy(alpha = 0.10f),
+                        strokeColor = Accent.copy(alpha = 0.55f),
+                        strokeWidth = 3f,
+                        clickable = false,
+                        zIndex = 3f
+                    )
+                }
                 Polyline(
                     points = draftBoundary.map { LatLng(it.latitude, it.longitude) },
                     color = Accent,
@@ -403,48 +576,64 @@ fun MapSurface(
             }
             if (clustered) {
                 clusters.forEach { cluster ->
-                    Marker(
-                        state = rememberMarkerState(key = cluster.key, position = cluster.center),
-                        icon = bitmapCache.cluster(cluster.houses.size, cluster.houses.any { it.tally(scope).open > 0 }),
-                        anchor = Offset(0.5f, 0.5f),
-                        title = "${cluster.houses.size} Häuser",
-                        zIndex = 6f,
-                        onClick = {
-                            coroutineScope.launch {
-                                camera.animate(CameraUpdateFactory.newLatLngZoom(cluster.center, camera.position.zoom + 1.4f), 180)
+                    // key() pins each marker to one house/cluster regardless of list
+                    // order: houses sort by updatedAt, so recording an outcome moves
+                    // that house to index 0 — without stable keys every marker slot
+                    // would shift and the wrong pin would inherit the update.
+                    key(cluster.key) {
+                        Marker(
+                            state = rememberMarkerState(key = cluster.key, position = cluster.center),
+                            icon = bitmapCache.cluster(cluster.houses.size, cluster.houses.any { it.tally(scope).open > 0 }),
+                            anchor = Offset(0.5f, 0.5f),
+                            title = "${cluster.houses.size} Häuser",
+                            zIndex = 6f,
+                            onClick = {
+                                // A tight cluster is really stacked pins — offer the
+                                // members instead of zooming into nothing (iOS parity).
+                                if (clusterSpreadMetres(cluster) < 8.0) {
+                                    stackedCluster = cluster
+                                } else {
+                                    coroutineScope.launch {
+                                        camera.animate(CameraUpdateFactory.newLatLngZoom(cluster.center, camera.position.zoom + 1.4f), 180)
+                                    }
+                                }
+                                true
                             }
-                            true
-                        }
-                    )
+                        )
+                    }
                 }
             } else {
                 visibleHouses.forEach { house ->
                     val selected = house.id in selectedIDs
-                    Marker(
-                        state = rememberMarkerState(key = house.id, position = LatLng(house.latitude, house.longitude)),
-                        contentDescription = house.address,
-                        icon = bitmapCache.house(house, scope, pinScale, selected),
-                        anchor = Offset(0.5f, 1f),
-                        title = house.address,
-                        zIndex = if (selected) 12f else 5f,
-                        onClick = {
-                            when {
-                                routePhase == RoutePhase.PICKING_ON_MAP -> planRoute(StoredCoordinate(house.latitude, house.longitude))
-                                mode == MapMode.SELECTING -> selectedIDs = selectedIDs.toggle(house.id)
-                                else -> onHouseSelected(house)
+                    key(house.id) {
+                        Marker(
+                            state = rememberMarkerState(key = house.id, position = LatLng(house.latitude, house.longitude)),
+                            contentDescription = house.address,
+                            icon = bitmapCache.house(house, scope, pinScale, selected, darkTheme),
+                            anchor = Offset(0.5f, 1f),
+                            title = house.address,
+                            zIndex = if (selected) 12f else 5f,
+                            onClick = {
+                                when {
+                                    routePhase == RoutePhase.PICKING_ON_MAP -> planRoute(StoredCoordinate(house.latitude, house.longitude))
+                                    mode == MapMode.SELECTING -> selectedIDs = selectedIDs.toggle(house.id)
+                                    else -> onHouseSelected(house)
+                                }
+                                true
                             }
-                            true
-                        }
-                    )
+                        )
+                    }
                 }
             }
             draftBoundary.forEachIndexed { index, point ->
-                Marker(
-                    state = rememberMarkerState(key = "draft-$index", position = LatLng(point.latitude, point.longitude)),
-                    icon = bitmapCache.number(index + 1),
-                    anchor = Offset(0.5f, 0.5f),
-                    zIndex = 20f
-                )
+                key("draft-$index") {
+                    Marker(
+                        state = rememberMarkerState(key = "draft-$index", position = LatLng(point.latitude, point.longitude)),
+                        icon = bitmapCache.number(index + 1),
+                        anchor = Offset(0.5f, 0.5f),
+                        zIndex = 20f
+                    )
+                }
             }
             location?.let { fix ->
                 Circle(
@@ -486,12 +675,36 @@ fun MapSurface(
         }
 
         if (mode == MapMode.PLACING_HOUSE || mode == MapMode.DRAWING_AREA || routePhase == RoutePhase.PICKING_ON_MAP) {
-            Icon(
-                imageVector = if (routePhase == RoutePhase.PICKING_ON_MAP) Icons.Default.Flag else Icons.Default.EditLocationAlt,
-                contentDescription = null,
-                tint = Accent,
-                modifier = Modifier.align(Alignment.Center)
-            )
+            // Placement reticle: a visible target, not a lone floating glyph.
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .shadow(4.dp, CircleShape, clip = false)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f), CircleShape)
+                        .border(2.dp, Accent, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (routePhase == RoutePhase.PICKING_ON_MAP) Icons.Default.Flag else Icons.Default.EditLocationAlt,
+                        contentDescription = null,
+                        tint = Accent
+                    )
+                }
+                if (mode != MapMode.DRAWING_AREA) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.95f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.padding(top = 10.dp)
+                    ) {
+                        Text(
+                            if (routePhase == RoutePhase.PICKING_ON_MAP) "Startpunkt" else "Neues Haus",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
+            }
         }
 
         MapTopChrome(
@@ -555,38 +768,46 @@ fun MapSurface(
                 )
                 RoutePhase.RUNNING -> RouteCard(
                     nextAddress = nextHouse?.address,
-                    remaining = routeOrder.count { id -> houses.firstOrNull { it.id == id }?.tally(scope)?.open ?: 0 > 0 },
+                    remaining = remainingCount,
+                    distanceText = nextHouse?.let { next ->
+                        location?.let { fix ->
+                            val metres = RoutePlanner.metres(
+                                StoredCoordinate(fix.latitude, fix.longitude),
+                                StoredCoordinate(next.latitude, next.longitude)
+                            )
+                            if (metres < 1_000.0) "${metres.roundToInt()} m" else "%.1f km".format(metres / 1_000.0)
+                        }
+                    },
                     status = routeStatus,
                     visible = routeVisible,
                     onFocus = { nextHouse?.let { moveTo(StoredCoordinate(it.latitude, it.longitude), 17f) } },
                     onSkip = {
-                        nextHouse?.id?.let { id -> routeOrder = routeOrder.filterNot { it == id } + id }
+                        nextHouse?.id?.let { id ->
+                            routeOrder = routeOrder.filterNot { it == id } + id
+                            skippedStops = skippedStops + id
+                            persistRoute()
+                        }
                     },
                     onToggle = { routeVisible = !routeVisible },
-                    onEnd = { routeJob?.cancel(); route = null; routeOrder = emptyList(); routePhase = RoutePhase.OFF }
+                    onEnd = ::endRoute
                 )
                 RoutePhase.OFF -> Unit
             }
 
             when (mode) {
-                MapMode.DRAWING_AREA -> MapConfirmCard(
-                    title = "${draftBoundary.size} Punkte · Karte auf eine Ecke schieben",
-                    confirmLabel = if (draftBoundary.size >= 3) "Gebiet speichern" else "Punkt ${draftBoundary.size + 1}",
-                    secondaryIcon = if (draftBoundary.isNotEmpty()) Icons.AutoMirrored.Filled.Undo else null,
-                    onSecondary = { if (draftBoundary.isNotEmpty()) draftBoundary = draftBoundary.dropLast(1) },
-                    onCancel = { mode = MapMode.BROWSING; draftBoundary = emptyList() },
-                    onConfirm = {
-                        if (draftBoundary.size >= 3) {
-                            onBoundaryChanged(draftBoundary)
-                            draftBoundary = emptyList()
-                            mode = MapMode.BROWSING
-                        } else {
-                            draftBoundary = draftBoundary + StoredCoordinate(camera.position.target.latitude, camera.position.target.longitude)
-                        }
-                    },
-                    onPrimaryLongClick = {
+                MapMode.DRAWING_AREA -> BoundaryDrawingCard(
+                    pointCount = draftBoundary.size,
+                    onAddPoint = {
                         draftBoundary = draftBoundary + StoredCoordinate(camera.position.target.latitude, camera.position.target.longitude)
-                    }
+                    },
+                    onUndo = { if (draftBoundary.isNotEmpty()) draftBoundary = draftBoundary.dropLast(1) },
+                    onSave = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onBoundaryChanged(draftBoundary)
+                        draftBoundary = emptyList()
+                        mode = MapMode.BROWSING
+                    },
+                    onCancel = { mode = MapMode.BROWSING; draftBoundary = emptyList() }
                 )
                 MapMode.PLACING_HOUSE -> MapConfirmCard(
                     title = "Karte auf das Haus schieben",
@@ -608,6 +829,7 @@ fun MapSurface(
                         hasBoundary = boundary.size >= 3,
                         canRoute = openHouses.isNotEmpty(),
                         canImport = boundary.size >= 3,
+                        routeRunning = routePhase == RoutePhase.RUNNING,
                         onBoundary = {
                             menuExpanded = false
                             if (boundary.size >= 3) boundaryOptions = true
@@ -615,8 +837,19 @@ fun MapSurface(
                         },
                         onRoute = { menuExpanded = false; routePhase = RoutePhase.CHOOSING_START },
                         onImport = { menuExpanded = false; areaImportVisible = true },
+                        onReplanRoute = {
+                            menuExpanded = false
+                            routePhase = RoutePhase.CHOOSING_START
+                        },
                         onSatellite = { satellite = !satellite },
-                        onPoi = { poiPreset = PoiPreset.entries[(poiPreset.ordinal + 1) % PoiPreset.entries.size] }
+                        onPoi = {
+                            // Cycle Aus → Wesentlich → Alle → Aus.
+                            when {
+                                poiAll -> { poiAll = false; poiEssential = false }
+                                poiEssential -> poiAll = true
+                                else -> poiEssential = true
+                            }
+                        }
                     )
                 }
                 MapMode.SELECTING -> Unit
@@ -708,6 +941,35 @@ fun MapSurface(
             }
         )
     }
+    stackedCluster?.let { cluster ->
+        AlertDialog(
+            onDismissRequest = { stackedCluster = null },
+            title = { Text("${cluster.houses.size} Häuser an dieser Stelle") },
+            text = {
+                LazyColumn(modifier = Modifier.height(280.dp)) {
+                    items(cluster.houses, key = { it.id }) { house ->
+                        TextButton(onClick = {
+                            stackedCluster = null
+                            moveTo(StoredCoordinate(house.latitude, house.longitude), 18f)
+                            onHouseSelected(house)
+                        }, modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
+                                Text(house.address)
+                                val tally = house.tally(scope)
+                                Text(
+                                    if (tally.open > 0) "${tally.open} offen" else "Erledigt",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { stackedCluster = null }) { Text("Schließen") } }
+        )
+    }
 }
 
 @Composable
@@ -726,11 +988,9 @@ private fun MapTopChrome(
     onDeleteSelection: () -> Unit
 ) {
     val tally = remember(houses, scope) { houses.map { it.tally(scope) } }
-    Surface(
+    ChromePanel(
         modifier = modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
-        shape = RoundedCornerShape(28.dp),
-        tonalElevation = 4.dp
+        contentPadding = PaddingValues(0.dp)
     ) {
         if (selecting) {
             Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -781,14 +1041,16 @@ private fun MapActionBar(
     hasBoundary: Boolean,
     canRoute: Boolean,
     canImport: Boolean,
+    routeRunning: Boolean = false,
     onBoundary: () -> Unit,
     onRoute: () -> Unit,
     onImport: () -> Unit,
+    onReplanRoute: () -> Unit = {},
     onSatellite: () -> Unit,
     onPoi: () -> Unit
 ) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.95f), shape = RoundedCornerShape(30.dp), tonalElevation = 4.dp) {
-        Row(Modifier.padding(7.dp), verticalAlignment = Alignment.CenterVertically) {
+    ChromePanel(cornerRadius = 30.dp, contentPadding = PaddingValues(7.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Box {
                 IconButton(onClick = { onMenuExpanded(true) }) { Icon(Icons.Default.MoreHoriz, "Kartenoptionen") }
                 DropdownMenu(expanded = menuExpanded, onDismissRequest = { onMenuExpanded(false) }) {
@@ -809,6 +1071,14 @@ private fun MapActionBar(
                         enabled = canImport,
                         onClick = onImport
                     )
+                    if (routeRunning) {
+                        DropdownMenuItem(
+                            text = { Text("Route neu planen") },
+                            leadingIcon = { Icon(Icons.Default.Route, null) },
+                            enabled = canRoute,
+                            onClick = onReplanRoute
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text(if (satellite) "Kartenstil: Satellit" else "Kartenstil: Standard") },
                         leadingIcon = { Icon(Icons.Default.Layers, null) },
@@ -833,18 +1103,14 @@ private fun MapActionBar(
 private fun MapConfirmCard(
     title: String,
     confirmLabel: String,
-    secondaryIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
-    onSecondary: () -> Unit = {},
     onCancel: () -> Unit,
-    onConfirm: () -> Unit,
-    onPrimaryLongClick: () -> Unit = onConfirm
+    onConfirm: () -> Unit
 ) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f), shape = RoundedCornerShape(28.dp), tonalElevation = 5.dp) {
-        Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.End) {
+    ChromePanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)) {
+        Column(horizontalAlignment = Alignment.End) {
             Text(title, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onCancel) { Text("Abbrechen") }
-                secondaryIcon?.let { IconButton(onClick = onSecondary) { Icon(it, "Rückgängig") } }
                 Button(onClick = onConfirm, shape = RoundedCornerShape(22.dp)) {
                     Icon(Icons.Default.Check, null)
                     Text(" $confirmLabel")
@@ -854,10 +1120,59 @@ private fun MapConfirmCard(
     }
 }
 
+/**
+ * Territory drawing controls. Adding corners and saving are deliberately
+ * separate actions — the previous single-button design turned into "save" at
+ * three points, which made every territory a triangle unless you discovered an
+ * undocumented long-press.
+ */
+@Composable
+private fun BoundaryDrawingCard(
+    pointCount: Int,
+    onAddPoint: () -> Unit,
+    onUndo: () -> Unit,
+    onSave: () -> Unit,
+    onCancel: () -> Unit
+) {
+    ChromePanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)) {
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onCancel) { Icon(Icons.Default.Close, "Zeichnen abbrechen") }
+                Column(Modifier.weight(1f)) {
+                    Text("Gebiet einzeichnen", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        if (pointCount < 3) "$pointCount Punkte · mindestens 3 nötig"
+                        else "$pointCount Punkte · so viele Ecken wie du willst",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onUndo, enabled = pointCount > 0) {
+                    Icon(Icons.AutoMirrored.Filled.Undo, "Letzten Punkt entfernen")
+                }
+                OutlinedButton(onClick = onAddPoint, shape = RoundedCornerShape(22.dp)) {
+                    Icon(Icons.Default.Add, null)
+                    Text(" Punkt ${pointCount + 1} setzen")
+                }
+                Button(
+                    onClick = onSave,
+                    enabled = pointCount >= 3,
+                    shape = RoundedCornerShape(22.dp)
+                ) {
+                    Icon(Icons.Default.Check, null)
+                    Text(" Speichern")
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun RouteStartCard(canUseLocation: Boolean, onLocation: () -> Unit, onMap: () -> Unit, onCancel: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f), shape = RoundedCornerShape(28.dp), tonalElevation = 5.dp) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    ChromePanel(contentPadding = PaddingValues(12.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Startpunkt wählen", style = MaterialTheme.typography.titleMedium)
@@ -877,6 +1192,7 @@ private fun RouteStartCard(canUseLocation: Boolean, onLocation: () -> Unit, onMa
 private fun RouteCard(
     nextAddress: String?,
     remaining: Int,
+    distanceText: String?,
     status: String?,
     visible: Boolean,
     onFocus: () -> Unit,
@@ -884,11 +1200,15 @@ private fun RouteCard(
     onToggle: () -> Unit,
     onEnd: () -> Unit
 ) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f), shape = RoundedCornerShape(28.dp), tonalElevation = 5.dp) {
-        Column(Modifier.padding(10.dp)) {
+    ChromePanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)) {
+        Column {
             TextButton(onClick = onFocus, enabled = nextAddress != null) {
                 Column(horizontalAlignment = Alignment.Start) {
-                    Text(if (nextAddress == null) "Route abgeschlossen" else "Nächstes Haus · $remaining übrig", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        if (nextAddress == null) "Route abgeschlossen"
+                        else listOfNotNull("Nächstes Haus · $remaining übrig", distanceText).joinToString(" · "),
+                        style = MaterialTheme.typography.labelLarge
+                    )
                     Text(nextAddress ?: "Alle offenen Häuser erledigt", style = MaterialTheme.typography.titleMedium)
                     status?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
@@ -1049,6 +1369,19 @@ private suspend fun geocode(context: Context, query: String): List<SearchPlace> 
 
 private fun Set<String>.toggle(id: String): Set<String> = if (id in this) this - id else this + id
 
+/** Largest pairwise distance inside a cluster; below ~8 m the pins are stacked. */
+private fun clusterSpreadMetres(cluster: RenderCluster): Double {
+    var maxMetres = 0.0
+    val points = cluster.houses.map { StoredCoordinate(it.latitude, it.longitude) }
+    for (i in points.indices) {
+        for (j in i + 1 until points.size) {
+            val distance = RoutePlanner.metres(points[i], points[j])
+            if (distance > maxMetres) maxMetres = distance
+        }
+    }
+    return maxMetres
+}
+
 private fun makeClusters(houses: List<House>, spanMeters: Double): List<RenderCluster> {
     if (houses.isEmpty()) return emptyList()
     val cellMeters = (spanMeters / 8.0).coerceIn(90.0, 280.0)
@@ -1159,13 +1492,23 @@ private class HeadingSubscription(context: Context, private val onHeading: (Floa
 private class GooglePinBitmapCache(private val context: Context) {
     private val cache = object : LruCache<String, BitmapDescriptor>(260) {}
 
-    fun house(house: House, scope: DayScope, scale: PinScale, selected: Boolean): BitmapDescriptor {
+    /** Outcome colours for light and dark map tiles (iOS bakes dark variants too). */
+    private fun outcomeColor(outcome: VisitOutcome?, dark: Boolean): Int = when (outcome) {
+        VisitOutcome.JOINED -> if (dark) 0xFFFF6B84.toInt() else 0xFFFF4569.toInt()
+        VisitOutcome.LATE_NO -> if (dark) 0xFFFF6B6B.toInt() else 0xFFFF4848.toInt()
+        VisitOutcome.EARLY_NO -> if (dark) 0xFFF7A344.toInt() else 0xFFF59126.toInt()
+        VisitOutcome.NOT_HOME -> if (dark) 0xFFFF6B6B.toInt() else 0xFFFF4545.toInt()
+        null -> if (dark) 0xFF5C9DE8.toInt() else 0xFF1E7AD2.toInt()
+    }
+
+    fun house(house: House, scope: DayScope, scale: PinScale, selected: Boolean, dark: Boolean): BitmapDescriptor {
         val tally = house.tally(scope)
         val fullText = if (house.isApartmentBuilding) "${tally.completed}/${tally.unitCount}" else house.units.firstOrNull()?.displayOutcome(scope)?.emoji ?: "•"
         val text = if (scale == PinScale.DOT) "" else fullText
-        val outcome = markerOutcome(house, scope)
-        val key = "house:$text:$outcome:$scale:$selected"
-        return cached(key) { pinBitmap(text, outcome, scale, selected) }
+        // One marker rule shared with the domain snapshots — no second variant here.
+        val outcome = MapPinSnapshotBuilder.markerOutcome(house.units, scope)
+        val key = "house:$text:$outcome:$scale:$selected:$dark"
+        return cached(key) { pinBitmap(text, outcome, scale, selected, dark) }
     }
 
     fun cluster(count: Int, hasOpen: Boolean): BitmapDescriptor = cached("cluster:$count:$hasOpen") {
@@ -1212,7 +1555,7 @@ private class GooglePinBitmapCache(private val context: Context) {
         }
     }
 
-    private fun pinBitmap(text: String, outcome: VisitOutcome?, scale: PinScale, selected: Boolean): Bitmap {
+    private fun pinBitmap(text: String, outcome: VisitOutcome?, scale: PinScale, selected: Boolean, dark: Boolean): Bitmap {
         val density = context.resources.displayMetrics.density
         val head = when (scale) { PinScale.FULL -> 34f; PinScale.COMPACT -> 25f; PinScale.DOT -> 15f }
         val padding = 5f
@@ -1225,13 +1568,7 @@ private class GooglePinBitmapCache(private val context: Context) {
             val radius = head * density / 2f
             val centerY = (padding + head / 2f) * density
             val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = when (outcome) {
-                    VisitOutcome.JOINED -> 0xFFFF4569.toInt()
-                    VisitOutcome.LATE_NO -> 0xFFFF4848.toInt()
-                    VisitOutcome.EARLY_NO -> 0xFFF59126.toInt()
-                    VisitOutcome.NOT_HOME -> 0xFFFF4545.toInt()
-                    null -> 0xFF1E7AD2.toInt()
-                }
+                color = outcomeColor(outcome, dark)
                 setShadowLayer(3f * density, 0f, 2f * density, 0x55000000)
             }
             canvas.drawCircle(centerX, centerY, radius, fill)
@@ -1249,12 +1586,6 @@ private class GooglePinBitmapCache(private val context: Context) {
             canvas.drawCircle(centerX, centerY, radius - ring.strokeWidth / 2f, ring)
             if (text.isNotEmpty()) drawCentered(canvas, text, centerX, centerY, (if (text.length > 2) 9.5f else 16f) * density)
         }
-    }
-
-    private fun markerOutcome(house: House, scope: DayScope): VisitOutcome? {
-        if (house.units.any { it.isOpen(scope) && (it.isPendingRevisit || it.displayOutcome(scope) == VisitOutcome.NOT_HOME) }) return VisitOutcome.NOT_HOME
-        val outcomes = house.units.mapNotNull { it.displayOutcome(scope) }
-        return outcomes.lastOrNull { it == VisitOutcome.JOINED } ?: outcomes.lastOrNull()
     }
 
     private fun cached(key: String, make: () -> Bitmap): BitmapDescriptor = synchronized(cache) {

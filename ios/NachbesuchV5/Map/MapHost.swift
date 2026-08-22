@@ -120,6 +120,15 @@ struct MapHost: UIViewRepresentable {
         mapView.showsBuildings = true
         mapView.isPitchEnabled = false    // a canvassing map is a plan view
         mapView.isRotateEnabled = true
+        // Whole-world zoom activates MapKit's horizontally wrapped world copies.
+        // A cluster can then be created on one copy and split on another, leaving
+        // custom annotation views visually detached from their real coordinate.
+        // A several-hundred-kilometre overview is already far beyond any useful
+        // canvassing context and keeps the map inside one unambiguous world copy.
+        mapView.cameraZoomRange = MKMapView.CameraZoomRange(
+            minCenterCoordinateDistance: 15,
+            maxCenterCoordinateDistance: 350_000
+        )
 
         coordinator.applyConfiguration(mapView, satellite: isSatellite, poi: poiPreset)
         coordinator.applyChromeInsets(mapView, insets: chromeInsets)

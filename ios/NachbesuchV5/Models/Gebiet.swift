@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import os
 import SwiftData
 
 enum CampaignDuration: Int, Codable, CaseIterable, Identifiable, Sendable {
@@ -170,9 +171,14 @@ final class Gebiet {
             return coordinates
         }
         set {
-            // Never clobber a readable boundary with an encode failure.
+            // Never clobber a readable boundary with an encode failure — but do
+            // not fail silently either: the write is lost, so log it loudly.
             guard let encoded = try? AppCoders.boundaryEncoder()
-                .encode(newValue.map(StoredCoordinate.init)) else { return }
+                .encode(newValue.map(StoredCoordinate.init)) else {
+                Logger(subsystem: "at.volkshilfe.nachbesuch", category: "gebiet")
+                    .fault("Boundary encode failed; keeping previous boundary (\(newValue.count) points dropped)")
+                return
+            }
             boundaryData = encoded
             cachedBoundary = newValue
             touch()

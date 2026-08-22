@@ -6,7 +6,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 
 /** The two iOS date formats are intentionally separate. */
 object AppJson {
@@ -46,9 +48,24 @@ object AppJson {
             )
         }
 
+    /**
+     * Emits whole-second ISO-8601 like Apple's `.iso8601` date strategy.
+     * Fractional seconds (which Instant.toString() produces for any millis != 0)
+     * are rejected by the iOS decoder, so truncating here is what keeps an
+     * Android-written backup importable on iOS at all.
+     */
     fun iso(epochMillis: Long?): String? = epochMillis?.let {
-        DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochMilli(it))
+        DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochMilli(it).truncatedTo(ChronoUnit.SECONDS))
     }
 
-    fun epochMillis(iso: String?): Long? = iso?.let { Instant.parse(it).toEpochMilli() }
+    /** Whole-second "now", used so exportedAt matches the same constraint. */
+    fun isoNow(): String = iso(System.currentTimeMillis()).orEmpty()
+
+    fun epochMillis(iso: String?): Long? = iso?.let { value ->
+        // Tolerate fractional seconds and offsets that Instant.parse rejects,
+        // mirroring iOS's lenient re-reads of old files. Garbage yields null.
+        runCatching { Instant.parse(value).toEpochMilli() }
+            .recoverCatching { OffsetDateTime.parse(value).toInstant().toEpochMilli() }
+            .getOrNull()
+    }
 }

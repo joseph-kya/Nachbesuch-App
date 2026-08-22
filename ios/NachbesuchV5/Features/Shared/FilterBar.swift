@@ -60,9 +60,13 @@ struct FilterBar: View {
                     }
                 }
                 .padding(.horizontal, 2)
+                // Liquid Glass grows a few points while pressed. Reserve that
+                // space so a long press never crops the top or bottom edge.
+                .padding(.vertical, 6)
             }
         }
         .scrollIndicators(.hidden)
+        .scrollClipDisabled()
         .contentMargins(.horizontal, AppSpacing.regular, for: .scrollContent)
         .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
         .animation(.appFeedback(reduceMotion: reduceMotion), value: selectedID)

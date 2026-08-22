@@ -9,11 +9,13 @@ import at.volkshilfe.nachbesuch.data.backup.BackupService
 import at.volkshilfe.nachbesuch.data.backup.BackupImportResult
 import at.volkshilfe.nachbesuch.data.export.PdfExporter
 import at.volkshilfe.nachbesuch.data.importing.ImportedAreaAddress
+import at.volkshilfe.nachbesuch.domain.stats.TerritorySummarizer
+import at.volkshilfe.nachbesuch.domain.stats.TerritorySummary
 import at.volkshilfe.nachbesuch.domain.export.ExportDocumentBuilder
 import at.volkshilfe.nachbesuch.domain.export.PlainTextExport
+import at.volkshilfe.nachbesuch.domain.export.LegacyTextExport
 import at.volkshilfe.nachbesuch.domain.model.CampaignDays
 import at.volkshilfe.nachbesuch.domain.model.DayScope
-import at.volkshilfe.nachbesuch.domain.model.DoorResult
 import at.volkshilfe.nachbesuch.domain.model.Gebiet
 import at.volkshilfe.nachbesuch.domain.model.House
 import at.volkshilfe.nachbesuch.domain.model.StoredCoordinate
@@ -27,24 +29,28 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
+data class ExportOptions(
+    val visitedOnly: Boolean = true,
+    val includeNotes: Boolean = true
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppViewModel(application: Application) : AndroidViewModel(application) {
-    private val opened = runCatching {
-        AppDatabase.open(application).also { it.openHelper.writableDatabase }
-    }
-    private val database = opened.getOrElse { AppDatabase.openScratch(application) }
-    val storeUnreadable: Boolean = opened.isFailure
-    private val repository = TerritoryRepository(database)
+    // Room opens lazily on first query; nothing touches disk on the main thread here.
+    private val database = AppDatabase.open(application)
+    private val repositoryFlow = MutableStateFlow(TerritoryRepository(database))
     private val backupService = BackupService(database)
 
-    val gebiete: StateFlow<List<Gebiet>> = repository.observeGebiete()
+    private val _storeUnreadable = MutableStateFlow(false)
+    val storeUnreadable: StateFlow<Boolean> = _storeUnreadable.asStateFlow()
+
+    val gebiete: StateFlow<List<Gebiet>> = repositoryFlow.flatMapLatest { it.observeGebiete() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val _activeGebietID = MutableStateFlow<String?>(null)
@@ -54,17 +60,31 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         values.firstOrNull { it.id == selectedID } ?: values.firstOrNull()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    val houses: StateFlow<List<House>> = _activeGebietID.flatMapLatest { id ->
-        if (id == null) emptyFlow() else repository.observeHouses(id)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    val allHouses: StateFlow<List<House>> = repository.observeAllHouses()
+    val houses: StateFlow<List<House>> = combine(repositoryFlow, _activeGebietID) { repository, id -> id?.let { repository.observeHouses(it) } }
+        .flatMapLatest { it ?: emptyFlow() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val allHouses: StateFlow<List<House>> = repositoryFlow.flatMapLatest { it.observeAllHouses() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Precomputed per-territory statistics for the archive screen. */
+    val summaries: StateFlow<List<TerritorySummary>> = combine(gebiete, allHouses) { values, houses ->
+        TerritorySummarizer.summarize(values, houses)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val _scope = MutableStateFlow(DayScope.COMBINED)
     val scope: StateFlow<DayScope> = _scope.asStateFlow()
 
     init {
+        // Fail fast if the real store cannot be opened — but off the main thread,
+        // and by swapping to a scratch store instead of crashing at launch.
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { database.openHelper.writableDatabase }.onFailure {
+                _storeUnreadable.value = true
+                runCatching { database.close() }
+                repositoryFlow.value = TerritoryRepository(AppDatabase.openScratch(application))
+            }
+        }
         viewModelScope.launch {
             gebiete.collect { values ->
                 if (_activeGebietID.value == null || values.none { it.id == _activeGebietID.value }) {
@@ -88,14 +108,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             createdAt = now, updatedAt = now
         )
         viewModelScope.launch(Dispatchers.IO) {
-            repository.save(gebied)
+            repositoryFlow.value.save(gebied)
             _activeGebietID.value = gebied.id
         }
     }
 
     fun deleteGebiet(id: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            repository.deleteGebiet(id)
+            repositoryFlow.value.deleteGebiet(id)
             if (_activeGebietID.value == id) _activeGebietID.value = null
         }
     }
@@ -110,7 +130,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             gebietID = territoryID, dayID = territoryID,
             createdAt = now, updatedAt = now
         )
-        viewModelScope.launch(Dispatchers.IO) { repository.save(house) }
+        viewModelScope.launch(Dispatchers.IO) { repositoryFlow.value.save(house) }
     }
 
     fun addImportedHouses(addresses: List<ImportedAreaAddress>) {
@@ -129,17 +149,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 updatedAt = now + index
             )
         }
-        viewModelScope.launch(Dispatchers.IO) { repository.saveAll(values) }
+        viewModelScope.launch(Dispatchers.IO) { repositoryFlow.value.saveAll(values) }
     }
 
     fun deleteHouse(id: String) {
-        viewModelScope.launch(Dispatchers.IO) { repository.deleteHouse(id) }
+        viewModelScope.launch(Dispatchers.IO) { repositoryFlow.value.deleteHouse(id) }
     }
 
     fun deleteHouses(ids: Set<String>) {
         if (ids.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
-            ids.forEach { repository.deleteHouse(it) }
+            ids.forEach { repositoryFlow.value.deleteHouse(it) }
         }
     }
 
@@ -148,43 +168,65 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val clean = points.filter(StoredCoordinate::isPlausible)
         if (clean.isNotEmpty() && clean.size < 3) return
         viewModelScope.launch(Dispatchers.IO) {
-            repository.save(territory.copy(boundary = clean).touch())
+            repositoryFlow.value.save(territory.copy(boundary = clean).touch())
         }
     }
 
     fun recordOutcome(houseID: String, unitID: String, outcome: VisitOutcome?, scope: DayScope) {
-        val house = houses.value.firstOrNull { it.id == houseID } ?: return
-        // The visible picker is a filter only. Writes follow the territory calendar,
-        // matching the iOS rule and preventing Tag-2 edits from landing in Tag 1.
-        val writeScope = activeGebiet.value?.writeScope() ?: scope
-        house.recordOutcome(unitID, outcome, writeScope)?.let { updated ->
-            viewModelScope.launch(Dispatchers.IO) { repository.save(updated) }
+        mutateHouse(houseID) { house ->
+            // The visible picker is a filter only. Writes follow the territory calendar,
+            // matching the iOS rule and preventing Tag-2 edits from landing in Tag 1.
+            val writeScope = activeGebiet.value?.writeScope() ?: scope
+            house.recordOutcome(unitID, outcome, writeScope)
         }
     }
 
     fun makeApartment(houseID: String, count: Int) {
+        mutateHouse(houseID) { it.resizeApartment(count) }
+    }
+
+    fun renameUnit(houseID: String, unitID: String, label: String) {
+        mutateHouse(houseID) { it.renameUnit(unitID, label) }
+    }
+
+    fun fillOpenDoors(houseID: String, outcome: VisitOutcome?, scope: DayScope) {
+        mutateHouse(houseID) { house ->
+            val writeScope = activeGebiet.value?.writeScope() ?: scope
+            house.setOutcomeForOpenDoors(outcome, writeScope)
+        }
+    }
+
+    private inline fun mutateHouse(houseID: String, crossinline mutation: (House) -> House?) {
         val house = houses.value.firstOrNull { it.id == houseID } ?: return
-        house.resizeApartment(count)?.let { updated ->
-            viewModelScope.launch(Dispatchers.IO) { repository.save(updated) }
+        mutation(house)?.let { updated ->
+            viewModelScope.launch(Dispatchers.IO) { repositoryFlow.value.save(updated) }
         }
     }
 
     fun updateHouse(house: House) {
-        viewModelScope.launch(Dispatchers.IO) { repository.save(house) }
+        viewModelScope.launch(Dispatchers.IO) { repositoryFlow.value.save(house) }
     }
 
     suspend fun exportBackupJson(): String = backupService.export(gebiete.value, allHouses.value)
 
     suspend fun importBackup(raw: String): BackupImportResult = backupService.import(raw)
 
-    suspend fun exportCurrentText(): String = withContext(Dispatchers.Default) {
+    suspend fun exportCurrentText(options: ExportOptions): String = withContext(Dispatchers.Default) {
         val territory = activeGebiet.value ?: return@withContext ""
-        PlainTextExport.render(ExportDocumentBuilder.build(territory, houses.value, scope.value))
+        PlainTextExport.render(ExportDocumentBuilder.build(territory, houses.value, scope.value, options.visitedOnly, options.includeNotes))
     }
 
-    suspend fun exportCurrentPdf(target: File) = withContext(Dispatchers.Default) {
+    suspend fun exportCurrentLegacyText(): String = withContext(Dispatchers.Default) {
+        val territory = activeGebiet.value ?: return@withContext ""
+        val document = ExportDocumentBuilder.build(
+            territory, houses.value, scope.value, visitedOnly = true, includeNotes = false
+        )
+        LegacyTextExport.render(document)
+    }
+
+    suspend fun exportCurrentPdf(target: File, options: ExportOptions) = withContext(Dispatchers.Default) {
         val territory = activeGebiet.value ?: return@withContext
-        val document = ExportDocumentBuilder.build(territory, houses.value, scope.value)
+        val document = ExportDocumentBuilder.build(territory, houses.value, scope.value, options.visitedOnly, options.includeNotes)
         PdfExporter.write(document, target)
     }
 

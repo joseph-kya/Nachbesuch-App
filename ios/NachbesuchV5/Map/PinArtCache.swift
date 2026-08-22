@@ -25,6 +25,71 @@ enum PinScale: Sendable, Hashable {
     }
 }
 
+/// One deterministic state machine for pin size, clustering and cluster artwork.
+/// Keeping the thresholds together prevents the dot tier and the cluster gate from
+/// drifting into contradictory zoom ranges as they are tuned.
+enum MapPinPresentationPolicy {
+    static let compactOnMeters = 1_600.0
+    static let fullOnMeters = 1_250.0
+    static let dotOnMeters = 3_600.0
+    static let compactAgainMeters = 2_800.0
+
+    static let clusterOnMeters = 3_200.0
+    static let clusterOffMeters = 2_400.0
+    static let clusterOnVisiblePins = 1_200
+    static let clusterOffVisiblePins = 850
+
+    static func viewportMetersAcross(
+        mapPointsAcross: Double,
+        metersPerMapPoint: Double
+    ) -> Double {
+        guard mapPointsAcross.isFinite, metersPerMapPoint.isFinite,
+              mapPointsAcross > 0, metersPerMapPoint > 0 else { return 0 }
+        return mapPointsAcross * metersPerMapPoint
+    }
+
+    /// Handles arbitrarily large programmatic jumps in one call. The old state
+    /// machine could move only one tier per callback and therefore remain compact
+    /// forever after a single jump from street level to a territory overview.
+    static func scale(current: PinScale, metersAcross: Double) -> PinScale {
+        let meters = max(metersAcross.isFinite ? metersAcross : 0, 0)
+        switch current {
+        case .full:
+            if meters >= dotOnMeters { return .dot }
+            return meters >= compactOnMeters ? .compact : .full
+        case .compact:
+            if meters >= dotOnMeters { return .dot }
+            return meters <= fullOnMeters ? .full : .compact
+        case .dot:
+            if meters <= fullOnMeters { return .full }
+            return meters <= compactAgainMeters ? .compact : .dot
+        }
+    }
+
+    static func clusters(
+        currentlyEnabled: Bool,
+        metersAcross: Double,
+        visiblePins: Int
+    ) -> Bool {
+        let meters = max(metersAcross.isFinite ? metersAcross : 0, 0)
+        let count = max(visiblePins, 0)
+        if currentlyEnabled {
+            return meters > clusterOffMeters || count > clusterOffVisiblePins
+        }
+        return meters >= clusterOnMeters || count >= clusterOnVisiblePins
+    }
+
+    /// Larger groups get slightly more visual weight, but only in three coarse
+    /// tiers so a pinch does not continuously resize bubbles as membership changes.
+    static func clusterDiameter(for count: Int) -> CGFloat {
+        switch max(count, 0) {
+        case ..<10: 42
+        case ..<100: 46
+        default: 52
+        }
+    }
+}
+
 /// Fully pre-rendered pin artwork — geometry *and* text baked into a single
 /// `UIImage`.
 ///
@@ -48,10 +113,11 @@ final class PinArtCache {
         let scale: PinScale
     }
 
-    let clusterDiameter: CGFloat = 46
     private let ringWidth: CGFloat = 2.5
     /// Room for the drop shadow so it is never clipped by the bitmap edge.
-    private let shadowPadding: CGFloat = 4
+    /// Not private: the pin-placement diagnostic needs it to work out where a pin's
+    /// tip *should* be for a given bitmap.
+    let shadowPadding: CGFloat = 4
 
     private var cache: [Key: UIImage] = [:]
     private var order: [Key] = []
@@ -62,7 +128,8 @@ final class PinArtCache {
     private struct ClusterKey: Hashable {
         let text: String
         let isDark: Bool
-        let hasFollowUps: Bool
+        let hasOpenWork: Bool
+        let diameter: CGFloat
     }
 
     // MARK: Geometry
@@ -113,8 +180,13 @@ final class PinArtCache {
         return image
     }
 
-    func clusterImage(count: Int, hasFollowUps: Bool, isDark: Bool) -> UIImage {
-        let key = ClusterKey(text: Self.abbreviated(count), isDark: isDark, hasFollowUps: hasFollowUps)
+    func clusterImage(count: Int, hasOpenWork: Bool, isDark: Bool) -> UIImage {
+        let key = ClusterKey(
+            text: Self.abbreviated(count),
+            isDark: isDark,
+            hasOpenWork: hasOpenWork,
+            diameter: MapPinPresentationPolicy.clusterDiameter(for: count)
+        )
         if let cached = clusterCache[key] { return cached }
         let image = renderCluster(key)
         clusterCache[key] = image
@@ -272,14 +344,14 @@ final class PinArtCache {
 
     private func renderCluster(_ key: ClusterKey) -> UIImage {
         let size = CGSize(
-            width: clusterDiameter + shadowPadding * 2,
-            height: clusterDiameter + shadowPadding * 2
+            width: key.diameter + shadowPadding * 2,
+            height: key.diameter + shadowPadding * 2
         )
         let circle = CGRect(
             x: shadowPadding, y: shadowPadding,
-            width: clusterDiameter, height: clusterDiameter
+            width: key.diameter, height: key.diameter
         )
-        let accent: UIColor = key.hasFollowUps ? .systemRed : .systemBlue
+        let accent: UIColor = key.hasOpenWork ? .systemRed : .systemBlue
 
         let format = UIGraphicsImageRendererFormat.preferred()
         format.opaque = false
@@ -314,7 +386,8 @@ final class PinArtCache {
             paragraph.alignment = .center
             let attributed = NSAttributedString(string: key.text, attributes: [
                 .font: UIFont.monospacedDigitSystemFont(
-                    ofSize: key.text.count > 3 ? 14 : 17, weight: .bold
+                    ofSize: key.text.count > 3 ? key.diameter * 0.30 : key.diameter * 0.37,
+                    weight: .bold
                 ),
                 .foregroundColor: accent,
                 .paragraphStyle: paragraph

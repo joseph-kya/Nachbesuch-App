@@ -42,6 +42,7 @@ fun GlassCard(
 fun GlassRow(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     androidx.compose.foundation.layout.Column(
         modifier = modifier
+            .shadow(3.dp, RoundedCornerShape(RadiusRow), clip = false)
             .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(RadiusRow))
             .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(RadiusRow))
             .padding(16.dp),

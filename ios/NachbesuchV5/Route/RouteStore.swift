@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import os
 
 /// The active recommended route, per territory.
 ///
@@ -78,7 +79,13 @@ final class RouteStore {
             legs: route.legs.map { $0.map(StoredCoordinate.init) },
             stops: route.stops.map { StoredCoordinate(($0.coordinate)) }
         )
-        guard let data = try? JSONEncoder().encode(stored) else { return }
+        guard let data = try? JSONEncoder().encode(stored) else {
+            // A lost route save means the user re-plans after a relaunch — never
+            // let that happen without a trace.
+            Logger(subsystem: "at.volkshilfe.nachbesuch", category: "route")
+                .fault("Route encode failed; route for \(gebietID.uuidString, privacy: .public) not persisted")
+            return
+        }
         defaults.set(data, forKey: key(for: gebietID))
     }
 
@@ -88,7 +95,11 @@ final class RouteStore {
               var stored = try? JSONDecoder().decode(Stored.self, from: data)
         else { return }
         stored.skipped = skipped
-        guard let encoded = try? JSONEncoder().encode(stored) else { return }
+        guard let encoded = try? JSONEncoder().encode(stored) else {
+            Logger(subsystem: "at.volkshilfe.nachbesuch", category: "route")
+                .fault("Skip-list encode failed; skips for \(gebietID.uuidString, privacy: .public) not persisted")
+            return
+        }
         defaults.set(encoded, forKey: key(for: gebietID))
     }
 

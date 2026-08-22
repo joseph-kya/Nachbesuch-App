@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import MapKit
 import Testing
 @testable import NachbesuchV5
 
@@ -274,6 +275,33 @@ struct MapPinTests {
         #expect(patched.stats.followUpCount == 1)
     }
 
+    @Test("Unbrauchbare Koordinaten erreichen MapKit nicht")
+    func invalidCoordinatesAreExcluded() {
+        let valid = raw([DoorResult(label: "1")])
+        let invalid = RawMapHouse(
+            id: UUID(), address: "Ohne Position", latitude: 0, longitude: 0,
+            unitsData: try! AppCoders.unitsEncoder().encode([DoorResult(label: "1", outcome: .joined)])
+        )
+        let snapshot = MapPinSnapshotBuilder.build(from: [valid, invalid], scope: .combined)
+        #expect(snapshot.pinsByID.count == 1)
+        #expect(snapshot.stats.houseCount == 1)
+        #expect(snapshot.stats.joinedCount == 0)
+    }
+
+    @Test("Ein räumlicher Patch berechnet den Ausschnitt neu")
+    func spatialPatchRebuildsBounds() throws {
+        let original = raw([DoorResult(label: "1")])
+        let base = MapPinSnapshotBuilder.build(from: [original], scope: .combined)
+        let moved = RawMapHouse(
+            id: original.id, address: original.address,
+            latitude: 47.0, longitude: 15.0, unitsData: original.unitsData
+        )
+        let patched = MapPinSnapshotBuilder.patch(base, with: [moved], scope: .combined)
+        let bounds = try #require(patched.bounds)
+        #expect(abs(bounds.center.latitude - 47.0) < 0.0001)
+        #expect(abs(bounds.center.longitude - 15.0) < 0.0001)
+    }
+
     /// 10 000 houses is well past a realistic territory; the snapshot build is the
     /// only O(n) step in the pin pipeline and must stay off the critical path.
     @Test("Zehntausend Häuser bleiben in einem Durchlauf verarbeitbar")
@@ -328,6 +356,76 @@ struct PinArtTests {
     }
 
     @MainActor
+    @Test("Große Zoomsprünge landen sofort in der richtigen Pin-Stufe")
+    func largeZoomJumpsDoNotNeedASecondCallback() {
+        #expect(MapPinPresentationPolicy.scale(current: .full, metersAcross: 8_000) == .dot)
+        #expect(MapPinPresentationPolicy.scale(current: .dot, metersAcross: 700) == .full)
+    }
+
+    @MainActor
+    @Test("Pin-Größen haben stabile Hysterese")
+    func pinScaleHysteresisIsStable() {
+        #expect(MapPinPresentationPolicy.scale(current: .full, metersAcross: 1_500) == .full)
+        #expect(MapPinPresentationPolicy.scale(current: .full, metersAcross: 1_700) == .compact)
+        #expect(MapPinPresentationPolicy.scale(current: .compact, metersAcross: 1_400) == .compact)
+        #expect(MapPinPresentationPolicy.scale(current: .compact, metersAcross: 1_200) == .full)
+        #expect(MapPinPresentationPolicy.scale(current: .dot, metersAcross: 3_000) == .dot)
+        #expect(MapPinPresentationPolicy.scale(current: .dot, metersAcross: 2_700) == .compact)
+    }
+
+    @MainActor
+    @Test("Cluster-Grenzen flackern nicht am selben Zoom")
+    func clusterGateHasHysteresis() {
+        #expect(MapPinPresentationPolicy.clusters(
+            currentlyEnabled: false, metersAcross: 3_100, visiblePins: 200
+        ) == false)
+        #expect(MapPinPresentationPolicy.clusters(
+            currentlyEnabled: false, metersAcross: 3_300, visiblePins: 200
+        ))
+        #expect(MapPinPresentationPolicy.clusters(
+            currentlyEnabled: true, metersAcross: 2_600, visiblePins: 200
+        ))
+        #expect(MapPinPresentationPolicy.clusters(
+            currentlyEnabled: true, metersAcross: 2_300, visiblePins: 200
+        ) == false)
+    }
+
+    @MainActor
+    @Test("Viele sichtbare Pins aktivieren den Sicherheits-Cluster unabhängig vom Zoom")
+    func densityCanEnableClustering() {
+        #expect(MapPinPresentationPolicy.clusters(
+            currentlyEnabled: false, metersAcross: 900, visiblePins: 1_200
+        ))
+        #expect(MapPinPresentationPolicy.clusters(
+            currentlyEnabled: true, metersAcross: 900, visiblePins: 900
+        ))
+        #expect(MapPinPresentationPolicy.clusters(
+            currentlyEnabled: true, metersAcross: 900, visiblePins: 800
+        ) == false)
+    }
+
+    @MainActor
+    @Test("Kartenausschnitt wird aus horizontalen MapKit-Metern berechnet")
+    func viewportWidthUsesMapPoints() {
+        #expect(MapPinPresentationPolicy.viewportMetersAcross(
+            mapPointsAcross: 500, metersPerMapPoint: 2
+        ) == 1_000)
+        #expect(MapPinPresentationPolicy.viewportMetersAcross(
+            mapPointsAcross: .infinity, metersPerMapPoint: 2
+        ) == 0)
+    }
+
+    @MainActor
+    @Test("Clustergrößen wachsen nur in wenigen stabilen Stufen")
+    func clusterDiameterUsesStableTiers() {
+        #expect(MapPinPresentationPolicy.clusterDiameter(for: 2) == 42)
+        #expect(MapPinPresentationPolicy.clusterDiameter(for: 9) == 42)
+        #expect(MapPinPresentationPolicy.clusterDiameter(for: 10) == 46)
+        #expect(MapPinPresentationPolicy.clusterDiameter(for: 99) == 46)
+        #expect(MapPinPresentationPolicy.clusterDiameter(for: 100) == 52)
+    }
+
+    @MainActor
     @Test("Jede Größe hängt über ihrer Koordinate")
     func everyScaleAnchorsOnTheTip() {
         for scale in [PinScale.full, .compact, .dot] {
@@ -343,6 +441,63 @@ struct PinArtTests {
         #expect(PinArtCache.abbreviated(42) == "42")
         #expect(PinArtCache.abbreviated(1500) == "1.5k")
         #expect(PinArtCache.abbreviated(24000) == "24k")
+    }
+}
+
+@Suite("MapKit-Clusterübergang")
+struct MapClusterTransitionTests {
+
+    @MainActor
+    @Test("Nach maximalem Herauszoomen entstehen frische, exakt positionierte Pins")
+    func farOutThenBackInRebuildsAnnotationIdentity() throws {
+        let mapView = MKMapView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let coordinator = MapCoordinator()
+        mapView.delegate = coordinator
+        coordinator.mapView = mapView
+
+        let data = try AppCoders.unitsEncoder().encode([DoorResult(label: "1")])
+        let raw = [
+            RawMapHouse(
+                id: UUID(), address: "A 1", latitude: 48.2100,
+                longitude: 16.3100, unitsData: data
+            ),
+            RawMapHouse(
+                id: UUID(), address: "A 2", latitude: 48.2105,
+                longitude: 16.3105, unitsData: data
+            )
+        ]
+        let snapshot = MapPinSnapshotBuilder.build(from: raw, scope: .combined)
+
+        mapView.setRegion(MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 48.21, longitude: 16.31),
+            span: MKCoordinateSpan(latitudeDelta: 8, longitudeDelta: 8)
+        ), animated: false)
+        coordinator.applyData(
+            mapView, pins: snapshot, structuralVersion: 1, contentVersion: 1,
+            changedHouseIDs: [], selectedHouseIDs: nil
+        )
+        let before = Dictionary(uniqueKeysWithValues: mapView.annotations.compactMap {
+            ($0 as? HouseAnnotation).map { ($0.houseID, $0) }
+        })
+        #expect(before.count == 2)
+
+        mapView.setRegion(MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 48.21, longitude: 16.31),
+            span: MKCoordinateSpan(latitudeDelta: 0.001, longitudeDelta: 0.001)
+        ), animated: false)
+        coordinator.updateClusteringGate(mapView)
+
+        let after = Dictionary(uniqueKeysWithValues: mapView.annotations.compactMap {
+            ($0 as? HouseAnnotation).map { ($0.houseID, $0) }
+        })
+        #expect(after.count == before.count)
+        for house in raw {
+            let old = try #require(before[house.id])
+            let fresh = try #require(after[house.id])
+            #expect(old !== fresh, "Alte MapKit-Clusteridentität darf nicht wiederverwendet werden")
+            #expect(fresh.coordinate.latitude == house.latitude)
+            #expect(fresh.coordinate.longitude == house.longitude)
+        }
     }
 }
 

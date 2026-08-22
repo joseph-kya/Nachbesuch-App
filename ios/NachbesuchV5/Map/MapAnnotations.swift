@@ -70,6 +70,23 @@ final class HousePinView: MKAnnotationView {
 
     private var renderedKey: PinArtCache.Key?
 
+    #if DEBUG
+    /// Where this pin's tip currently sits relative to where its own coordinate says
+    /// it should, in points. Used by the placement diagnostic; the tip is the part
+    /// that must land on the building, so this is what "the pin is in the wrong
+    /// place" actually means — measuring `center` instead cancels a stale
+    /// `centerOffset` out and always reports success.
+    func tipOffsetFromCoordinate(in mapView: MKMapView) -> CGPoint? {
+        guard let house = annotation as? HouseAnnotation, let image else { return nil }
+        let target = mapView.convert(house.coordinate, toPointTo: mapView)
+        let tip = CGPoint(
+            x: center.x + transform.tx,
+            y: center.y + transform.ty + image.size.height / 2 - PinArtCache.shared.shadowPadding
+        )
+        return CGPoint(x: tip.x - target.x, y: tip.y - target.y)
+    }
+    #endif
+
     /// Read from the coordinator on every configure rather than pushed in.
     ///
     /// This is the fix for pins getting stuck in the wrong size: the coordinator
@@ -135,9 +152,12 @@ final class HousePinView: MKAnnotationView {
         // reason a custom-annotation map dies at scale where an
         // `MKMarkerAnnotationView` map (which defaults to `.defaultLow`) does not.
         // So priority is always explicit here, and never `.required`.
-        displayPriority = pin.followUpCount > 0
+        displayPriority = pin.hasOpenWork
             ? .defaultHigh
             : (pin.joinedCount > 0 ? MKFeatureDisplayPriority(600) : .defaultLow)
+        zPriority = annotation.isPinSelected
+            ? .max
+            : (pin.hasOpenWork ? .defaultSelected : .defaultUnselected)
 
         let scale = scale
         let key = PinArtCache.Key(
@@ -149,12 +169,23 @@ final class HousePinView: MKAnnotationView {
             isDark: traitCollection.userInterfaceStyle == .dark,
             scale: scale
         )
+        // Accessibility is payload, not artwork. An address or count can change
+        // while the bitmap key stays identical.
+        accessibilityLabel = Self.accessibilityText(for: pin)
         guard key != renderedKey else { return }
         renderedKey = key
         let cache = PinArtCache.shared
+        // Swapping the artwork replaces `bounds`, and `frame` is undefined while a
+        // non-identity transform is applied. MapKit puts its own transform on member
+        // views for the whole duration of a cluster animation — measured at 78 art
+        // swaps under a live transform during a single zoom-out/zoom-in round trip,
+        // each with a different translation. Neutralise, swap, restore, so the two
+        // never interleave.
+        let activeTransform = transform
+        if !activeTransform.isIdentity { transform = .identity }
         image = cache.pinImage(for: key)
         centerOffset = cache.centerOffset(for: scale)
-        accessibilityLabel = Self.accessibilityText(for: pin)
+        if !activeTransform.isIdentity { transform = activeTransform }
     }
 
     private static func accessibilityText(for pin: MapPinSnapshot) -> String {
@@ -168,6 +199,14 @@ final class HousePinView: MKAnnotationView {
     @objc private func handleTap() {
         guard let annotation = annotation as? HouseAnnotation else { return }
         coordinator?.houseTapped(annotation.houseID)
+    }
+
+    /// Compact and dot artwork remains comfortably tappable. The visual hierarchy
+    /// may shrink with zoom, but the interaction target never should.
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        let horizontal = max((44 - bounds.width) / 2, 0)
+        let vertical = max((44 - bounds.height) / 2, 0)
+        return bounds.insetBy(dx: -horizontal, dy: -vertical).contains(point)
     }
 
     /// A freshly placed house drops onto the map.
@@ -226,13 +265,23 @@ final class ClusterBubbleView: MKAnnotationView {
     weak var coordinator: MapCoordinator?
 
     private var memberObservation: NSKeyValueObservation?
-    private var renderedText: String?
+    private struct RenderedState: Equatable {
+        let count: Int
+        let hasOpenWork: Bool
+        let isDark: Bool
+    }
+    private var renderedState: RenderedState?
 
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
         canShowCallout = false
         collisionMode = .circle
         displayPriority = .required
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
+            (view: ClusterBubbleView, _) in
+            view.invalidateArt()
+            view.configure()
+        }
     }
 
     @available(*, unavailable)
@@ -253,7 +302,7 @@ final class ClusterBubbleView: MKAnnotationView {
                 \.memberAnnotations,
                 options: [.initial]
             ) { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.configure() }
+                Task { @MainActor [weak self] in self?.configure() }
             }
         }
     }
@@ -266,41 +315,44 @@ final class ClusterBubbleView: MKAnnotationView {
     /// Forces the next `configure()` to re-render even if the count is unchanged —
     /// used when a member's payload changed the bubble's accent colour.
     func invalidateArt() {
-        renderedText = nil
+        renderedState = nil
     }
 
     func configure() {
         guard let cluster = annotation as? MKClusterAnnotation else { return }
         let count = cluster.memberAnnotations.count
-        var hasFollowUps = false
+        var hasOpenWork = false
         for member in cluster.memberAnnotations {
-            if let house = member as? HouseAnnotation, house.pin.followUpCount > 0 {
-                hasFollowUps = true
+            if let house = member as? HouseAnnotation, house.pin.hasOpenWork {
+                hasOpenWork = true
                 break
             }
         }
 
-        let text = PinArtCache.abbreviated(count)
-        let cacheKey = "\(text)-\(hasFollowUps)"
-        guard cacheKey != renderedText else { return }
-        renderedText = cacheKey
+        accessibilityLabel = hasOpenWork
+            ? "\(count) Häuser, offene Arbeit dabei. Zum Vergrößern tippen."
+            : "\(count) Häuser. Zum Vergrößern tippen."
+        let state = RenderedState(
+            count: count,
+            hasOpenWork: hasOpenWork,
+            isDark: traitCollection.userInterfaceStyle == .dark
+        )
+        guard state != renderedState else { return }
+        renderedState = state
 
         image = PinArtCache.shared.clusterImage(
             count: count,
-            hasFollowUps: hasFollowUps,
-            isDark: traitCollection.userInterfaceStyle == .dark
+            hasOpenWork: hasOpenWork,
+            isDark: state.isDark
         )
         centerOffset = PinArtCache.shared.clusterCenterOffset
-        accessibilityLabel = hasFollowUps
-            ? "\(count) Häuser, offene Nachbesuche dabei. Zum Vergrößern tippen."
-            : "\(count) Häuser. Zum Vergrößern tippen."
     }
 
     override func prepareForReuse() {
         super.prepareForReuse()
         layer.removeAllAnimations()
         alpha = 1
-        renderedText = nil
+        renderedState = nil
         memberObservation?.invalidate()
         memberObservation = nil
     }

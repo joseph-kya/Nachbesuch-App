@@ -49,6 +49,9 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     private var appliedChromeInsets: UIEdgeInsets?
     private(set) var pinScale: PinScale = .full
     private var clusteringEnabled = false
+    #if DEBUG
+    private var zoomBugStarted = false
+    #endif
     private var lastHeading: Double?
     private var lastHeadingAccuracy: Double?
 
@@ -123,6 +126,9 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
             refresh(mapView, houseIDs: nil)
             repairIfNeeded(mapView)
             updateClusteringGate(mapView)
+            #if DEBUG
+            startZoomBugHarnessIfNeeded(mapView)
+            #endif
             return
         }
 
@@ -180,6 +186,11 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         for annotation in toRemove {
             annotationsByHouseID.removeValue(forKey: annotation.houseID)
         }
+
+        // Stable input order makes MapKit's screen-space cluster seed selection
+        // repeatable across launches instead of depending on Dictionary iteration.
+        toRemove.sort(by: Self.annotationOrder)
+        toAdd.sort(by: Self.annotationOrder)
 
         UIView.performWithoutAnimation {
             if !toRemove.isEmpty { mapView.removeAnnotations(toRemove) }
@@ -249,10 +260,21 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
             annotationsByHouseID[houseID] = annotation
             return annotation
         }
+        let ordered = rebuilt.sorted(by: Self.annotationOrder)
         UIView.performWithoutAnimation {
             mapView.removeAnnotations(stale)
-            mapView.addAnnotations(rebuilt)
+            mapView.addAnnotations(ordered)
         }
+    }
+
+    private static func annotationOrder(_ lhs: HouseAnnotation, _ rhs: HouseAnnotation) -> Bool {
+        if lhs.coordinate.latitude != rhs.coordinate.latitude {
+            return lhs.coordinate.latitude < rhs.coordinate.latitude
+        }
+        if lhs.coordinate.longitude != rhs.coordinate.longitude {
+            return lhs.coordinate.longitude < rhs.coordinate.longitude
+        }
+        return lhs.houseID.uuidString < rhs.houseID.uuidString
     }
 
     // MARK: - Boundary & draft points
@@ -446,41 +468,173 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     /// and clustering exists only as a legibility/performance backstop above that.
     /// With `collisionMode = .none` below the gate, overlapping pins stack visibly
     /// instead of silently hiding each other — nothing ever disappears.
-    private static let clusterOnMeters = 3_000.0
-    private static let clusterOffMeters = 2_000.0
-    /// Safety valve: even at working zoom, this many simultaneous pins needs help.
-    private static let clusterOnVisiblePins = 1_200
-    private static let clusterOffVisiblePins = 800
-
     /// Runs only when the camera settles — never per frame.
-    private func updateClusteringGate(_ mapView: MKMapView) {
-        let metersAcross = mapView.region.span.latitudeDelta * 111_320
-        let visible = visibleHouseCount(mapView, stopAfter: Self.clusterOnVisiblePins + 1)
-
-        // Hysteresis on both signals, so a pinch that hovers on a threshold cannot
-        // flap the mode back and forth.
-        let shouldCluster: Bool
-        if clusteringEnabled {
-            shouldCluster = metersAcross > Self.clusterOffMeters
-                || visible > Self.clusterOffVisiblePins
-        } else {
-            shouldCluster = metersAcross > Self.clusterOnMeters
-                || visible > Self.clusterOnVisiblePins
-        }
+    func updateClusteringGate(_ mapView: MKMapView) {
+        let metersAcross = viewportMetersAcross(mapView)
+        let visible = visibleHouseCount(
+            mapView,
+            stopAfter: MapPinPresentationPolicy.clusterOnVisiblePins + 1
+        )
+        let shouldCluster = MapPinPresentationPolicy.clusters(
+            currentlyEnabled: clusteringEnabled,
+            metersAcross: metersAcross,
+            visiblePins: visible
+        )
         guard shouldCluster != clusteringEnabled else { return }
         clusteringEnabled = shouldCluster
 
-        // MapKit decides clustering when it builds an annotation view, so the mode
-        // change only reaches views that already exist by re-declaring them.
-        // Bounded to the padded viewport: everything off-screen picks the new mode
-        // up from `viewFor` when it is eventually created.
-        let affected = houseAnnotations(in: paddedVisibleRect(mapView), of: mapView)
-        guard !affected.isEmpty else { return }
+        // MapKit stores cluster membership on more than the currently realised
+        // views. At extreme overview zoom it can collapse the complete territory
+        // into one generated annotation; re-adding the SAME member objects later
+        // allows their old presentation positions to survive the split. Rebuild
+        // fresh annotation identities at the rare gate transition so no internal
+        // cluster state can leak back into street-level pins.
+        let oldAnnotations = annotationsByHouseID.values.sorted(by: Self.annotationOrder)
+        guard !oldAnnotations.isEmpty else { return }
+        var replacements: [HouseAnnotation] = []
+        replacements.reserveCapacity(pins.pinsByID.count)
+        var replacementIndex: [UUID: HouseAnnotation] = [:]
+        replacementIndex.reserveCapacity(pins.pinsByID.count)
+        for (houseID, pin) in pins.pinsByID {
+            let annotation = HouseAnnotation(
+                houseID: houseID,
+                pin: pin,
+                isPinSelected: lastSelection?.contains(houseID) == true
+            )
+            replacements.append(annotation)
+            replacementIndex[houseID] = annotation
+        }
+        replacements.sort(by: Self.annotationOrder)
+        annotationsByHouseID = replacementIndex
+
         UIView.performWithoutAnimation {
-            mapView.removeAnnotations(affected)
-            mapView.addAnnotations(affected)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            mapView.removeAnnotations(oldAnnotations)
+            mapView.addAnnotations(replacements)
+            CATransaction.commit()
         }
     }
+
+    // MARK: - Zoom-bug diagnostics
+
+    #if DEBUG
+    /// Drives the exact sequence that corrupts pin placement — street level, full
+    /// zoom-out into a single cluster, back to street level — and measures where
+    /// each realised pin view actually sits against where its own coordinate says it
+    /// should. Enabled with `NACHBESUCH_ZOOMBUG=1`.
+    ///
+    /// Measuring rather than guessing: several plausible fixes (pin sizes, anchors,
+    /// hysteresis, fresh annotation identities) have already failed on this bug, so
+    /// the useful next step is a number, not another hypothesis.
+    private func startZoomBugHarnessIfNeeded(_ mapView: MKMapView) {
+        guard ProcessInfo.processInfo.environment["NACHBESUCH_ZOOMBUG"] != nil,
+              !zoomBugStarted,
+              !annotationsByHouseID.isEmpty
+        else { return }
+        zoomBugStarted = true
+        let home = mapView.region
+
+        let wide = MKCoordinateRegion(
+            center: home.center,
+            span: MKCoordinateSpan(latitudeDelta: 120, longitudeDelta: 120)
+        )
+        // A real pinch is not a completed animation. The first version of this
+        // harness let each `setRegion` settle, MapKit re-laid the views out at the
+        // end, and nothing drifted. Interrupting the zoom mid-flight — repeatedly,
+        // the way a finger does — is what the reported repro actually does.
+        func step(_ delay: Double, _ work: @escaping () -> Void) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        }
+
+        step(3) { [weak self, weak mapView] in
+            guard let self, let mapView else { return }
+            self.dumpPinPlacement(mapView, label: "1-BEFORE")
+            mapView.setRegion(wide, animated: true)
+            step(0.6) { mapView.setRegion(home, animated: true) }
+            step(1.0) { mapView.setRegion(wide, animated: true) }
+            step(1.5) { mapView.setRegion(home, animated: true) }
+            step(1.9) { mapView.setRegion(wide, animated: true) }
+            step(4.0) { self.dumpPinPlacement(mapView, label: "2-CLUSTERED") }
+            step(4.2) { mapView.setRegion(home, animated: true) }
+            step(4.7) { mapView.setRegion(wide, animated: true) }
+            step(5.1) { mapView.setRegion(home, animated: true) }
+            step(10.0) { self.dumpPinPlacement(mapView, label: "3-AFTER") }
+        }
+    }
+
+    /// Continuous drift watch, so the bug can be caught during a **real** pinch
+    /// rather than only in the scripted sequence. `NACHBESUCH_PINWATCH=1`.
+    private func reportPinDriftIfWatching(_ mapView: MKMapView) {
+        guard ProcessInfo.processInfo.environment["NACHBESUCH_PINWATCH"] != nil else { return }
+        // While clustering is on, MapKit deliberately translates member views toward
+        // the cluster centre — that offset is the feature, not the fault. The state
+        // worth watching is individual pins, which must sit exactly on their
+        // coordinates.
+        guard !clusteringEnabled else { return }
+        var worst: CGFloat = 0
+        var worstID = ""
+        var drifted = 0
+        var realised = 0
+        for annotation in mapView.annotations {
+            guard let house = annotation as? HouseAnnotation,
+                  let view = mapView.view(for: house) as? HousePinView,
+                  let delta = view.tipOffsetFromCoordinate(in: mapView)
+            else { continue }
+            realised += 1
+            let magnitude = max(abs(delta.x), abs(delta.y))
+            if magnitude > 1.5 { drifted += 1 }
+            if magnitude > worst {
+                worst = magnitude
+                worstID = String(house.houseID.uuidString.prefix(4))
+            }
+        }
+        guard drifted > 0 else { return }
+        print(String(
+            format: "PINWATCH drift=%d/%d worst=%.1fpt (%@) clustering=%@ scale=%@",
+            drifted, realised, worst, worstID,
+            clusteringEnabled ? "on" : "off", "\(pinScale)"
+        ))
+    }
+
+    private func dumpPinPlacement(_ mapView: MKMapView, label: String) {
+        var lines = [
+            "=== PINDUMP \(label) clustering=\(clusteringEnabled) scale=\(pinScale) "
+                + "span=\(String(format: "%.4f", mapView.region.span.latitudeDelta)) ==="
+        ]
+        var realised = 0
+        var offenders = 0
+        for annotation in mapView.annotations {
+            guard let house = annotation as? HouseAnnotation,
+                  let view = mapView.view(for: house) as? HousePinView
+            else { continue }
+            realised += 1
+            // The tip is what has to land on the building. Comparing `center`
+            // against `converted point + view.centerOffset` — the first version of
+            // this check — is close to tautological: it cancels a stale offset out
+            // and reports success even when the pin is visibly wrong.
+            guard let tipDelta = view.tipOffsetFromCoordinate(in: mapView) else { continue }
+            let dx = tipDelta.x
+            let dy = tipDelta.y
+            let drifted = abs(dx) > 0.5 || abs(dy) > 0.5
+            if drifted { offenders += 1 }
+            guard realised <= 6 || drifted else { continue }
+            lines.append(String(
+                format: "%@ %@ delta=(%.1f,%.1f) center=(%.1f,%.1f) off=(%.1f,%.1f) img=%.0fx%.0f bounds=%.0fx%.0f transform=%@",
+                drifted ? "DRIFT" : "  ok ",
+                String(house.houseID.uuidString.prefix(4)),
+                dx, dy,
+                view.center.x, view.center.y,
+                view.centerOffset.x, view.centerOffset.y,
+                view.image?.size.width ?? 0, view.image?.size.height ?? 0,
+                view.bounds.width, view.bounds.height,
+                view.transform.isIdentity ? "identity" : "\(view.transform)"
+            ))
+        }
+        lines.append("=== realised=\(realised) drifted=\(offenders) ===")
+        print(lines.joined(separator: "\n"))
+    }
+    #endif
 
     private func paddedVisibleRect(_ mapView: MKMapView) -> MKMapRect {
         mapView.visibleMapRect.insetBy(
@@ -489,63 +643,34 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         )
     }
 
-    /// House annotations in `rect`, including those currently hidden inside a
-    /// cluster bubble.
-    private func houseAnnotations(in rect: MKMapRect, of mapView: MKMapView) -> [HouseAnnotation] {
-        var result: [HouseAnnotation] = []
-        for item in mapView.annotations(in: rect) {
-            if let house = item as? HouseAnnotation {
-                result.append(house)
-            } else if let cluster = item as? MKClusterAnnotation {
-                for member in cluster.memberAnnotations {
-                    if let house = member as? HouseAnnotation { result.append(house) }
-                }
-            }
-        }
-        return result
-    }
-
     /// Counts via MapKit's own spatial index, and stops as soon as the answer can
     /// no longer change.
     private func visibleHouseCount(_ mapView: MKMapView, stopAfter limit: Int) -> Int {
-        var count = 0
+        var houseIDs: Set<UUID> = []
+        houseIDs.reserveCapacity(min(limit, 1_024))
         for item in mapView.annotations(in: mapView.visibleMapRect) {
             if let cluster = item as? MKClusterAnnotation {
-                count += cluster.memberAnnotations.count
-            } else if item is HouseAnnotation {
-                count += 1
+                for case let house as HouseAnnotation in cluster.memberAnnotations {
+                    houseIDs.insert(house.houseID)
+                    if houseIDs.count >= limit { return houseIDs.count }
+                }
+            } else if let house = item as? HouseAnnotation {
+                houseIDs.insert(house.houseID)
             }
-            if count >= limit { break }
+            if houseIDs.count >= limit { break }
         }
-        return count
+        return houseIDs.count
     }
 
     // MARK: - Pin scale
 
-    /// How big the pins are drawn at the current zoom.
-    ///
-    /// Deliberately **asymmetric**: leaving the full-size tier needs a clear margin,
-    /// but coming back to it happens as soon as the camera is anywhere near street
-    /// level. The old symmetric band (shrink at 800 m, grow back only under 550 m)
-    /// meant an ordinary working zoom could sit in the shrunken state indefinitely.
-    private func scale(forMetersAcross meters: Double) -> PinScale {
-        switch pinScale {
-        case .full:
-            return meters > 1_500 ? .compact : .full
-        case .compact:
-            if meters <= 1_300 { return .full }
-            return meters > 3_200 ? .dot : .compact
-        case .dot:
-            if meters <= 1_300 { return .full }
-            return meters <= 3_000 ? .compact : .dot
-        }
-    }
-
     /// Cheap enough to run on every frame of a gesture, so the size tracks the
     /// pinch instead of snapping once the camera stops.
     private func updatePinScale(_ mapView: MKMapView) {
-        let metersAcross = mapView.region.span.latitudeDelta * 111_320
-        let next = scale(forMetersAcross: metersAcross)
+        let next = MapPinPresentationPolicy.scale(
+            current: pinScale,
+            metersAcross: viewportMetersAcross(mapView)
+        )
         guard next != pinScale else { return }
         pinScale = next
 
@@ -561,6 +686,17 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
            let halo = mapView.view(for: next) as? NextStopHaloView {
             halo.refreshScale()
         }
+    }
+
+    /// Actual horizontal ground width. `latitudeDelta * 111_320` measures the
+    /// vertical span and made identical zooms choose different tiers on tall phones,
+    /// iPads and after rotation.
+    private func viewportMetersAcross(_ mapView: MKMapView) -> Double {
+        let metersPerMapPoint = MKMetersPerMapPointAtLatitude(mapView.centerCoordinate.latitude)
+        return MapPinPresentationPolicy.viewportMetersAcross(
+            mapPointsAcross: mapView.visibleMapRect.width,
+            metersPerMapPoint: metersPerMapPoint
+        )
     }
 
     // MARK: - MKMapViewDelegate
@@ -627,15 +763,9 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     }
 
     func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView]) {
-        // Fade only a modest batch: after a territory switch this could otherwise be
-        // thousands of concurrent animations.
-        if !isMotionReduced, views.count <= 60 {
-            for view in views where view.annotation is HouseAnnotation || view.annotation is MKClusterAnnotation {
-                view.alpha = 0
-                UIView.animate(withDuration: 0.16) { view.alpha = 1 }
-            }
-        }
-
+        // Pins entering the viewport appear immediately. Fading every newly realised
+        // or re-clustered view made ordinary panning look like data was loading and
+        // left recycled views translucent. New houses still use `performDrop()`.
         guard let pendingDropHouseID else { return }
         for view in views {
             guard let house = view.annotation as? HouseAnnotation,
@@ -690,47 +820,84 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     /// coordinate no zoom can ever split them, so the tap hands off to a
     /// disambiguation list rather than looping forever.
     private func zoomInto(_ cluster: MKClusterAnnotation, mapView: MKMapView) {
-        var minLatitude = Double.greatestFiniteMagnitude
-        var maxLatitude = -Double.greatestFiniteMagnitude
-        var minLongitude = Double.greatestFiniteMagnitude
-        var maxLongitude = -Double.greatestFiniteMagnitude
-        var houseIDs: [UUID] = []
-        houseIDs.reserveCapacity(cluster.memberAnnotations.count)
+        let houses = cluster.memberAnnotations.compactMap { $0 as? HouseAnnotation }
+            .sorted {
+                let addressOrder = $0.pin.address.localizedStandardCompare($1.pin.address)
+                return addressOrder == .orderedSame
+                    ? $0.houseID.uuidString < $1.houseID.uuidString
+                    : addressOrder == .orderedAscending
+            }
+        let houseIDs = houses.map(\.houseID)
+        let coordinates = cluster.memberAnnotations.map(\.coordinate)
+        guard let first = coordinates.first else { return }
 
-        for member in cluster.memberAnnotations {
-            let coordinate = member.coordinate
-            minLatitude = min(minLatitude, coordinate.latitude)
-            maxLatitude = max(maxLatitude, coordinate.latitude)
-            minLongitude = min(minLongitude, coordinate.longitude)
-            maxLongitude = max(maxLongitude, coordinate.longitude)
-            if let house = member as? HouseAnnotation { houseIDs.append(house.houseID) }
+        var minX = MKMapPoint(first).x
+        var maxX = minX
+        var minY = MKMapPoint(first).y
+        var maxY = minY
+        for coordinate in coordinates.dropFirst() {
+            let point = MKMapPoint(coordinate)
+            minX = min(minX, point.x)
+            maxX = max(maxX, point.x)
+            minY = min(minY, point.y)
+            maxY = max(maxY, point.y)
         }
-        guard minLatitude <= maxLatitude else { return }
 
-        let latitudeExtent = maxLatitude - minLatitude
-        let longitudeExtent = maxLongitude - minLongitude
-        // Below roughly 8 m of spread, zooming cannot separate the members.
-        let isDegenerate = latitudeExtent < 0.00008 && longitudeExtent < 0.00008
-        if isDegenerate {
+        let northWest = MKMapPoint(x: minX, y: minY).coordinate
+        let southEast = MKMapPoint(x: maxX, y: maxY).coordinate
+        let diagonalMeters = CLLocation(latitude: northWest.latitude, longitude: northWest.longitude)
+            .distance(from: CLLocation(latitude: southEast.latitude, longitude: southEast.longitude))
+        // Coordinates closer than walking accuracy cannot be separated reliably.
+        if diagonalMeters < 6 {
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             onClusterNeedsDisambiguation?(houseIDs)
             return
         }
 
-        // Centre on the bounding box, not the centroid: an asymmetric cluster would
-        // otherwise push members off screen.
-        let region = MKCoordinateRegion(
-            center: CLLocationCoordinate2D(
-                latitude: (minLatitude + maxLatitude) / 2,
-                longitude: (minLongitude + maxLongitude) / 2
-            ),
-            span: MKCoordinateSpan(
-                latitudeDelta: max(latitudeExtent * 1.8, 0.0006),
-                longitudeDelta: max(longitudeExtent * 1.8, 0.0006)
-            )
+        // Fit MapKit map points rather than degree spans. This respects latitude,
+        // phone orientation and the actual aspect ratio. A minimum 140 m target
+        // avoids an abrupt jump to building-level imagery for a small cluster.
+        let centerPoint = MKMapPoint(x: (minX + maxX) / 2, y: (minY + maxY) / 2)
+        let metersPerPoint = MKMetersPerMapPointAtLatitude(centerPoint.coordinate.latitude)
+        let minimumSide = 140 / max(metersPerPoint, 0.000_001)
+        let width = max((maxX - minX) * 1.7, minimumSide)
+        let height = max((maxY - minY) * 1.7, minimumSide)
+        let target = MKMapRect(
+            x: centerPoint.x - width / 2,
+            y: centerPoint.y - height / 2,
+            width: width,
+            height: height
         )
+        let margins = mapView.layoutMargins
+        let desiredPadding = UIEdgeInsets(
+            top: margins.top + 20,
+            left: margins.left + 20,
+            bottom: margins.bottom + 20,
+            right: margins.right + 20
+        )
+        // Large accessibility chrome can otherwise leave MapKit a negative fitting
+        // area. Preserve at least a small usable viewport and scale both sides of
+        // an axis equally, so the cluster does not jump away from the tap.
+        let padding = Self.fittedPadding(desiredPadding, in: mapView.bounds.size)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        mapView.setRegion(region, animated: !isMotionReduced)
+        mapView.setVisibleMapRect(target, edgePadding: padding, animated: !isMotionReduced)
+    }
+
+    private static func fittedPadding(_ desired: UIEdgeInsets, in size: CGSize) -> UIEdgeInsets {
+        let usableWidth = max(size.width - 96, 0)
+        let usableHeight = max(size.height - 96, 0)
+        let horizontalTotal = desired.left + desired.right
+        let verticalTotal = desired.top + desired.bottom
+        let horizontalScale = horizontalTotal > usableWidth && horizontalTotal > 0
+            ? usableWidth / horizontalTotal : 1
+        let verticalScale = verticalTotal > usableHeight && verticalTotal > 0
+            ? usableHeight / verticalTotal : 1
+        return UIEdgeInsets(
+            top: desired.top * verticalScale,
+            left: desired.left * horizontalScale,
+            bottom: desired.bottom * verticalScale,
+            right: desired.right * horizontalScale
+        )
     }
 
     func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -771,6 +938,9 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
 
     func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
         updateClusteringGate(mapView)
+        #if DEBUG
+        reportPinDriftIfWatching(mapView)
+        #endif
         updatePinScale(mapView)
         refreshPuck()
         onCameraIdle?(mapView.region)

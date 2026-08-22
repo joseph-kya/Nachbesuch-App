@@ -111,10 +111,35 @@ struct ListScreen: View {
                             .frame(maxWidth: .infinity, minHeight: 280)
                     } else {
                         ForEach(sections) { section in
-                            // One animation owner only. The previous conditional
-                            // insertion plus parent and glass animations rendered
-                            // old and new row snapshots on top of each other.
-                            Section(isExpanded: expansionBinding(for: section.id)) {
+                            // A normal row instead of a native Section header: native
+                            // headers hover and stack translucent street cards over
+                            // the addresses while scrolling.
+                            Button {
+                                toggleSection(section.id)
+                            } label: {
+                                StreetHeader(
+                                    section: section,
+                                    isExpanded: !collapsedSections.contains(section.id)
+                                )
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 13)
+                                .contentCard(cornerRadius: AppRadius.card)
+                            }
+                            .buttonStyle(PressableRowStyle())
+                            .accessibilityLabel("Straße \(section.title)")
+                            .accessibilityValue(
+                                "\(section.houseCount) Adressen, \(section.completedCount) von \(section.unitCount) Türen erledigt"
+                            )
+                            .accessibilityHint(
+                                collapsedSections.contains(section.id)
+                                    ? "Blendet alle Adressen dieser Straße ein"
+                                    : "Blendet die Adressen dieser Straße aus"
+                            )
+                            .listRowInsets(.init(top: 14, leading: 16, bottom: 6, trailing: 16))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+
+                            if !collapsedSections.contains(section.id) {
                                 ForEach(section.rows) { row in
                                         Button { selectedHouseID = row.id } label: {
                                             HouseRow(row: row)
@@ -173,27 +198,6 @@ struct ListScreen: View {
                                         applyQuickStatus(.notHome, to: row)
                                     }
                                 }
-                            } header: {
-                                StreetHeader(section: section)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 13)
-                                .navigationGlass(
-                                    cornerRadius: AppRadius.card,
-                                    interactive: true
-                                )
-                                .accessibilityLabel("Straße \(section.title)")
-                                .accessibilityValue(
-                                    "\(section.houseCount) Adressen, \(section.completedCount) von \(section.unitCount) Türen erledigt"
-                                )
-                                .accessibilityHint(
-                                    collapsedSections.contains(section.id)
-                                        ? "Blendet alle Adressen dieser Straße ein"
-                                        : "Blendet die Adressen dieser Straße aus"
-                                )
-                                .listRowInsets(
-                                    .init(top: 14, leading: 16, bottom: 6, trailing: 16)
-                                )
-                                .listRowBackground(Color.clear)
                             }
                         }
                     }
@@ -212,7 +216,7 @@ struct ListScreen: View {
                     contextLabel: "Liste",
                     onSelect: { id in
                         guard let value = ListFilter(rawValue: id) else { return }
-                        withAnimation(.appFeedback(reduceMotion: reduceMotion)) { filter = value }
+                        applyFilter(value)
                     },
                     onHelp: { showsLegend = true }
                 )
@@ -321,7 +325,6 @@ struct ListScreen: View {
             debouncedQuery = searchText
         }
         .onChange(of: debouncedQuery) { _, _ in recomputeSections() }
-        .onChange(of: filter) { _, _ in recomputeSections() }
         .onChange(of: location.location) { _, fix in
             updateSortOrigin(fix?.coordinate)
         }
@@ -370,12 +373,16 @@ struct ListScreen: View {
     }
 
     private func recomputeSections() {
+        sections = makeSections(filter: filter)
+    }
+
+    private func makeSections(filter: ListFilter) -> [StreetSection] {
         let filtered = HouseListBuilder.filter(rows, filter: filter, query: debouncedQuery)
         if sortByDistance, let origin = sortOrigin {
             // Nearest-first is a flat ranking; grouping it back into streets would
             // throw the ordering away again.
             let ranked = HouseListBuilder.sortByDistance(filtered, from: origin)
-            sections = [
+            return [
                 StreetSection(
                     id: "nearest",
                     title: "Nächste zuerst",
@@ -387,7 +394,7 @@ struct ListScreen: View {
                 )
             ]
         } else {
-            sections = HouseListBuilder.sections(from: HouseListBuilder.sort(filtered))
+            return HouseListBuilder.sections(from: HouseListBuilder.sort(filtered))
         }
     }
 
@@ -406,17 +413,27 @@ struct ListScreen: View {
         recomputeSections()
     }
 
-    private func expansionBinding(for id: String) -> Binding<Bool> {
-        Binding(
-            get: { !collapsedSections.contains(id) },
-            set: { expanded in
-                if expanded {
-                    collapsedSections.remove(id)
-                } else {
-                    collapsedSections.insert(id)
-                }
-            }
-        )
+    private func toggleSection(_ id: String) {
+        // Never animate insertion/removal of glass list rows. UIKit keeps recycled
+        // row snapshots alive during that transition, which produces the stacked,
+        // duplicated text seen when a street collapses. The chevron has its own
+        // small local animation; the expensive list geometry changes atomically.
+        if collapsedSections.contains(id) {
+            collapsedSections.remove(id)
+        } else {
+            collapsedSections.insert(id)
+        }
+    }
+
+    private func applyFilter(_ value: ListFilter) {
+        guard filter != value else { return }
+        let nextSections = makeSections(filter: value)
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            filter = value
+            sections = nextSections
+        }
     }
 
     private func setAllStreets(expanded: Bool) {
@@ -601,6 +618,7 @@ private struct StreetHeader: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let section: StreetSection
+    let isExpanded: Bool
 
     var body: some View {
         // Both candidates used to be `HStack`s. When neither fits, `ViewThatFits`
@@ -612,7 +630,16 @@ private struct StreetHeader: View {
             headerLayout(compact: false)
             stackedLayout
         }
+        .padding(.trailing, 18)
         .contentShape(.rect)
+        .overlay(alignment: .topTrailing) {
+            Image(systemName: "chevron.down")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.tertiary)
+                .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                .animation(.appFeedback(reduceMotion: reduceMotion), value: isExpanded)
+                .accessibilityHidden(true)
+        }
     }
 
     private var stackedLayout: some View {

@@ -125,6 +125,10 @@ nonisolated struct RawMapHouse: Sendable {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
 
+    var hasPlausibleCoordinate: Bool {
+        StoredCoordinate(coordinate).isPlausible
+    }
+
     init(id: UUID, address: String, latitude: Double, longitude: Double, unitsData: Data) {
         self.id = id
         self.address = address
@@ -161,7 +165,7 @@ nonisolated enum MapPinSnapshotBuilder {
         var earlyNo = 0
         var lateNo = 0
 
-        for house in houses {
+        for house in houses where house.hasPlausibleCoordinate {
             let snapshot = pin(for: house, scope: scope, decoder: decoder)
             pins[house.id] = snapshot
             followUps += snapshot.followUpCount
@@ -174,14 +178,14 @@ nonisolated enum MapPinSnapshotBuilder {
         return PreparedMapSnapshot(
             pinsByID: pins,
             stats: MapDayStats(
-                houseCount: houses.count,
+                houseCount: pins.count,
                 followUpCount: followUps,
                 joinedCount: joined,
                 openCount: open,
                 earlyNoCount: earlyNo,
                 lateNoCount: lateNo
             ),
-            bounds: MapBounds.around(houses.map(\.coordinate))
+            bounds: MapBounds.around(pins.values.map(\.coordinate))
         )
     }
 
@@ -201,10 +205,24 @@ nonisolated enum MapPinSnapshotBuilder {
         var open = snapshot.stats.openCount
         var earlyNo = snapshot.stats.earlyNoCount
         var lateNo = snapshot.stats.lateNoCount
+        var spatiallyChanged = false
 
         for house in changed {
+            guard house.hasPlausibleCoordinate else {
+                guard let previous = pins.removeValue(forKey: house.id) else { continue }
+                followUps -= previous.followUpCount
+                joined -= previous.joinedCount
+                open -= previous.unitCount - previous.completedCount
+                earlyNo -= previous.earlyNoCount
+                lateNo -= previous.lateNoCount
+                spatiallyChanged = true
+                continue
+            }
             let updated = pin(for: house, scope: scope, decoder: decoder)
             let previous = pins[house.id]
+            if previous?.latitude != updated.latitude || previous?.longitude != updated.longitude {
+                spatiallyChanged = true
+            }
             pins[house.id] = updated
             followUps += updated.followUpCount - (previous?.followUpCount ?? 0)
             joined += updated.joinedCount - (previous?.joinedCount ?? 0)
@@ -225,8 +243,9 @@ nonisolated enum MapPinSnapshotBuilder {
                 earlyNoCount: max(earlyNo, 0),
                 lateNoCount: max(lateNo, 0)
             ),
-            // A content patch never moves a pin, so the extent is unchanged.
-            bounds: snapshot.bounds
+            bounds: spatiallyChanged
+                ? MapBounds.around(pins.values.map(\.coordinate))
+                : snapshot.bounds
         )
     }
 
