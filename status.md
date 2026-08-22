@@ -1,11 +1,21 @@
 # Status
 
-Last updated: 2026-08-22T16:40:00+02:00 · HEAD: d8750dc · Tests: iOS 78 passing, 1 skipped; Android 31 domain + 5 data passing
+Last updated: 2026-08-22T23:30:00+02:00 · HEAD: 1c9951d · Tests: iOS 92 passing, 1 skipped; Android 61 domain + 9 data passing
 
 ## In flight
-- None.
+- `feature/spaeter-und-erinnerungen` — noch nicht auf `main`; die Oberfläche ist
+  auf beiden Plattformen nur kompiliert, nicht am Gerät durchgeklickt.
 
 ## Done
+- [x] „Später" und Erinnerungen · `6d61029`, `1c9951d` · fünfter Status mit
+  gebuchter Uhrzeit auf beiden Plattformen, plus lokale Mitteilungen: eine je
+  gebuchter Tür und die stehende Erinnerung „Nachbesuchsliste an Teamleiter
+  senden!" um 14:00, 16:00 und 18:00. Die Uhrzeit liegt als neues optionales
+  Feld auf der Tür, nicht am Enum — das Speicherformat bleibt in beide
+  Richtungen lesbar, und beide Plattformen haben einen Test dafür. Die
+  Vorschlagszeiten kommen aus einem gemeinsam formulierten `RevisitPlanner`;
+  ein Android-Test hält dessen Konstanten gegen die iOS-Werte. 14 neue Tests
+  auf iOS, 16 auf Android.
 - [x] Android UI-Parität · `d8750dc` · Oberfläche neu gebaut, Domain und Daten
   aus der Parallel-Sitzung übernommen. Einstellungen, NoticeCenter, Undo,
   Legende, Bilanz, Filter, Gebietseditor, Exportoptionen, App-Icon und eine
