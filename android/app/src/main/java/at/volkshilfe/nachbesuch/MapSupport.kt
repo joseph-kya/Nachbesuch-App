@@ -102,6 +102,7 @@ import at.volkshilfe.nachbesuch.domain.map.PinScalePolicy
 import at.volkshilfe.nachbesuch.domain.model.DayScope
 import at.volkshilfe.nachbesuch.domain.model.Gebiet
 import at.volkshilfe.nachbesuch.domain.model.House
+import at.volkshilfe.nachbesuch.domain.model.MapPinSnapshotBuilder
 import at.volkshilfe.nachbesuch.domain.model.StoredCoordinate
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
 import at.volkshilfe.nachbesuch.domain.route.PlannedRoute
@@ -286,11 +287,23 @@ internal class HeadingSubscription(context: Context, private val onHeading: (Flo
 internal class GooglePinBitmapCache(private val context: Context) {
     private val cache = object : LruCache<String, BitmapDescriptor>(260) {}
 
+    /**
+     * The pin for one house.
+     *
+     * Both the glyph and the colour come from [MapPinSnapshotBuilder], the same
+     * rule the list and the export use. This file used to carry its own copy of
+     * the priority logic, and it had drifted: it forced a red pin for a pending
+     * revisit even in Tag-2 scope, where the shared rule (and iOS) deliberately
+     * shows the door as unrecorded. A pin and its list row disagreeing about the
+     * same house is exactly what one shared rule prevents.
+     */
     fun house(house: House, scope: DayScope, scale: PinScale, selected: Boolean): BitmapDescriptor {
         val tally = house.tally(scope)
-        val fullText = if (house.isApartmentBuilding) "${tally.completed}/${tally.unitCount}" else house.units.firstOrNull()?.displayOutcome(scope)?.emoji ?: "•"
+        val outcome = MapPinSnapshotBuilder.markerOutcome(house.units, scope)
+        val fullText =
+            if (house.isApartmentBuilding) "${tally.completed}/${tally.unitCount}"
+            else outcome?.emoji ?: "•"
         val text = if (scale == PinScale.DOT) "" else fullText
-        val outcome = markerOutcome(house, scope)
         val key = "house:$text:$outcome:$scale:$selected"
         return cached(key) { pinBitmap(text, outcome, scale, selected) }
     }
@@ -378,11 +391,6 @@ internal class GooglePinBitmapCache(private val context: Context) {
         }
     }
 
-    private fun markerOutcome(house: House, scope: DayScope): VisitOutcome? {
-        if (house.units.any { it.isOpen(scope) && (it.isPendingRevisit || it.displayOutcome(scope) == VisitOutcome.NOT_HOME) }) return VisitOutcome.NOT_HOME
-        val outcomes = house.units.mapNotNull { it.displayOutcome(scope) }
-        return outcomes.lastOrNull { it == VisitOutcome.JOINED } ?: outcomes.lastOrNull()
-    }
 
     private fun cached(key: String, make: () -> Bitmap): BitmapDescriptor = synchronized(cache) {
         cache.get(key) ?: BitmapDescriptorFactory.fromBitmap(make()).also { cache.put(key, it) }

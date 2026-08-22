@@ -23,9 +23,23 @@ interface GebietDao {
 
 @Dao
 interface HouseDao {
-    @Query("SELECT * FROM House WHERE gebietID = :gebietID OR dayID = :gebietID ORDER BY updatedAt DESC")
+    /**
+     * Stable order, deliberately **not** `updatedAt DESC`.
+     *
+     * Recording one door result bumps `updatedAt`, which under the old ordering
+     * moved that house to the front and shifted every other row. The list
+     * re-sorts itself anyway, but the map emits one marker per house in list
+     * order, so a single status tap reshuffled hundreds of markers — and,
+     * because a marker's position lives in a `MarkerState` that Compose retains
+     * per slot while the icon comes from the parameter, the shifted markers
+     * ended up wearing each other's icons.
+     *
+     * `createdAt` never changes after insert, so the corpus stays put and only
+     * the edited house's marker updates.
+     */
+    @Query("SELECT * FROM House WHERE gebietID = :gebietID OR dayID = :gebietID ORDER BY createdAt ASC, id ASC")
     fun observeForGebiet(gebietID: String): Flow<List<HouseEntity>>
-    @Query("SELECT * FROM House ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM House ORDER BY createdAt ASC, id ASC")
     fun observeAll(): Flow<List<HouseEntity>>
     @Query("SELECT * FROM House WHERE id = :id LIMIT 1")
     suspend fun find(id: String): HouseEntity?

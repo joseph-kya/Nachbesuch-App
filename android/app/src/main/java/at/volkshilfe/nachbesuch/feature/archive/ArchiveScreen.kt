@@ -28,11 +28,13 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -76,6 +78,33 @@ fun ArchiveScreen(
     state: ArchiveScreenState,
     contentPadding: PaddingValues = PaddingValues(0.dp)
 ) {
+    // Deleting a territory takes every house and every recorded result with it,
+    // and there is no undo for it. The menu item used to call straight through
+    // to the delete — one stray tap and a whole day's fieldwork was gone. iOS has
+    // always confirmed this; Android never did.
+    var pendingDelete by remember { mutableStateOf<TerritorySummary?>(null) }
+
+    pendingDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("„${target.territory.displayName}“ löschen?") },
+            text = {
+                Text(
+                    "Alle Häuser und Ergebnisse dieses Gebiets werden entfernt." +
+                        if (target.houseCount > 0) " Das betrifft ${target.houseCount} Häuser." else ""
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val id = target.territory.id
+                    pendingDelete = null
+                    state.onDelete(id)
+                }) { Text("Löschen", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Abbrechen") } }
+        )
+    }
+
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(horizontal = 16.dp)) {
             Spacer(Modifier.height(contentPadding.calculateTopPadding() + 8.dp))
@@ -155,7 +184,7 @@ fun ArchiveScreen(
                         isActive = summary.territory.id == state.activeID,
                         onSelect = { state.onSelect(summary.territory.id) },
                         onEdit = { state.onEdit(summary.territory.id) },
-                        onDelete = { state.onDelete(summary.territory.id) }
+                        onDelete = { pendingDelete = summary }
                     )
                 }
             }
