@@ -113,23 +113,37 @@ object RevisitPlanner {
         ?: roundUpToFiveMinutes(now + 30 * 60_000L, zone)
 
     /**
-     * Turns an hour and minute picked on the wheel into an instant.
+     * Turns an hour and minute picked on the wheel into the *next* time it occurs:
+     * today while that is still ahead, otherwise tomorrow.
      *
-     * A time earlier than [now] can only mean tomorrow, but booking tomorrow behind
-     * the user's back is worse than refusing — the caller gets `null` and says so.
+     * This used to refuse a past time outright, on the reasoning that booking
+     * tomorrow behind the user's back is worse than refusing. Running the app after
+     * 23:00 showed why that was wrong: the wheel opens on the first suggestion,
+     * which at 23:46 is 00:20 — so the picker rejected its own default value and
+     * there was no way to book anything at all between midnight and the current
+     * hour. The concern was never "tomorrow" but *silently* tomorrow, so the roll
+     * happens here and [isNextDay] lets the caller say so out loud.
      */
     fun instantFor(
         hour: Int,
         minute: Int,
         now: Long = System.currentTimeMillis(),
         zone: ZoneId = ZoneId.systemDefault()
-    ): Long? {
-        val candidate = Instant.ofEpochMilli(now).atZone(zone)
+    ): Long {
+        val today = Instant.ofEpochMilli(now).atZone(zone)
             .with(LocalTime.of(hour, minute))
             .withSecond(0).withNano(0)
-            .toInstant().toEpochMilli()
-        return candidate.takeIf { it > now }
+        val target = if (today.toInstant().toEpochMilli() > now) today else today.plusDays(1)
+        return target.toInstant().toEpochMilli()
     }
+
+    /** True when [atMillis] falls on a later calendar day than [now]. */
+    fun isNextDay(
+        atMillis: Long,
+        now: Long = System.currentTimeMillis(),
+        zone: ZoneId = ZoneId.systemDefault()
+    ): Boolean = Instant.ofEpochMilli(atMillis).atZone(zone).toLocalDate()
+        .isAfter(Instant.ofEpochMilli(now).atZone(zone).toLocalDate())
 
     fun roundUpToFiveMinutes(epochMillis: Long, zone: ZoneId = ZoneId.systemDefault()): Long {
         val moment: ZonedDateTime = Instant.ofEpochMilli(epochMillis).atZone(zone).withSecond(0).withNano(0)

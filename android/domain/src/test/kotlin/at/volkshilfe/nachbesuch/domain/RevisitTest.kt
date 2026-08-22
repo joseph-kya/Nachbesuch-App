@@ -158,10 +158,37 @@ class RevisitPlannerTest {
         assertEquals(RevisitPlanner.suggestions(now, zone).first().atMillis, RevisitPlanner.defaultTime(now, zone))
     }
 
-    @Test fun aPickedTimeInThePastIsRefusedRatherThanRolledToTomorrow() {
+    @Test fun aPickedTimeStillAheadStaysToday() {
         val now = at(18, 30)
-        assertNull(RevisitPlanner.instantFor(17, 0, now, zone))
-        assertNotNull(RevisitPlanner.instantFor(19, 0, now, zone))
+        assertEquals(at(19, 0), RevisitPlanner.instantFor(19, 0, now, zone))
+        assertFalse(RevisitPlanner.isNextDay(at(19, 0), now, zone))
+    }
+
+    /**
+     * The regression this pins, found by running the app at 23:46: the wheel opens
+     * on the first suggestion, which after 23:30 is already past midnight. Refusing
+     * a past time meant the picker rejected its own default and nothing between
+     * midnight and the current hour could be booked at all.
+     */
+    @Test fun aPickedTimeAlreadyPastRollsToTomorrowAndSaysSo() {
+        val now = at(23, 46)
+        val booked = RevisitPlanner.instantFor(0, 20, now, zone)
+
+        assertTrue("muss in der Zukunft liegen", booked > now)
+        assertEquals(34 * 60 * 1000L, booked - now)
+        assertTrue("muss als morgen erkennbar sein", RevisitPlanner.isNextDay(booked, now, zone))
+    }
+
+    @Test fun theDefaultOfTheWheelIsAlwaysBookable() {
+        // Every minute of the day: whatever the sheet opens on must survive
+        // "Übernehmen". This is the invariant the old behaviour broke.
+        for (hour in 0..23) for (minute in listOf(0, 17, 46, 59)) {
+            val now = at(hour, minute)
+            val default = RevisitPlanner.defaultTime(now, zone)
+            val zoned = java.time.Instant.ofEpochMilli(default).atZone(zone)
+            val rebooked = RevisitPlanner.instantFor(zoned.hour, zoned.minute, now, zone)
+            assertEquals("Vorschlag um $hour:$minute nicht buchbar", default, rebooked)
+        }
     }
 
     /**
