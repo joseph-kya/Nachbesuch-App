@@ -34,6 +34,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import android.content.Context
+import android.view.accessibility.AccessibilityManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,6 +45,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import at.volkshilfe.nachbesuch.domain.model.DayScope
@@ -53,9 +58,13 @@ import at.volkshilfe.nachbesuch.ui.components.MinTouchTarget
 import at.volkshilfe.nachbesuch.ui.components.OutcomeButton
 import at.volkshilfe.nachbesuch.ui.theme.RadiusControl
 import at.volkshilfe.nachbesuch.ui.theme.RadiusSmall
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/** Matches the iOS auto-dismiss window. */
+private const val AUTO_DISMISS_MS = 360L
 
 private val NoteSuggestions = listOf(
     "Abends wiederkommen", "Briefkasten", "Kein Klingelschild",
@@ -95,18 +104,39 @@ fun HouseDetailSheet(
     onDelete: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
+    /**
+     * True while a screen reader is driving the UI.
+     *
+     * Auto-dismiss is skipped then, exactly as iOS skips it under VoiceOver:
+     * closing the sheet out from under the announcement would swallow the very
+     * confirmation the user is waiting to hear.
+     */
+    val touchExplorationEnabled = remember(context) {
+        val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+        manager?.isTouchExplorationEnabled == true
+    }
+    // A single pending auto-dismiss, so a correction inside the window replaces it
+    // rather than racing it.
+    var pendingDismiss by remember(house.id) { mutableStateOf(0) }
     var confirmDelete by remember { mutableStateOf(false) }
     var showUnitCount by remember { mutableStateOf(false) }
     var draftAddress by remember(house.id) { mutableStateOf(house.address) }
     var draftNote by remember(house.id) { mutableStateOf(house.note) }
     val tally = house.tally(scope)
 
+    // Commit the free-text drafts on the way out; a sheet that silently discards
+    // a typed note is the bug this replaces. Shared by "Fertig", the swipe-down
+    // and the back gesture, so no exit path can drop an edit.
+    val commitDrafts = {
+        if (draftAddress.trim() != house.address && draftAddress.isNotBlank()) onAddressChange(draftAddress.trim())
+        if (draftNote != house.note) onNoteChange(draftNote)
+    }
+
     ModalBottomSheet(
         onDismissRequest = {
-            // Commit the free-text drafts on the way out; a sheet that silently
-            // discards a typed note is the bug this replaces.
-            if (draftAddress.trim() != house.address && draftAddress.isNotBlank()) onAddressChange(draftAddress.trim())
-            if (draftNote != house.note) onNoteChange(draftNote)
+            commitDrafts()
             onDismiss()
         },
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -148,6 +178,14 @@ fun HouseDetailSheet(
 
             item(key = "header") {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Haus",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { commitDrafts(); onDismiss() }) { Text("Fertig") }
+                    }
                     OutlinedTextField(
                         value = draftAddress,
                         onValueChange = { draftAddress = it },
@@ -240,7 +278,14 @@ fun HouseDetailSheet(
                             OutcomeGrid(
                                 current = door.result(writeScope),
                                 isDisabled = house.isDamaged,
-                                onSelect = { outcome -> onOutcome(door.id, outcome) }
+                                onSelect = { outcome ->
+                                    val wasCleared = outcome == null
+                                    onOutcome(door.id, outcome)
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    // Clearing a status is a correction: the user is
+                                    // still working here, so the sheet stays put.
+                                    if (!wasCleared && !touchExplorationEnabled) pendingDismiss++
+                                }
                             )
                             door.timestamp(scope)?.let { stamp ->
                                 Text(
@@ -318,6 +363,19 @@ fun HouseDetailSheet(
 
             item(key = "bottom") { Spacer(Modifier.height(28.dp)) }
         }
+    }
+
+    // A one-door house is the overwhelmingly common case, and after picking its
+    // status there is nothing left to do here. Closing shortly afterwards is what
+    // makes the pin visibly change on the map behind — without it, the tap looks
+    // like it did nothing at all, which is exactly how this read in the field.
+    // Cancellable: another tap inside the window restarts the wait instead of
+    // closing on a correction.
+    LaunchedEffect(pendingDismiss) {
+        if (pendingDismiss == 0) return@LaunchedEffect
+        delay(AUTO_DISMISS_MS)
+        commitDrafts()
+        onDismiss()
     }
 
     if (confirmDelete) {

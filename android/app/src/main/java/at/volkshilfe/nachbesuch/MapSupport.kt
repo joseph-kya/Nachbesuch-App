@@ -97,6 +97,7 @@ import at.volkshilfe.nachbesuch.data.route.OverpassClient
 import at.volkshilfe.nachbesuch.data.route.WalkingNetworkResult
 import at.volkshilfe.nachbesuch.domain.map.ClusterGate
 import at.volkshilfe.nachbesuch.domain.map.PinScale
+import at.volkshilfe.nachbesuch.domain.map.PinStacking
 import at.volkshilfe.nachbesuch.domain.map.PinScalePolicy
 import at.volkshilfe.nachbesuch.domain.model.DayScope
 import at.volkshilfe.nachbesuch.domain.model.Gebiet
@@ -121,6 +122,7 @@ import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.LatLngBounds
+import com.google.android.gms.maps.Projection
 import com.google.android.gms.maps.model.MapStyleOptions
 import com.google.android.gms.maps.model.RoundCap
 import com.google.maps.android.compose.Circle
@@ -339,7 +341,7 @@ internal class GooglePinBitmapCache(private val context: Context) {
 
     private fun pinBitmap(text: String, outcome: VisitOutcome?, scale: PinScale, selected: Boolean): Bitmap {
         val density = context.resources.displayMetrics.density
-        val head = when (scale) { PinScale.FULL -> 34f; PinScale.COMPACT -> 25f; PinScale.DOT -> 15f }
+        val head = scale.headDiameterDp
         val padding = 5f
         val tipHeight = head * 10f / 34f
         val width = ((head + padding * 2) * density).toInt().coerceAtLeast(28)
@@ -397,3 +399,36 @@ internal class GooglePinBitmapCache(private val context: Context) {
     }
 }
 
+
+
+/**
+ * House IDs sitting essentially on top of [houseID], the tapped house first.
+ *
+ * With nothing merged or hidden, houses at the same spot render as one visible
+ * pin and a tap can only ever reach whichever marker is on top. This finds the
+ * ones underneath so the UI can offer a choice.
+ *
+ * The radius is deliberately **small**, matching iOS. Merely adjacent pins
+ * overlap at street zoom, but each still exposes enough of itself to be tapped
+ * directly. Only a pin whose centre lies under another pin's head is genuinely
+ * unreachable, and that is the case worth a list.
+ *
+ * Projects into screen space so the threshold means the same thing at every
+ * zoom level, then hands the decision to [PinStacking], which is pure and
+ * therefore testable without a map.
+ */
+internal fun stackedHouseIDs(
+    houseID: String,
+    houses: List<House>,
+    projection: Projection?,
+    pinScale: PinScale,
+    density: Float
+): List<String> {
+    if (projection == null) return listOf(houseID)
+    if (houses.none { it.id == houseID }) return listOf(houseID)
+    val points = houses.associate { house ->
+        val point = projection.toScreenLocation(LatLng(house.latitude, house.longitude))
+        house.id to PinStacking.Point(point.x.toFloat(), point.y.toFloat())
+    }
+    return PinStacking.idsAt(houseID, points, PinStacking.radiusPx(pinScale, density))
+}

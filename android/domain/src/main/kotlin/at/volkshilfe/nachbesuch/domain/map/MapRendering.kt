@@ -2,7 +2,19 @@ package at.volkshilfe.nachbesuch.domain.map
 
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
 
-enum class PinScale { FULL, COMPACT, DOT }
+enum class PinScale(
+    /**
+     * Diameter of the pin's head in dp.
+     *
+     * Lives here rather than inside the bitmap painter because two callers need
+     * the same number: the painter that draws the head, and the hit test that
+     * decides whether two pins are stacked on top of each other. A second copy
+     * is how the two would drift apart.
+     */
+    val headDiameterDp: Float
+) {
+    FULL(34f), COMPACT(25f), DOT(15f)
+}
 
 /** Hysteresis keeps the map readable near the threshold instead of flickering. */
 object PinScalePolicy {

@@ -48,6 +48,7 @@ import at.volkshilfe.nachbesuch.feature.list.ListScreenState
 import at.volkshilfe.nachbesuch.feature.shared.ExportFormat
 import at.volkshilfe.nachbesuch.feature.shared.ExportSheet
 import at.volkshilfe.nachbesuch.feature.shared.HouseDetailSheet
+import at.volkshilfe.nachbesuch.feature.shared.StackedPinsSheet
 import at.volkshilfe.nachbesuch.ui.RootScaffold
 import at.volkshilfe.nachbesuch.ui.components.AppearanceSettingsSheet
 import at.volkshilfe.nachbesuch.ui.components.FilterChipSpec
@@ -64,6 +65,8 @@ import java.io.File
 private sealed interface AppSheet {
     data class House(val id: String) : AppSheet
     data class EditGebiet(val id: String?) : AppSheet
+    /** Several pins coincide; the user picks which house they meant. */
+    data class StackedPins(val ids: List<String>) : AppSheet
     data object Export : AppSheet
     data object Settings : AppSheet
     data object Legend : AppSheet
@@ -139,6 +142,7 @@ class MainActivity : ComponentActivity() {
                     scope = scope,
                     onScopeChanged = viewModel::selectScope,
                     onHouseSelected = { sheet = AppSheet.House(it.id) },
+                    onStackedPins = { ids -> sheet = AppSheet.StackedPins(ids) },
                     onMapLongPress = { addCoordinate = it },
                     onBoundaryChanged = viewModel::updateBoundary,
                     onDeleteHouses = viewModel::deleteHouses,
@@ -189,6 +193,23 @@ class MainActivity : ComponentActivity() {
                         onWalkRoute = { openWalkingRoute(house.latitude, house.longitude, house.address) },
                         onCopyAddress = { copyToClipboard(context, house.address) },
                         onDelete = { viewModel.deleteHouse(house.id); sheet = null },
+                        onDismiss = { sheet = null }
+                    )
+                }
+            }
+
+            is AppSheet.StackedPins -> {
+                // Keep the tapped order: the pin actually under the finger first.
+                val stacked = current.ids.mapNotNull { id -> houses.firstOrNull { it.id == id } }
+                if (stacked.size < 2) {
+                    LaunchedEffect(current) {
+                        sheet = stacked.firstOrNull()?.let { AppSheet.House(it.id) }
+                    }
+                } else {
+                    StackedPinsSheet(
+                        houses = stacked,
+                        scope = scope,
+                        onSelect = { id -> sheet = AppSheet.House(id) },
                         onDismiss = { sheet = null }
                     )
                 }
