@@ -41,11 +41,6 @@ struct HouseDetailSheet: View {
         }
     }
 
-    private static let noteSuggestions = [
-        "Abends wiederkommen", "Briefkasten", "Kein Klingelschild",
-        "Hund", "Nur Wochenende", "Tür verschlossen"
-    ]
-
     var body: some View {
         let summary = house.summary(for: scope)
 
@@ -81,24 +76,6 @@ struct HouseDetailSheet: View {
                 Section("Notiz") {
                     TextField("Notiz", text: $draftNote, axis: .vertical)
                         .lineLimit(2...6)
-
-                    // A wrapping grid rather than a horizontal ScrollView, which
-                    // fights the Form's own vertical pan and clips at the row bounds.
-                    FlowLayout(spacing: 6) {
-                        ForEach(Self.noteSuggestions, id: \.self) { suggestion in
-                            Button {
-                                appendNote(suggestion)
-                            } label: {
-                                Text(suggestion)
-                                    .font(.caption.weight(.medium))
-                                    .padding(.horizontal, 11)
-                                    .padding(.vertical, 8)
-                                    .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Notiz ergänzen: \(suggestion)")
-                        }
-                    }
                 }
 
                 Section {
@@ -301,12 +278,6 @@ struct HouseDetailSheet: View {
             commitDrafts()
             dismiss()
         }
-    }
-
-    private func appendNote(_ suggestion: String) {
-        let trimmed = draftNote.trimmingCharacters(in: .whitespacesAndNewlines)
-        draftNote = trimmed.isEmpty ? suggestion : "\(trimmed) · \(suggestion)"
-        UISelectionFeedbackGenerator().selectionChanged()
     }
 
     /// Address and note are buffered while typing so there is no SwiftData write per

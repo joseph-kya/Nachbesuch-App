@@ -26,6 +26,9 @@ data class ListScreenState(
     val sections: List<StreetSection>,
     val chips: List<FilterChipSpec>,
     val collapsedSections: Set<String>,
+    /** Non-null while a quick status can still be taken back. */
+    val undoLabel: String?,
+    val onUndo: () -> Unit,
     val onQuery: (String) -> Unit,
     val onFilter: (ListFilter) -> Unit,
     val onScope: (DayScope) -> Unit,

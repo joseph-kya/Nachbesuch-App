@@ -5,8 +5,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -66,11 +64,6 @@ import java.util.Locale
 /** Matches the iOS auto-dismiss window. */
 private const val AUTO_DISMISS_MS = 360L
 
-private val NoteSuggestions = listOf(
-    "Abends wiederkommen", "Briefkasten", "Kein Klingelschild",
-    "Hund", "Nur Wochenende", "Tür verschlossen"
-)
-
 /**
  * The house sheet, rebuilt to match the iOS `HouseDetailSheet`.
  *
@@ -79,7 +72,7 @@ private val NoteSuggestions = listOf(
  * "all open doors as not home" action, the last-recorded timestamp, walk-route
  * and copy-address actions, and a real delete confirmation.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HouseDetailSheet(
     house: House,
@@ -318,24 +311,6 @@ fun HouseDetailSheet(
                         placeholder = { Text("Notiz") },
                         shape = RoundedCornerShape(RadiusControl)
                     )
-                    // Wraps rather than scrolls horizontally: a horizontal scroller
-                    // inside a vertical list fights the list's own pan.
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        NoteSuggestions.forEach { suggestion ->
-                            Text(
-                                suggestion,
-                                style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(14.dp))
-                                    .clickable(enabled = !house.isDamaged) {
-                                        draftNote = if (draftNote.isBlank()) suggestion
-                                        else "${draftNote.trimEnd()} · $suggestion"
-                                    }
-                                    .padding(horizontal = 11.dp, vertical = 8.dp)
-                            )
-                        }
-                    }
                 }
             }
 

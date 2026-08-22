@@ -66,6 +66,7 @@ import at.volkshilfe.nachbesuch.ui.components.FilterBar
 import at.volkshilfe.nachbesuch.ui.components.FilterChipSpec
 import at.volkshilfe.nachbesuch.ui.components.MinTouchTarget
 import at.volkshilfe.nachbesuch.ui.components.OutcomeGlyph
+import at.volkshilfe.nachbesuch.ui.components.UndoBanner
 import at.volkshilfe.nachbesuch.ui.status.icon
 import at.volkshilfe.nachbesuch.ui.status.tint
 import at.volkshilfe.nachbesuch.ui.theme.RadiusCard
@@ -96,6 +97,10 @@ fun ListScreen(
     onShowLegend: () -> Unit,
     contentPadding: PaddingValues = PaddingValues(0.dp)
 ) {
+    // The undo banner belongs to this screen, not to the whole app. It answers a
+    // quick status taken here, where the row promptly re-sorts and moves away; on
+    // the map or in the archive it was just a strip of chrome with no context.
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(horizontal = 16.dp)) {
             Spacer(Modifier.height(contentPadding.calculateTopPadding() + 8.dp))
@@ -157,6 +162,15 @@ fun ListScreen(
                 }
             }
         }
+    }
+
+    UndoBanner(
+        label = state.undoLabel,
+        onUndo = state.onUndo,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = contentPadding.calculateBottomPadding() + 8.dp)
+    )
     }
 }
 

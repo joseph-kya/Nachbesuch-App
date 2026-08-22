@@ -69,9 +69,7 @@ fun RootScaffold(
     list: @Composable (PaddingValues) -> Unit,
     archive: @Composable (PaddingValues) -> Unit,
     /** Floats over the content at the top — the notice banner. */
-    topOverlay: @Composable () -> Unit = {},
-    /** Floats over the content just above the tab bar — the undo banner. */
-    bottomOverlay: @Composable () -> Unit = {}
+    topOverlay: @Composable () -> Unit = {}
 ) {
     var selected by rememberSaveable { mutableIntStateOf(0) }
     var barHeight by remember { mutableStateOf(0.dp) }
@@ -99,11 +97,11 @@ fun RootScaffold(
             else -> archive(listPadding)
         }
 
-        // Overlays rather than inline rows: a banner that pushes the map or the
-        // list down on every appearance reflows the whole screen under the
-        // user's thumb mid-tap.
+        // An overlay rather than an inline row: a banner that pushes the map or
+        // the list down on every appearance reflows the whole screen under the
+        // user's thumb mid-tap. Notices are app-wide because a failed write can
+        // come from any screen; the undo banner is not, and lives in the list.
         Box(Modifier.align(Alignment.TopCenter).padding(top = statusBar + 8.dp)) { topOverlay() }
-        Box(Modifier.align(Alignment.BottomCenter).padding(bottom = barHeight + 8.dp)) { bottomOverlay() }
 
         FloatingTabBar(
             selected = selected,
