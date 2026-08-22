@@ -284,7 +284,8 @@ private fun StreetHeader(section: StreetSection, isExpanded: Boolean, onToggle: 
             .padding(horizontal = 10.dp, vertical = 8.dp)
             .clearAndSetSemantics {
                 contentDescription = section.title
-                stateDescription = "${section.houseCount} Häuser, ${section.completedCount} von " +
+                stateDescription = "${section.houseCount} ${if (section.houseCount == 1) "Haus" else "Häuser"}, " +
+                    "${section.completedCount} von " +
                     "${section.unitCount} Türen erledigt, " + if (isExpanded) "ausgeklappt" else "eingeklappt"
             },
         verticalAlignment = Alignment.CenterVertically,
@@ -299,7 +300,7 @@ private fun StreetHeader(section: StreetSection, isExpanded: Boolean, onToggle: 
         Column(Modifier.weight(1f)) {
             Text(section.title, style = MaterialTheme.typography.titleMedium)
             Text(
-                "${section.houseCount} Häuser · ${section.openCount} offen",
+                "${section.houseCount} ${if (section.houseCount == 1) "Haus" else "Häuser"} · ${section.openCount} offen",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

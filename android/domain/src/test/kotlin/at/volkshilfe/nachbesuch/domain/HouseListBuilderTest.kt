@@ -3,6 +3,7 @@ package at.volkshilfe.nachbesuch.domain
 import at.volkshilfe.nachbesuch.domain.list.HouseListBuilder
 import at.volkshilfe.nachbesuch.domain.list.ListFilter
 import at.volkshilfe.nachbesuch.domain.list.SearchText
+import at.volkshilfe.nachbesuch.domain.list.StreetNameParser
 import at.volkshilfe.nachbesuch.domain.model.DayScope
 import at.volkshilfe.nachbesuch.domain.model.DoorResult
 import at.volkshilfe.nachbesuch.domain.model.House
@@ -138,5 +139,38 @@ class HouseListBuilderTest {
     @Test
     fun `folding is stable for the eszett`() {
         assertEquals("strasse", SearchText.fold("Straße"))
+    }
+}
+
+class StreetNameParserTest {
+
+    @Test
+    fun `a house number followed by a comma does not become part of the street`() {
+        // The OSM importer emits exactly this shape. The old regex required the
+        // number to end at whitespace, so it matched the postal code instead and
+        // every house number became its own list section.
+        assertEquals("Am Hof" to "1", StreetNameParser.parse("Am Hof 1, 1010 Wien"))
+        assertEquals("Am Hof" to "11", StreetNameParser.parse("Am Hof 11, 1010 Wien"))
+    }
+
+    @Test
+    fun `an address with no house number keeps the whole street`() {
+        assertEquals("Am Hof" to null, StreetNameParser.parse("Am Hof, 1010 Wien"))
+    }
+
+    @Test
+    fun `non-breaking spaces are treated as separators`() {
+        assertEquals("Teststraße" to "12a", StreetNameParser.parse("Teststraße 12a"))
+    }
+
+    @Test
+    fun `a leading number is not mistaken for a house number`() {
+        assertEquals("12 Hauptstraße" to null, StreetNameParser.parse("12 Hauptstraße"))
+    }
+
+    @Test
+    fun `multi-word streets survive`() {
+        assertEquals("Maria-Theresien-Straße" to "8", StreetNameParser.parse("Maria-Theresien-Straße 8/3"))
+        assertEquals("Am Augarten" to "3", StreetNameParser.parse("Am Augarten 3"))
     }
 }

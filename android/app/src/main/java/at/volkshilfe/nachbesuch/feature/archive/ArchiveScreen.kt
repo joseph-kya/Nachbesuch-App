@@ -315,7 +315,8 @@ private fun TerritoryCard(
                         if (summary.territory.districtOrCity.isNotBlank()) {
                             append(" · ").append(summary.territory.districtOrCity)
                         }
-                        append(" · ").append(summary.houseCount).append(" Häuser")
+                        append(" · ").append(summary.houseCount)
+                        append(if (summary.houseCount == 1) " Haus" else " Häuser")
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
