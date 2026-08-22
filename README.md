@@ -104,44 +104,66 @@ Der Schlüssel dazu ist `emphasisStyle = .muted`: die Grundkarte wird entsättig
 damit die Orte lesbar bleiben, **ohne** den roten Haus-Pins die Aufmerksamkeit zu
 stehlen. Drei Stufen im Menü: **Aus**, **Orientierung** (kuratiert), **Alle Orte**.
 
-### Pins: Gruppieren erst im Überblick
-Die alte Version schaltete Clustering über ein selbstgebautes Band, das bei jedem
-Umschalten **sämtliche** Annotationen entfernte und neu hinzufügte — mitten in der
-Geste, ausgelöst aus einem Handler, der pro Frame lief und dabei jedes Mal alle
-Pins durchzählte.
+### Pins: ein Haus, ein Pin — auf jeder Zoomstufe
 
-Die Entscheidung ganz MapKits Kollisions-Engine zu überlassen klingt richtig — sie
-fasst genau dann zusammen, wenn sich zwei Pins überlappen würden. In der Praxis ist
-„die Grafik berührt sich" aber weit entfernt von „mit diesen Pins bin ich fertig":
-zwei Häuser 25 m auseinander kollidieren schon auf Straßenniveau. Die Karte fiel
-also genau dann zu Blasen zusammen, wenn man die einzelnen Pins am dringendsten
-braucht.
+Clustering ist ersatzlos entfernt. Es war die Quelle fast aller Pin-Fehler, und es
+löste ein Problem, das die App gar nicht hat.
 
-Deshalb gibt es jetzt eine ausdrückliche Grenze:
-- **Bis ~3 km Bildbreite kein Clustering.** Der gesamte Arbeitsbereich bleibt
-  einzeln antippbar.
-- Darunter ist zusätzlich die Kollisions-Erkennung aus (`collisionMode = .none`):
-  überlappende Pins stapeln sich sichtbar, statt dass einer den anderen verdeckt.
-  Es verschwindet nie etwas.
-- Ein Sicherheitsventil greift trotzdem, wenn über 1.200 Pins gleichzeitig sichtbar
-  sind — dort wäre die Karte sonst nicht mehr flüssig.
-- Hysterese auf beiden Signalen (3 km ein / 2 km aus), damit ein Zoom, der auf der
-  Schwelle steht, nicht hin- und herspringt.
-- Beim Umschalten werden **nur die Pins im sichtbaren Bereich** neu deklariert.
-  Alles außerhalb übernimmt den Modus ohnehin beim nächsten Erzeugen.
-- Ab ~800 m Bildbreite wird die Pin-Grafik kleiner. Der Bereich zwischen
-  Arbeitszoom und Überblick lichtet sich dadurch von selbst, ohne zu gruppieren.
+Der alte Stand schaltete zwischen „gruppiert" und „einzeln" über ein selbstgebautes
+Band um: zwei Signale (Bildbreite **und** Anzahl sichtbarer Pins), beide mit eigener
+Hysterese, ausgewertet am Ende jeder Kamerabewegung. Daraus folgte alles, was an der
+Karte nervte:
 
-Dazu:
+- **Der Zustand hing vom Weg ab, nicht vom Ort.** Zweimal dieselbe Stelle, einmal
+  hinein- und einmal herausgezoomt, ergab zwei verschiedene Karten.
+- **Eine schnelle Geste erwischte den Umschaltmoment.** MapKit besitzt `transform`
+  und `center` einer Annotation, solange eine Cluster-Animation läuft; der Umschalter
+  schrieb in dieselben Views. Ob das kollidierte, entschied das Frame-Timing — daher
+  „bei manchen Zooms, bei anderen nicht".
+- **`clusteringIdentifier` im Nachhinein zu setzen wirkt nicht zuverlässig.** MapKit
+  liest die Eigenschaft, wenn eine View entsteht. Bereits bestehende Cluster blieben
+  stehen, ihre Mitglieder blieben verborgen.
+
+Jetzt gilt: **ein Haus ist ein Pin, vom weitesten Überblick bis auf Straßenniveau.**
+Nichts wird zusammengefasst, nichts aufgeteilt, nichts ausgeblendet
+(`collisionMode = .none`). Damit gibt es keinen Modus mehr, den eine Geste halb
+angewendet erwischen kann — egal wie schnell man zoomt.
+
+Was der Zoom noch ändert, ist allein die **Größe** der Grafik, und die ist eine
+reine Funktion der Kamera:
+
+| Bildbreite | Darstellung |
+|---|---|
+| bis 1,4 km | volle Größe mit Glyph |
+| 1,4–3 km | kleiner, Glyph bleibt |
+| ab 3 km | reiner Punkt |
+
+Kein vorheriger Zustand, keine Hysterese, keine Übergangstabelle: dieselbe Zoomstufe
+ergibt immer dieselbe Größe. Hysterese war früher nötig, weil ein Stufenwechsel die
+Geometrie verschob — heute ist er nur noch ein Bildtausch auf identischer
+Leinwand mit identischem Ankerpunkt, also unsichtbar und beliebig oft machbar.
+
+Dass das ohne Clustering trägt, liegt an der Pin-Grafik selbst:
+
 - **Pin-Grafik inklusive Text vorgerendert.** Ein Pin ist ein reiner Bild-Halter:
   keine Unteransichten, kein Layout-Durchlauf, keine Textmessung pro Pin
 - Statusänderungen aktualisieren **nur die betroffenen Pins**, nicht alle
-- `displayPriority` wird immer explizit gesetzt: der Standardwert `.required`
-  hätte bedeutet, dass Pins nie gruppiert und nie ausgeblendet werden — der
-  klassische Grund, warum Karten mit eigenen Annotationen bei Menge einbrechen
-- Cluster mit offenen Nachbesuchen sind rot, fertige blau
-- Liegen mehrere Pins exakt aufeinander, öffnet ein Tipp eine Auswahlliste,
-  statt endlos weiterzuzoomen
+- Pins blenden sich beim Hereinscrollen **nicht** ein — die Alpha-Animation pro View
+  war der teuerste vermeidbare Posten beim Schwenken und der einzige Weg, auf dem ein
+  wiederverwendeter Pin halbdurchsichtig zurückkommen konnte
+- `displayPriority` wird immer explizit gesetzt und nie `.required`: der Standardwert
+  nimmt jeden Pin aus MapKits Budget heraus — der klassische Grund, warum Karten mit
+  eigenen Annotationen bei Menge einbrechen. Häuser mit offenen Nachbesuchen stehen
+  höher, falls MapKit doch einmal wählen muss
+
+Getestet mit 3.000 Pins auf einmal, ohne Gruppierung, flüssig.
+
+**Liegen Pins wirklich aufeinander**, öffnet ein Tipp eine Auswahlliste. Der Radius
+ist bewusst klein (30 % des Pin-Kopfes): Pins, die sich nur berühren, sind einzeln
+antippbar — MapKit trifft die oberste View unter dem Finger. Nur ein Pin, dessen
+Mittelpunkt unter einem anderen Kopf liegt, ist gar nicht erreichbar, und genau der
+bekommt die Liste. Das funktioniert jetzt auf **jeder** Zoomstufe; früher gab es die
+Liste nur oberhalb der Cluster-Grenze.
 
 ### Tag 1 und Tag 2 sind jetzt wirklich getrennt
 Das war der schwerste Fehler im alten Stand. Der Zugriff auf den Tag-2-Wert fiel

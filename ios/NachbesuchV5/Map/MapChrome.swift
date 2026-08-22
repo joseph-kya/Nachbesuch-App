@@ -550,8 +550,8 @@ struct ApartmentStatusPreview: View {
 
 // MARK: - Stacked pins
 
-/// Shown when a cluster's members share a coordinate and therefore can never be
-/// separated by zooming — otherwise tapping it would silently do nothing forever.
+/// Shown when several pins are drawn on top of one another, so a tap cannot pick
+/// between them — otherwise whichever view happened to be on top would always win.
 struct StackedPinsSheet: View {
     @Environment(\.dismiss) private var dismiss
     let houses: [House]

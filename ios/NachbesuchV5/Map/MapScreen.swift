@@ -313,8 +313,8 @@ struct MapScreen: View {
                 },
                 picksRouteStart: routePhase == .pickingOnMap,
                 onTapHouse: openHouse,
-                onClusterNeedsDisambiguation: { ids in
-                    sheetRoute = .clusterMembers(ids)
+                onStackedPins: { ids in
+                    sheetRoute = .stackedPins(ids)
                 },
                 onDropConsumed: { id in
                     if dropHouseID == id { dropHouseID = nil }
@@ -1165,9 +1165,9 @@ struct MapScreen: View {
                     .presentationDragIndicator(.visible)
             }
 
-        case .clusterMembers(let ids):
-            // Members sitting on the same coordinate can never be separated by
-            // zooming, so the tap opens a list instead of doing nothing forever.
+        case .stackedPins(let ids):
+            // Pins drawn on top of each other cannot be aimed at separately, so the
+            // tap opens a list instead of guessing which one was meant.
             StackedPinsSheet(
                 houses: ids.compactMap { housesByID[$0] },
                 scope: scope
@@ -1228,7 +1228,7 @@ enum MapRoute: Identifiable {
     case search
     case importArea
     case exportSelection
-    case clusterMembers([UUID])
+    case stackedPins([UUID])
 
     var id: String {
         switch self {
@@ -1237,7 +1237,7 @@ enum MapRoute: Identifiable {
         case .search: "search"
         case .importArea: "import"
         case .exportSelection: "export"
-        case .clusterMembers(let ids): "cluster-\(ids.count)-\(ids.first?.uuidString ?? "")"
+        case .stackedPins(let ids): "stacked-\(ids.count)-\(ids.first?.uuidString ?? "")"
         }
     }
 }

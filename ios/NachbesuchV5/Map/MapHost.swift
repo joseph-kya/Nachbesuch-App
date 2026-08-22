@@ -94,7 +94,7 @@ struct MapHost: UIViewRepresentable {
     let picksRouteStart: Bool
 
     var onTapHouse: (UUID) -> Void = { _ in }
-    var onClusterNeedsDisambiguation: ([UUID]) -> Void = { _ in }
+    var onStackedPins: ([UUID]) -> Void = { _ in }
     var onDropConsumed: (UUID) -> Void = { _ in }
     var menuProvider: ((MapPinSnapshot) -> UIMenu)?
     var previewProvider: ((MapPinSnapshot) -> UIViewController?)?
@@ -109,7 +109,6 @@ struct MapHost: UIViewRepresentable {
         coordinator.mapView = mapView
 
         mapView.register(HousePinView.self, forAnnotationViewWithReuseIdentifier: HousePinView.reuseIdentifier)
-        mapView.register(ClusterBubbleView.self, forAnnotationViewWithReuseIdentifier: ClusterBubbleView.reuseIdentifier)
         mapView.register(NextStopHaloView.self, forAnnotationViewWithReuseIdentifier: NextStopHaloView.reuseIdentifier)
         mapView.register(DraftPointView.self, forAnnotationViewWithReuseIdentifier: DraftPointView.reuseIdentifier)
         mapView.register(UserLocationPuckView.self, forAnnotationViewWithReuseIdentifier: UserLocationPuckView.reuseIdentifier)
@@ -141,7 +140,7 @@ struct MapHost: UIViewRepresentable {
         coordinator.onTrackingModeChanged = onTrackingModeChanged
         coordinator.picksRouteStart = picksRouteStart
         coordinator.onTapHouse = onTapHouse
-        coordinator.onClusterNeedsDisambiguation = onClusterNeedsDisambiguation
+        coordinator.onStackedPins = onStackedPins
         coordinator.onDropConsumed = onDropConsumed
         coordinator.menuProvider = menuProvider
         coordinator.previewProvider = previewProvider

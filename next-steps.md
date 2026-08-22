@@ -79,8 +79,8 @@ something:
    automatically part of the target. A stray scratch file compiles into the app. Keep
    temporary files out of the project tree entirely — use the scratch directory.
 4. **The map is a performance surface.** Anything touching `ios/NachbesuchV5/Map/` gets a seeded 2 000-pin
-   check before it is considered done. Pins, clustering and pin-scale logic have all
-   regressed before.
+   check before it is considered done. Pin geometry and pin-scale logic have both
+   regressed before. (Clustering is gone — do not reintroduce it.)
 5. **Test count is a fact, not a vibe.** Report the number the run printed. It has been
    68, 70, 74 and 78 at different points; do not carry a remembered number forward.
 6. **German user-facing strings are data.** Do not "improve", translate, or normalise
@@ -861,7 +861,7 @@ the sheet offers to open rather than duplicate.
 
 ### B9 — Performance regression harness
 
-**Why:** pins, clustering and pin-scale have each regressed at least once, and every check
+**Why:** pins and pin-scale have each regressed at least once, and every check
 so far has been a human looking at a screenshot.
 
 **What:** an XCTest performance test over a seeded 2 000-house territory measuring

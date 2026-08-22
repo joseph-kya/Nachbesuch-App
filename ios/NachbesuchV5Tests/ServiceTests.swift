@@ -312,7 +312,7 @@ struct PinArtTests {
     @Test("Die Pin-Spitze sitzt auf der Koordinate")
     func anchorSitsOnTip() {
         let cache = PinArtCache.shared
-        let offset = cache.centerOffset(for: .full)
+        let offset = cache.centerOffset
         #expect(offset.y < 0, "Der Pin hängt über seiner Koordinate")
         #expect(offset.x == 0)
     }
@@ -330,31 +330,26 @@ struct PinArtTests {
     }
 
     @MainActor
-    @Test("Jede Größe hängt über ihrer Koordinate")
-    func everyScaleAnchorsOnTheTip() {
-        for scale in [PinScale.full, .compact, .dot] {
-            let offset = PinArtCache.shared.centerOffset(for: scale)
-            #expect(offset.y < 0)
-            #expect(offset.x == 0)
-        }
+    @Test("Der Pin hängt über seiner Koordinate")
+    func theAnchorSitsAboveTheCoordinate() {
+        let offset = PinArtCache.shared.centerOffset
+        #expect(offset.y < 0)
+        #expect(offset.x == 0)
     }
 
-    /// The invariant that makes pin placement race-free.
+    /// The invariant that makes resizing race-free.
     ///
-    /// Every tier must render into the same bitmap and use the same anchor. If a
-    /// tier change alters `bounds`, the per-frame tier swap can land inside a MapKit
-    /// cluster animation — which owns `transform` and `center` on the same view —
-    /// and the pin ends up permanently off its coordinate. That failure is
-    /// timing-dependent, so it reproduces on some zooms and not others; this test is
-    /// the deterministic guard against it coming back.
+    /// Every tier must render into the same bitmap. If a tier change altered
+    /// `bounds`, the per-frame tier swap would move geometry MapKit is positioning
+    /// mid-gesture, and the pin could end up off its coordinate — a timing-dependent
+    /// failure that reproduces on some zooms and not others.
     @MainActor
-    @Test("Alle Pin-Größen teilen sich Bitmap-Größe und Anker")
-    func everyScaleSharesCanvasAndAnchor() {
+    @Test("Alle Pin-Größen teilen sich dieselbe Bitmap-Größe")
+    func everyScaleSharesTheCanvas() {
         let cache = PinArtCache.shared
         let reference = cache.pinImage(for: PinArtCache.Key(
             outcome: .joined, text: "", isSelected: false, isDark: false, scale: .full
         ))
-        let anchor = cache.centerOffset(for: .full)
 
         for scale in [PinScale.full, .compact, .dot] {
             let image = cache.pinImage(for: PinArtCache.Key(
@@ -364,7 +359,6 @@ struct PinArtTests {
                 image.size == reference.size,
                 "\(scale) rendert in eine andere Bitmap-Größe — ein Größenwechsel würde bounds ändern"
             )
-            #expect(cache.centerOffset(for: scale) == anchor, "\(scale) verschiebt den Anker")
         }
     }
 
@@ -408,12 +402,35 @@ struct PinArtTests {
         #expect(try alpha(dot, atFractionX: 0.5, fractionY: 0.05) == 0, "Punkt-Pin klebt oben statt an der Spitze")
     }
 
+    /// The guard against sizes that depend on how you got to a zoom level.
+    ///
+    /// The tier used to come out of a transition table seeded with the previous
+    /// tier, so zooming out to 2 km and zooming in to 2 km produced different pins,
+    /// and a fast pinch that skipped a band stayed a tier behind. A pure function
+    /// cannot do either, and this pins that down.
     @MainActor
-    @Test("Große Zahlen werden abgekürzt")
-    func abbreviatesLargeCounts() {
-        #expect(PinArtCache.abbreviated(42) == "42")
-        #expect(PinArtCache.abbreviated(1500) == "1.5k")
-        #expect(PinArtCache.abbreviated(24000) == "24k")
+    @Test("Die Pin-Größe hängt nur vom Zoom ab, nicht vom Weg dorthin")
+    func pinScaleDependsOnlyOnZoom() {
+        #expect(MapCoordinator.scale(forMetersAcross: 300) == .full)
+        #expect(MapCoordinator.scale(forMetersAcross: 2_000) == .compact)
+        #expect(MapCoordinator.scale(forMetersAcross: 9_000) == .dot)
+
+        // Every zoom, approached from both directions and in arbitrary jumps, has
+        // exactly one answer.
+        let zooms = [80.0, 500, 1_399, 1_400, 2_999, 3_000, 12_000, 50_000]
+        for meters in zooms {
+            let expected = MapCoordinator.scale(forMetersAcross: meters)
+            for _ in 0..<3 {
+                #expect(MapCoordinator.scale(forMetersAcross: meters) == expected)
+            }
+        }
+        // Monotonic: zooming out never makes a pin bigger.
+        let order: [PinScale: Int] = [.full: 0, .compact: 1, .dot: 2]
+        for (near, far) in zip(zooms, zooms.dropFirst()) {
+            let a = order[MapCoordinator.scale(forMetersAcross: near)]!
+            let b = order[MapCoordinator.scale(forMetersAcross: far)]!
+            #expect(a <= b, "\(near) m → \(far) m lässt den Pin wachsen")
+        }
     }
 }
 

@@ -54,7 +54,7 @@ enum DebugSeed {
         modelContext.insert(gebiet)
 
         // A realistic street grid around Ottakring rather than a uniform blanket, so
-        // clustering and collision behave like they do in the field.
+        // dense streets and stacked pins behave like they do in the field.
         let originLatitude = 48.2115
         let originLongitude = 16.3105
         let streets = max(1, Int(Double(count).squareRoot() / 1.6))

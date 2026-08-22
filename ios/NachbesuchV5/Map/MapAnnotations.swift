@@ -64,7 +64,6 @@ final class NextStopAnnotation: NSObject, MKAnnotation {
 /// full frame rate.
 final class HousePinView: MKAnnotationView {
     static let reuseIdentifier = "HousePin"
-    static let clusteringIdentifier = "HousePinCluster"
 
     weak var coordinator: MapCoordinator?
 
@@ -90,6 +89,12 @@ final class HousePinView: MKAnnotationView {
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
         canShowCallout = false
+        // **Never culled, never merged.** A canvasser has to visit every house, so a
+        // pin silently losing its spot to a neighbour is worse than two pins
+        // overlapping: overlapping pins are visibly a stack, and a tap on one offers
+        // the list. This is also what makes the map behave the same at every zoom —
+        // there is no mode to switch, so no zoom speed can catch it mid-switch.
+        collisionMode = .none
         // Our own recognizer opens the sheet the instant the finger lifts, instead
         // of waiting out MapKit's selection round trip.
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
@@ -113,9 +118,8 @@ final class HousePinView: MKAnnotationView {
         didSet { applyArt() }
     }
 
-    /// Apple's own clustering sample configures in `prepareForDisplay()` rather than
-    /// `init`, because this runs on every reuse — which is exactly when a recycled
-    /// view would otherwise still be showing the previous house's artwork.
+    /// Configuring here rather than in `init` is what keeps a recycled view from
+    /// showing the previous house's artwork: this runs on every reuse.
     override func prepareForDisplay() {
         super.prepareForDisplay()
         applyArt()
@@ -129,12 +133,12 @@ final class HousePinView: MKAnnotationView {
         guard let annotation = annotation as? HouseAnnotation else { return }
         let pin = annotation.pin
 
-        // `MKAnnotationView.displayPriority` defaults to `.required`, and a required
-        // view is never culled and **never clusters away**. Leaving the default on a
-        // custom subclass forces MapKit to render every single pin — the classic
-        // reason a custom-annotation map dies at scale where an
+        // `MKAnnotationView.displayPriority` defaults to `.required` on a custom
+        // subclass, which opts every pin out of MapKit's rendering budget — the
+        // classic reason a custom-annotation map dies at scale where an
         // `MKMarkerAnnotationView` map (which defaults to `.defaultLow`) does not.
-        // So priority is always explicit here, and never `.required`.
+        // So priority is always explicit here, and never `.required`; houses with
+        // open work outrank finished ones if MapKit ever has to choose.
         displayPriority = pin.followUpCount > 0
             ? .defaultHigh
             : (pin.joinedCount > 0 ? MKFeatureDisplayPriority(600) : .defaultLow)
@@ -153,7 +157,7 @@ final class HousePinView: MKAnnotationView {
         renderedKey = key
         let cache = PinArtCache.shared
         image = cache.pinImage(for: key)
-        centerOffset = cache.centerOffset(for: scale)
+        centerOffset = cache.centerOffset
         accessibilityLabel = Self.accessibilityText(for: pin)
     }
 
@@ -213,96 +217,6 @@ extension HousePinView: UIContextMenuInteractionDelegate {
                 self?.coordinator?.menuProvider?(annotation.pin)
             }
         )
-    }
-}
-
-// MARK: - Cluster bubble
-
-/// The bubble MapKit renders for a merged group. Its artwork — including the count —
-/// is a cached bitmap, so a cluster costs the same as a pin.
-final class ClusterBubbleView: MKAnnotationView {
-    static let reuseIdentifier = "ClusterBubble"
-
-    weak var coordinator: MapCoordinator?
-
-    private var memberObservation: NSKeyValueObservation?
-    private var renderedText: String?
-
-    override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
-        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
-        canShowCallout = false
-        collisionMode = .circle
-        displayPriority = .required
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) is not supported")
-    }
-
-    deinit { memberObservation?.invalidate() }
-
-    override var annotation: MKAnnotation? {
-        didSet {
-            memberObservation?.invalidate()
-            memberObservation = nil
-            guard let cluster = annotation as? MKClusterAnnotation else { return }
-            // MapKit mutates `memberAnnotations` in place while zooming, without
-            // handing the view a new annotation — without KVO the number goes stale.
-            memberObservation = cluster.observe(
-                \.memberAnnotations,
-                options: [.initial]
-            ) { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.configure() }
-            }
-        }
-    }
-
-    override func prepareForDisplay() {
-        super.prepareForDisplay()
-        configure()
-    }
-
-    /// Forces the next `configure()` to re-render even if the count is unchanged —
-    /// used when a member's payload changed the bubble's accent colour.
-    func invalidateArt() {
-        renderedText = nil
-    }
-
-    func configure() {
-        guard let cluster = annotation as? MKClusterAnnotation else { return }
-        let count = cluster.memberAnnotations.count
-        var hasFollowUps = false
-        for member in cluster.memberAnnotations {
-            if let house = member as? HouseAnnotation, house.pin.followUpCount > 0 {
-                hasFollowUps = true
-                break
-            }
-        }
-
-        let text = PinArtCache.abbreviated(count)
-        let cacheKey = "\(text)-\(hasFollowUps)"
-        guard cacheKey != renderedText else { return }
-        renderedText = cacheKey
-
-        image = PinArtCache.shared.clusterImage(
-            count: count,
-            hasFollowUps: hasFollowUps,
-            isDark: traitCollection.userInterfaceStyle == .dark
-        )
-        centerOffset = PinArtCache.shared.clusterCenterOffset
-        accessibilityLabel = hasFollowUps
-            ? "\(count) Häuser, offene Nachbesuche dabei. Zum Vergrößern tippen."
-            : "\(count) Häuser. Zum Vergrößern tippen."
-    }
-
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        layer.removeAllAnimations()
-        alpha = 1
-        renderedText = nil
-        memberObservation?.invalidate()
-        memberObservation = nil
     }
 }
 
@@ -393,8 +307,8 @@ final class NextStopHaloView: MKAnnotationView {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
         canShowCallout = false
         isUserInteractionEnabled = false
-        // Never culled, never clustered: the whole point is that it is on screen
-        // whenever the route is running.
+        // Never culled: the whole point is that it is on screen whenever the route
+        // is running.
         displayPriority = .required
         collisionMode = .none
         // Drawn on TOP: on a dense street the marker has to win over the pins that

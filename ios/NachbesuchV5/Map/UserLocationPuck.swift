@@ -36,7 +36,7 @@ final class UserLocationPuckView: MKAnnotationView {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
         canShowCallout = false
         isEnabled = false
-        // The puck must never be swallowed by clustering or collision culling.
+        // The puck must never be culled: it is where you are standing.
         displayPriority = .required
         collisionMode = .circle
         zPriority = .max
