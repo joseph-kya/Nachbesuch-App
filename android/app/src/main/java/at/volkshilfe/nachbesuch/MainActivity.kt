@@ -49,6 +49,7 @@ import at.volkshilfe.nachbesuch.feature.shared.ExportFormat
 import at.volkshilfe.nachbesuch.feature.shared.ExportSheet
 import at.volkshilfe.nachbesuch.feature.shared.HouseDetailSheet
 import at.volkshilfe.nachbesuch.feature.shared.StackedPinsSheet
+import at.volkshilfe.nachbesuch.reminder.ReminderScheduler
 import at.volkshilfe.nachbesuch.ui.RootScaffold
 import at.volkshilfe.nachbesuch.ui.components.AppearanceSettingsSheet
 import at.volkshilfe.nachbesuch.ui.components.FilterChipSpec
@@ -121,6 +122,19 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Notifications carry both the booked "Später" reminders and the standing
+        // list prompt, so the ask happens once at startup rather than at the moment
+        // a user is mid-way through booking a return time.
+        var notificationsAllowed by remember { mutableStateOf(hasNotificationPermission()) }
+        val notificationLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted -> notificationsAllowed = granted }
+        LaunchedEffect(Unit) {
+            if (!notificationsAllowed && android.os.Build.VERSION.SDK_INT >= 33) {
+                notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
         val importLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocument()
         ) { uri -> if (uri != null) importBackup(uri) }
@@ -186,8 +200,14 @@ class MainActivity : ComponentActivity() {
                         isTwoDay = activeGebiet?.isTwoDay == true,
                         onScopeChange = viewModel::selectScope,
                         onOutcome = { unitID, outcome -> viewModel.recordOutcome(house.id, unitID, outcome) },
+                        onLater = { unitID, atMillis ->
+                            viewModel.recordOutcome(house.id, unitID, VisitOutcome.LATER, atMillis)
+                        },
                         onRenameUnit = { unitID, label -> viewModel.renameUnit(house.id, unitID, label) },
                         onAllOpenNotHome = { viewModel.allOpenNotHome(house.id) },
+                        onAllOpenLater = { atMillis ->
+                            viewModel.quickStatus(house.id, VisitOutcome.LATER, atMillis)
+                        },
                         onResize = { viewModel.makeApartment(house.id, it) },
                         onAddressChange = { viewModel.updateAddress(house.id, it) },
                         onNoteChange = { viewModel.updateNote(house.id, it) },
@@ -259,11 +279,23 @@ class MainActivity : ComponentActivity() {
             AppSheet.Settings -> {
                 val appearance by viewModel.appearance.collectAsStateWithLifecycleCompat()
                 val accent by viewModel.accent.collectAsStateWithLifecycleCompat()
+                val dailyReminders by viewModel.dailyListReminders.collectAsStateWithLifecycleCompat()
                 AppearanceSettingsSheet(
                     appearance = appearance,
                     accent = accent,
+                    dailyListReminders = dailyReminders,
+                    reminderHours = ReminderScheduler.DAILY_LIST_HOURS,
+                    notificationsAllowed = notificationsAllowed,
                     onAppearance = viewModel::setAppearance,
                     onAccent = viewModel::setAccent,
+                    onDailyListReminders = { enabled ->
+                        // Switching the reminder on is the one place where asking
+                        // again is warranted: the user just said they want it.
+                        if (enabled && !notificationsAllowed && android.os.Build.VERSION.SDK_INT >= 33) {
+                            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        viewModel.setDailyListReminders(enabled)
+                    },
                     onDismiss = { sheet = null }
                 )
             }
@@ -365,6 +397,9 @@ class MainActivity : ComponentActivity() {
             ),
             onHouseSelected = onHouse,
             onQuickStatus = { row, outcome -> viewModel.quickStatus(row.id, outcome) },
+            onQuickLater = { row, atMillis ->
+                viewModel.quickStatus(row.id, VisitOutcome.LATER, atMillis)
+            },
             onShowLegend = onLegend,
             contentPadding = contentPadding
         )
@@ -478,6 +513,19 @@ class MainActivity : ComponentActivity() {
         runCatching { startActivity(intent) }
             .recoverCatching { startActivity(fallback) }
             .onFailure { viewModel.notices.reportMessage("Keine Karten-App gefunden.") }
+    }
+
+    /**
+     * Whether notifications may be posted at all.
+     *
+     * Below Android 13 there is no runtime permission, but the user can still mute
+     * the app in system settings — `areNotificationsEnabled` answers both cases.
+     */
+    private fun hasNotificationPermission(): Boolean {
+        val runtimeGranted = android.os.Build.VERSION.SDK_INT < 33 ||
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        return runtimeGranted &&
+            getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()
     }
 
     private fun copyToClipboard(context: Context, value: String) {

@@ -18,6 +18,9 @@ nonisolated struct OutcomeTally: Sendable, Hashable {
     var earlyNo = 0
     var lateNo = 0
     var joined = 0
+    /// Doors postponed to a concrete time. Counted separately from `notHome`
+    /// because "come back at 18:00" and "come back some time" are different jobs.
+    var later = 0
 
     static let empty = OutcomeTally()
 
@@ -37,6 +40,7 @@ nonisolated struct OutcomeTally: Sendable, Hashable {
         case .earlyNo: earlyNo += 1
         case .lateNo: lateNo += 1
         case .joined: joined += 1
+        case .later: later += 1
         }
     }
 
@@ -48,6 +52,7 @@ nonisolated struct OutcomeTally: Sendable, Hashable {
         earlyNo += other.earlyNo
         lateNo += other.lateNo
         joined += other.joined
+        later += other.later
     }
 
     static func tally(_ doors: [DoorResult], scope: DayScope) -> OutcomeTally {
@@ -61,13 +66,18 @@ nonisolated struct OutcomeTally: Sendable, Hashable {
     static func markerOutcome(for doors: [DoorResult], scope: DayScope) -> VisitOutcome? {
         var last: VisitOutcome?
         var hasFollowUp = false
+        var hasLater = false
         var hasJoined = false
         for door in doors {
             guard let outcome = door.displayOutcome(in: scope) else { continue }
             last = outcome
             if outcome == .notHome { hasFollowUp = true }
+            if outcome == .later { hasLater = true }
             if outcome == .joined { hasJoined = true }
         }
+        // A booked return time outranks an open "niemand da": it is the more
+        // specific instruction, and it is the one with a deadline attached.
+        if hasLater { return .later }
         if hasFollowUp { return .notHome }
         if hasJoined { return .joined }
         return last
@@ -93,6 +103,12 @@ nonisolated struct HouseSummary: Sendable {
     nonisolated var followUpCount: Int { tally.notHome }
     nonisolated var joinedCount: Int { tally.joined }
     nonisolated var openCount: Int { tally.open }
+    nonisolated var laterCount: Int { tally.later }
+
+    /// The earliest booked return time still on this house, for rows and pins.
+    nonisolated var nextRevisitAt: Date? {
+        units.compactMap { $0.displayRevisitAt(in: scope) }.min()
+    }
     nonisolated var unansweredCount: Int { tally.unitCount - tally.completed }
 
     /// What the pin shows. Scope-aware — reading `units.first?.outcome` directly is

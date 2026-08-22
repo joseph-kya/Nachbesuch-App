@@ -74,6 +74,7 @@ nonisolated struct ExportSummary: Sendable {
     var notHome = 0
     var earlyNo = 0
     var lateNo = 0
+    var later = 0
 
     /// Only the outcomes that actually occurred, so a report never carries a column
     /// of zeroes.
@@ -83,6 +84,7 @@ nonisolated struct ExportSummary: Sendable {
         if notHome > 0 { result.append((VisitOutcome.notHome.title, notHome)) }
         if earlyNo > 0 { result.append((VisitOutcome.earlyNo.title, earlyNo)) }
         if lateNo > 0 { result.append((VisitOutcome.lateNo.title, lateNo)) }
+        if later > 0 { result.append((VisitOutcome.later.title, later)) }
         return result
     }
 }
@@ -159,6 +161,7 @@ enum DayExportService {
                 case .notHome: summary.notHome += 1
                 case .earlyNo: summary.earlyNo += 1
                 case .lateNo: summary.lateNo += 1
+                case .later: summary.later += 1
                 }
             }
             summary.houses += 1
@@ -168,7 +171,7 @@ enum DayExportService {
             var exportDoors: [ExportDoor] = []
 
             if isSingleHousehold {
-                result = recorded.first?.1.title ?? "Ohne Status"
+                result = recorded.first.map { $0.1.label(revisitAt: $0.0.displayRevisitAt(in: scope)) } ?? "Ohne Status"
             } else {
                 result = "\(recorded.count) von \(doors.count) Türen"
                 // Only the doors that were actually answered — listing five "Offen"
@@ -177,7 +180,7 @@ enum DayExportService {
                     ? recorded.map {
                         ExportDoor(
                             label: $0.0.label,
-                            result: $0.1.title,
+                            result: $0.1.label(revisitAt: $0.0.displayRevisitAt(in: scope)),
                             symbol: $0.1.emoji,
                             recordedAt: $0.0.timestamp(in: scope)
                         )
@@ -185,7 +188,7 @@ enum DayExportService {
                     : doors.map {
                         ExportDoor(
                             label: $0.label,
-                            result: $0.recordedOutcome(in: scope)?.title ?? "Ohne Status",
+                            result: $0.recordedOutcome(in: scope)?.label(revisitAt: $0.displayRevisitAt(in: scope)) ?? "Ohne Status",
                             symbol: $0.recordedOutcome(in: scope)?.emoji ?? "○",
                             recordedAt: $0.timestamp(in: scope)
                         )

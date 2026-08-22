@@ -40,8 +40,9 @@ object BilanzStats {
             day2 += house.tally(DayScope.DAY_2)
             for (door in house.units) {
                 if (door.isPendingRevisit) pendingRevisits++
-                // A revisit target is any door never answered on day 1 or answered "not home".
-                if (door.outcome == null || door.outcome == VisitOutcome.NOT_HOME) revisitTargets++
+                // A revisit target is any door never answered on day 1, or answered
+                // with something that leaves it open — "niemand da" or "später".
+                if (door.outcome == null || door.outcome.isOpenWork) revisitTargets++
             }
         }
         return BilanzSnapshot(houses.size, overall, day1, day2, pendingRevisits, revisitTargets)

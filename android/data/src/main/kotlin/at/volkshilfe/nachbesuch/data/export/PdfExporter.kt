@@ -122,7 +122,7 @@ object PdfExporter {
             } else {
                 lines += Line("  ${house.doors.size} von ${house.totalDoors} Türen", isTitle = false)
                 house.doors.forEach { door ->
-                    lines += Line("    ${door.label}  ·  ${door.outcome.germanTitle}", isTitle = false)
+                    lines += Line("    ${door.label}  ·  ${door.resultLabel}", isTitle = false)
                 }
             }
             house.note?.takeIf(String::isNotBlank)?.let { lines += Line("  Notiz: $it", isTitle = false) }

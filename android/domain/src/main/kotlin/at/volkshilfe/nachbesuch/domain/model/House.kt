@@ -24,17 +24,28 @@ data class House(
     fun tally(scope: DayScope): OutcomeTally = OutcomeTally.from(units, scope)
     val hasOpenWork: Boolean get() = units.any { it.isOpen(DayScope.COMBINED) }
 
+    /**
+     * Records one door result.
+     *
+     * [revisitAt] is only kept for [VisitOutcome.LATER]; every other outcome clears
+     * it, so a door can never keep a stale return time — and therefore a stale
+     * reminder — after being answered.
+     */
     fun recordOutcome(
         unitID: String,
         outcome: VisitOutcome?,
         scope: DayScope,
-        now: Long = System.currentTimeMillis()
+        now: Long = System.currentTimeMillis(),
+        revisitAt: Long? = null
     ): House? {
         if (isDamaged || scope == DayScope.COMBINED) return null
+        val booked = revisitAt.takeIf { outcome == VisitOutcome.LATER }
         val changed = units.map { door ->
             if (door.id != unitID) door else when (scope) {
-                DayScope.DAY_1 -> door.copy(outcome = outcome, updatedAt = outcome?.let { now })
-                DayScope.DAY_2 -> door.copy(day2Outcome = outcome, day2UpdatedAt = outcome?.let { now })
+                DayScope.DAY_1 ->
+                    door.copy(outcome = outcome, updatedAt = outcome?.let { now }, revisitAt = booked)
+                DayScope.DAY_2 ->
+                    door.copy(day2Outcome = outcome, day2UpdatedAt = outcome?.let { now }, day2RevisitAt = booked)
                 DayScope.COMBINED -> door
             }
         }
@@ -59,16 +70,20 @@ data class House(
     fun setOutcomeForOpenDoors(
         outcome: VisitOutcome?,
         scope: DayScope,
-        now: Long = System.currentTimeMillis()
+        now: Long = System.currentTimeMillis(),
+        revisitAt: Long? = null
     ): House? {
         if (isDamaged || scope == DayScope.COMBINED) return null
+        val booked = revisitAt.takeIf { outcome == VisitOutcome.LATER }
         var changedAny = false
         val changed = units.map { door ->
             if (!door.isOpen(scope)) return@map door
             changedAny = true
             when (scope) {
-                DayScope.DAY_1 -> door.copy(outcome = outcome, updatedAt = outcome?.let { now })
-                DayScope.DAY_2 -> door.copy(day2Outcome = outcome, day2UpdatedAt = outcome?.let { now })
+                DayScope.DAY_1 ->
+                    door.copy(outcome = outcome, updatedAt = outcome?.let { now }, revisitAt = booked)
+                DayScope.DAY_2 ->
+                    door.copy(day2Outcome = outcome, day2UpdatedAt = outcome?.let { now }, day2RevisitAt = booked)
                 DayScope.COMBINED -> door
             }
         }

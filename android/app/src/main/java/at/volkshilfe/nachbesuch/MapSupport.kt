@@ -370,6 +370,10 @@ internal class GooglePinBitmapCache(private val context: Context) {
                     VisitOutcome.LATE_NO -> 0xFFFF4848.toInt()
                     VisitOutcome.EARLY_NO -> 0xFFF59126.toInt()
                     VisitOutcome.NOT_HOME -> 0xFFFF4545.toInt()
+                    // Matches `VisitOutcome.LATER.tint`; the pin palette is
+                    // hand-written here because these are ints baked into a
+                    // rendered bitmap cache.
+                    VisitOutcome.LATER -> 0xFF5E5CE6.toInt()
                     null -> 0xFF1E7AD2.toInt()
                 }
                 setShadowLayer(3f * density, 0f, 2f * density, 0x55000000)

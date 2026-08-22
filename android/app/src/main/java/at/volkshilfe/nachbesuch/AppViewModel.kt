@@ -24,6 +24,8 @@ import at.volkshilfe.nachbesuch.domain.model.Gebiet
 import at.volkshilfe.nachbesuch.domain.model.House
 import at.volkshilfe.nachbesuch.domain.model.StoredCoordinate
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
+import at.volkshilfe.nachbesuch.domain.model.writeTargetDay
+import at.volkshilfe.nachbesuch.domain.revisit.label
 import at.volkshilfe.nachbesuch.domain.stats.TerritorySummarizer
 import at.volkshilfe.nachbesuch.domain.stats.TerritorySummary
 import at.volkshilfe.nachbesuch.domain.archive.ArchiveSearchEngine
@@ -34,6 +36,7 @@ import at.volkshilfe.nachbesuch.feature.archive.GebietDraft
 import at.volkshilfe.nachbesuch.feature.list.ListSort
 import at.volkshilfe.nachbesuch.feature.shared.ExportOptions
 import at.volkshilfe.nachbesuch.location.LocationService
+import at.volkshilfe.nachbesuch.reminder.ReminderScheduler
 import at.volkshilfe.nachbesuch.ui.notice.NoticeCenter
 import at.volkshilfe.nachbesuch.ui.theme.AppAccent
 import at.volkshilfe.nachbesuch.ui.theme.AppAppearance
@@ -72,6 +75,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = TerritoryRepository(database)
     private val backupService = BackupService(database)
     private val settings = AppSettingsStore(application)
+    private val reminders = ReminderScheduler(application)
 
     val notices = NoticeCenter(viewModelScope)
     val location = LocationService(application)
@@ -114,6 +118,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _accent = MutableStateFlow(AppAccent.VOLKSHILFE)
     val accent: StateFlow<AppAccent> = _accent.asStateFlow()
+
+    // MARK: Reminders
+
+    private val _dailyListReminders = MutableStateFlow(true)
+    val dailyListReminders: StateFlow<Boolean> = _dailyListReminders.asStateFlow()
 
     // MARK: List view state
 
@@ -228,7 +237,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 // Restore before the first territory list arrives, so the persisted
                 // choice wins over "whichever territory sorted first".
                 stored.selectedGebietID?.let { _activeGebietID.value = it }
+                _dailyListReminders.value = stored.dailyListReminders
             }
+            // Re-applied on every launch rather than only when the toggle changes:
+            // this is also what repairs the schedule after a reboot the boot
+            // receiver missed, or a restore onto a new phone.
+            reminders.ensureChannels()
+            runCatching { reminders.applyDailyListReminders(_dailyListReminders.value) }
             gebiete.collect { values ->
                 val current = _activeGebietID.value
                 if (current == null || values.none { it.id == current }) {
@@ -279,6 +294,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setExportOptions(value: ExportOptions) { _exportOptions.value = value }
+
+    fun setDailyListReminders(enabled: Boolean) {
+        _dailyListReminders.value = enabled
+        runCatching { reminders.applyDailyListReminders(enabled) }
+            .onFailure { notices.report(it, "Erinnerung konnte nicht gesetzt werden") }
+        viewModelScope.launch {
+            runCatching { settings.recordDailyListReminders(enabled) }
+                .onFailure { notices.report(it, "Einstellung konnte nicht gespeichert werden") }
+        }
+    }
 
     // MARK: Territory writes
 
@@ -365,6 +390,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteHouse(id: String) {
+        // Before the row is gone: a fired reminder must never point at an address
+        // that no longer exists.
+        houses.value.firstOrNull { it.id == id }
+            ?.let { house -> runCatching { reminders.cancelAllRevisits(house) } }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { repository.deleteHouse(id) }
                 .onFailure { notices.report(it, "Haus konnte nicht gelöscht werden") }
@@ -395,13 +424,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * The visible picker is a filter only. Writes follow the territory calendar,
      * matching the iOS rule and preventing Tag-2 edits from landing in Tag 1.
      */
-    fun recordOutcome(houseID: String, unitID: String, outcome: VisitOutcome?) {
+    fun recordOutcome(
+        houseID: String,
+        unitID: String,
+        outcome: VisitOutcome?,
+        revisitAt: Long? = null
+    ) {
         val house = houses.value.firstOrNull { it.id == houseID } ?: return
         val writeScope = activeGebiet.value?.writeScope() ?: DayScope.DAY_1
-        val updated = house.recordOutcome(unitID, outcome, writeScope) ?: run {
+        val updated = house.recordOutcome(unitID, outcome, writeScope, revisitAt = revisitAt) ?: run {
             if (house.isDamaged) notices.reportMessage("Dieses Haus ist beschädigt und kann nicht geändert werden.")
             return
         }
+        // Any non-"Später" answer settles the door, so its pending reminder has to
+        // go — otherwise a phone buzzes at 18:00 for a household that joined at 17.
+        runCatching { reminders.syncRevisits(updated, writeScope.writeTargetDay) }
         // Deliberately no undo here. The sheet shows the choice you just made,
         // with the tapped option marked and one tap to clear it — an undo banner
         // on top of that is a second way to say the same thing. iOS offers undo
@@ -410,16 +447,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Applies one status to every open door of a house — the list's quick action. */
-    fun quickStatus(houseID: String, outcome: VisitOutcome) {
+    fun quickStatus(houseID: String, outcome: VisitOutcome, revisitAt: Long? = null) {
         val house = houses.value.firstOrNull { it.id == houseID } ?: return
         val writeScope = activeGebiet.value?.writeScope() ?: DayScope.DAY_1
-        val updated = house.setOutcomeForOpenDoors(outcome, writeScope) ?: run {
+        val updated = house.setOutcomeForOpenDoors(outcome, writeScope, revisitAt = revisitAt) ?: run {
             if (house.isDamaged) notices.reportMessage("Dieses Haus ist beschädigt und kann nicht geändert werden.")
             return
         }
+        runCatching { reminders.syncRevisits(updated, writeScope.writeTargetDay) }
         // Concrete, so it is clear what is being undone after the list re-sorts
         // and the row has moved.
-        offerUndo(UndoEntry(house.id, house.units, "${house.address} → ${outcome.germanTitle}"))
+        offerUndo(UndoEntry(house.id, house.units, "${house.address} → ${outcome.label(revisitAt)}"))
         write(updated, "Status konnte nicht gespeichert werden")
     }
 
@@ -430,7 +468,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         undoJob?.cancel()
         _undo.value = null
         val house = houses.value.firstOrNull { it.id == entry.houseID } ?: return
-        write(house.restore(entry.previousUnits), "Rückgängig fehlgeschlagen")
+        val restored = house.restore(entry.previousUnits)
+        // Undoing a "Später" takes its reminder with it, and re-books any time the
+        // undone write had overwritten. Re-deriving the whole set is simpler and
+        // safer than reasoning about which direction the undo went.
+        val writeScope = activeGebiet.value?.writeScope() ?: DayScope.DAY_1
+        runCatching { reminders.syncRevisits(restored, writeScope.writeTargetDay) }
+        write(restored, "Rückgängig fehlgeschlagen")
     }
 
     fun dismissUndo() {

@@ -16,14 +16,17 @@ import org.junit.Test
 
 class DomainSemanticsTest {
     @Test fun dayTwoDoesNotFallBackForStatistics() {
-        val door = DoorResult("A", "Haushalt", VisitOutcome.NOT_HOME, 1L, null, null)
+        val door = DoorResult("A", "Haushalt", VisitOutcome.NOT_HOME, 1L)
         assertNull(door.result(DayScope.DAY_2))
         assertNull(door.displayOutcome(DayScope.DAY_2))
         assertTrue(door.isOpen(DayScope.DAY_2))
     }
 
     @Test fun settledDoorsNeedNoRevisit() {
-        val door = DoorResult("A", "Haushalt", VisitOutcome.NOT_HOME, 1L, VisitOutcome.JOINED, 2L)
+        val door = DoorResult(
+            "A", "Haushalt", VisitOutcome.NOT_HOME, 1L,
+            day2Outcome = VisitOutcome.JOINED, day2UpdatedAt = 2L
+        )
         assertEquals(VisitOutcome.JOINED, door.result(DayScope.DAY_2))
         assertFalse(door.isOpen(DayScope.DAY_2))
     }

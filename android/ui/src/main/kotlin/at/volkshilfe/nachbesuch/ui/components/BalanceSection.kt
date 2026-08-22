@@ -146,7 +146,9 @@ private fun MetricGrid(tally: OutcomeTally) {
         VisitOutcome.JOINED to tally.joined,
         VisitOutcome.EARLY_NO to tally.earlyNo,
         VisitOutcome.LATE_NO to tally.lateNo
-    )
+        // Only when it happened: an always-visible "0 Später" would push the four
+        // results the report is about onto a third row for nothing.
+    ) + if (tally.later > 0) listOf(VisitOutcome.LATER to tally.later) else emptyList()
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         tiles.chunked(2).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -186,18 +188,22 @@ private fun MetricTile(outcome: VisitOutcome, value: Int, modifier: Modifier = M
 /**
  * The outcome distribution as horizontal bars.
  *
- * Drawn by hand rather than pulling in a charting library: four bars with a shared
+ * Drawn by hand rather than pulling in a charting library: a handful of bars with a shared
  * maximum is the whole requirement, and the iOS side uses Swift Charts only because
  * it ships with the platform.
  */
 @Composable
 private fun OutcomeChart(tally: OutcomeTally) {
-    val values = VisitOutcome.entries.map { outcome ->
+    // "Später" joins the chart only when the territory actually used it, so a
+    // report that never postponed a door does not carry an always-empty fifth bar.
+    val shown = if (tally.later > 0) VisitOutcome.entries else VisitOutcome.primary
+    val values = shown.map { outcome ->
         outcome to when (outcome) {
             VisitOutcome.NOT_HOME -> tally.notHome
             VisitOutcome.EARLY_NO -> tally.earlyNo
             VisitOutcome.LATE_NO -> tally.lateNo
             VisitOutcome.JOINED -> tally.joined
+            VisitOutcome.LATER -> tally.later
         }
     }
     val maximum = (values.maxOfOrNull { it.second } ?: 0).coerceAtLeast(1)

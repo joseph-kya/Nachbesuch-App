@@ -88,6 +88,11 @@ struct BalanceSection: View {
             metricTile(outcome: .joined, value: tally.joined)
             metricTile(outcome: .earlyNo, value: tally.earlyNo)
             metricTile(outcome: .lateNo, value: tally.lateNo)
+            // Only when it happened: an always-visible "0 Später" would push the
+            // four results the report is about onto a second row for nothing.
+            if tally.later > 0 {
+                metricTile(outcome: .later, value: tally.later)
+            }
         }
     }
 
@@ -115,7 +120,7 @@ struct BalanceSection: View {
     }
 
     private var chart: some View {
-        Chart(VisitOutcome.allCases) { outcome in
+        Chart(chartOutcomes) { outcome in
             BarMark(
                 x: .value("Anzahl", count(for: outcome)),
                 y: .value("Ergebnis", outcome.title)
@@ -128,10 +133,15 @@ struct BalanceSection: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Ergebnisverteilung")
         .accessibilityValue(
-            VisitOutcome.allCases
+            chartOutcomes
                 .map { "\($0.title): \(count(for: $0))" }
                 .joined(separator: ", ")
         )
+    }
+
+    /// The four results, plus "Später" when the territory actually used it.
+    private var chartOutcomes: [VisitOutcome] {
+        tally.later > 0 ? VisitOutcome.allCases : VisitOutcome.primary
     }
 
     private func count(for outcome: VisitOutcome) -> Int {
@@ -140,6 +150,7 @@ struct BalanceSection: View {
         case .earlyNo: tally.earlyNo
         case .lateNo: tally.lateNo
         case .joined: tally.joined
+        case .later: tally.later
         }
     }
 

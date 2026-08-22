@@ -6,9 +6,17 @@ struct NachbesuchApp: App {
     @State private var notices = AppNoticeCenter()
     private let store = AppStore.load()
 
+    /// The standing "send the list" reminder. Mirrored into `AppStorage` by the
+    /// settings sheet; read here so the schedule is re-applied on every launch,
+    /// which is also what repairs it after a restore to a new device.
+    @AppStorage(ReminderSettings.dailyListKey) private var dailyListRemindersEnabled = true
+
     init() {
         // Exports from previous launches are dead weight in `tmp`.
         ExportScratch.sweep()
+        // Must be set before any scene connects, or a reminder arriving in the
+        // first seconds of a launch is swallowed.
+        ReminderPresenter.install()
     }
 
     var body: some Scene {
@@ -27,6 +35,9 @@ struct NachbesuchApp: App {
             // The app is German-only; pinning the locale keeps a weekday from being
             // rendered in German next to a date rendered in the device language.
             .environment(\.locale, Locale(identifier: "de_AT"))
+            .task(id: dailyListRemindersEnabled) {
+                await ReminderService.applyDailyListReminders(enabled: dailyListRemindersEnabled)
+            }
         }
         .modelContainer(store.container)
     }

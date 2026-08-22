@@ -106,15 +106,23 @@ final class House {
 
     // MARK: - Mutations
 
-    func setOutcome(_ outcome: VisitOutcome?, for unitID: UUID, day: Int) {
+    /// Records one door's result.
+    ///
+    /// `revisitAt` is only kept for `.later`; every other outcome clears it, so a
+    /// door can never keep a stale return time — and therefore a stale reminder —
+    /// after being answered.
+    func setOutcome(_ outcome: VisitOutcome?, for unitID: UUID, day: Int, revisitAt: Date? = nil) {
         guard var copy = decodedUnits(),
               let index = copy.firstIndex(where: { $0.id == unitID }) else { return }
+        let bookedTime = outcome == .later ? revisitAt : nil
         if day == 2 {
             copy[index].day2Outcome = outcome
             copy[index].day2UpdatedAt = outcome == nil ? nil : .now
+            copy[index].day2RevisitAt = bookedTime
         } else {
             copy[index].outcome = outcome
             copy[index].updatedAt = outcome == nil ? nil : .now
+            copy[index].revisitAt = bookedTime
         }
         writeUnits(copy)
     }
@@ -125,17 +133,20 @@ final class House {
     /// for. The old implementation asked `outcome(for: 2)`, which fell back to the
     /// day-1 value and therefore skipped exactly those doors.
     @discardableResult
-    func setOutcomeForOpenDoors(_ outcome: VisitOutcome, day: Int) -> Int {
+    func setOutcomeForOpenDoors(_ outcome: VisitOutcome, day: Int, revisitAt: Date? = nil) -> Int {
         guard var copy = decodedUnits() else { return 0 }
         let scope: DayScope = day == 2 ? .day2 : .day1
+        let bookedTime = outcome == .later ? revisitAt : nil
         var changed = 0
         for index in copy.indices where copy[index].isOpen(in: scope) {
             if day == 2 {
                 copy[index].day2Outcome = outcome
                 copy[index].day2UpdatedAt = .now
+                copy[index].day2RevisitAt = bookedTime
             } else {
                 copy[index].outcome = outcome
                 copy[index].updatedAt = .now
+                copy[index].revisitAt = bookedTime
             }
             changed += 1
         }

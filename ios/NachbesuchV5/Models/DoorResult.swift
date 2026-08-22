@@ -14,24 +14,38 @@ nonisolated struct DoorResult: Codable, Identifiable, Hashable, Sendable {
     /// The day-1 result.
     var outcome: VisitOutcome?
     var updatedAt: Date?
+    /// When to come back, for a `.later` result on day 1. `nil` for every other
+    /// outcome.
+    ///
+    /// Added after the storage format froze. It is a *new optional key*, which both
+    /// `JSONDecoder` and Android's `ignoreUnknownKeys` reader treat as absent →
+    /// `nil`, so blobs written by earlier builds still decode and blobs written by
+    /// this build still open in them.
+    var revisitAt: Date?
     /// The day-2 result. `nil` means "not revisited yet", which is meaningful.
     var day2Outcome: VisitOutcome?
     var day2UpdatedAt: Date?
+    /// The day-2 twin of `revisitAt`.
+    var day2RevisitAt: Date?
 
     nonisolated init(
         id: UUID = UUID(),
         label: String,
         outcome: VisitOutcome? = nil,
         updatedAt: Date? = nil,
+        revisitAt: Date? = nil,
         day2Outcome: VisitOutcome? = nil,
-        day2UpdatedAt: Date? = nil
+        day2UpdatedAt: Date? = nil,
+        day2RevisitAt: Date? = nil
     ) {
         self.id = id
         self.label = label
         self.outcome = outcome
         self.updatedAt = updatedAt
+        self.revisitAt = revisitAt
         self.day2Outcome = day2Outcome
         self.day2UpdatedAt = day2UpdatedAt
+        self.day2RevisitAt = day2RevisitAt
     }
 
     // MARK: Strict accessors — for statistics
@@ -43,15 +57,26 @@ nonisolated struct DoorResult: Codable, Identifiable, Hashable, Sendable {
         day == 2 ? day2Outcome : outcome
     }
 
+    /// The agreed return time recorded on the given campaign day.
+    nonisolated func revisitTime(on day: Int) -> Date? {
+        day == 2 ? day2RevisitAt : revisitAt
+    }
+
     /// The door's final state across the whole territory.
     nonisolated var finalOutcome: VisitOutcome? {
         day2Outcome ?? outcome
     }
 
+    /// The return time that goes with `finalOutcome`, so a pin or row never shows a
+    /// day-1 time next to a day-2 status.
+    nonisolated var finalRevisitAt: Date? {
+        day2Outcome == nil ? revisitAt : day2RevisitAt
+    }
+
     /// True when day 1 left this door open and the revisit hasn't happened yet —
     /// i.e. exactly the work a second day exists to do.
     nonisolated var isPendingRevisit: Bool {
-        outcome == .notHome && day2Outcome == nil
+        outcome?.isOpenWork == true && day2Outcome == nil
     }
 
     /// What this door contributes to a report for `scope`.
@@ -80,9 +105,18 @@ nonisolated struct DoorResult: Codable, Identifiable, Hashable, Sendable {
             return outcome
         case .day2:
             if let day2Outcome { return day2Outcome }
-            return outcome == .notHome ? nil : outcome
+            return outcome?.isOpenWork == true ? nil : outcome
         case .combined:
             return finalOutcome
+        }
+    }
+
+    /// The return time belonging to `displayOutcome(in:)`.
+    nonisolated func displayRevisitAt(in scope: DayScope) -> Date? {
+        switch scope {
+        case .day1: return outcome == .later ? revisitAt : nil
+        case .day2: return day2Outcome == .later ? day2RevisitAt : nil
+        case .combined: return finalOutcome == .later ? finalRevisitAt : nil
         }
     }
 
@@ -90,11 +124,11 @@ nonisolated struct DoorResult: Codable, Identifiable, Hashable, Sendable {
     nonisolated func isOpen(in scope: DayScope) -> Bool {
         switch scope {
         case .day1:
-            return outcome == nil || outcome == .notHome
+            return outcome == nil || outcome?.isOpenWork == true
         case .day2:
             return isPendingRevisit || (outcome == nil && day2Outcome == nil)
         case .combined:
-            return finalOutcome == nil || finalOutcome == .notHome
+            return finalOutcome == nil || finalOutcome?.isOpenWork == true
         }
     }
 

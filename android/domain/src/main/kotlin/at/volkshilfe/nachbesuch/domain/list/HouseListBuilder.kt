@@ -5,6 +5,7 @@ import at.volkshilfe.nachbesuch.domain.model.House
 import at.volkshilfe.nachbesuch.domain.model.MapPinSnapshotBuilder
 import at.volkshilfe.nachbesuch.domain.model.OutcomeTally
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
+import at.volkshilfe.nachbesuch.domain.revisit.RevisitPlanner
 import java.text.Normalizer
 import java.util.Locale
 import kotlin.math.cos
@@ -34,6 +35,8 @@ data class HouseRow(
     val longitude: Double,
     /** When the most recent door of this house was recorded. */
     val recordedAt: Long?,
+    /** The earliest return time booked on this house, when any door is "Später". */
+    val nextRevisitAt: Long? = null,
     /** Metres from the user, when a position is known. */
     val distance: Double? = null
 ) {
@@ -47,8 +50,11 @@ data class HouseRow(
 
     /** What a screen reader reads instead of an emoji. */
     val accessibilityValue: String
-        get() = if (isSingleDoor) (markerOutcome?.germanTitle ?: "Noch kein Status")
-        else "$completedCount von $unitCount Türen erledigt, $openCount offen"
+        get() {
+            val base = if (isSingleDoor) (markerOutcome?.germanTitle ?: "Noch kein Status")
+            else "$completedCount von $unitCount Türen erledigt, $openCount offen"
+            return nextRevisitAt?.let { "$base, zurück um ${RevisitPlanner.clockText(it)}" } ?: base
+        }
 }
 
 /** The list's status filters, ported from the iOS `ListFilter`. */
@@ -135,6 +141,7 @@ object HouseListBuilder {
             // One implementation of the pin priority, shared with the map: a second
             // copy here is what let the list and the map disagree in Tag-2 mode.
             markerOutcome = MapPinSnapshotBuilder.markerOutcome(doors, scope),
+            nextRevisitAt = doors.mapNotNull { it.displayRevisitAt(scope) }.minOrNull(),
             unitCount = doors.size,
             completedCount = tally.completed,
             followUpCount = tally.notHome,

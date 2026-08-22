@@ -144,6 +144,9 @@ final class PinArtCache {
         case .earlyNo: .systemOrange
         case .lateNo: UIColor(red: 0.52, green: 0.54, blue: 0.58, alpha: 1)
         case .joined: .systemPink
+        // Matches `VisitOutcome.later.tint`; the pin palette is hand-written here
+        // because these are `UIColor`s baked into a rendered image cache.
+        case .later: .systemIndigo
         }
     }
 
