@@ -54,7 +54,7 @@ struct MapScreen: View {
     /// Measured heights of the floating chrome, so the map's legal attribution can be
     /// kept clear of it at any text size. See `chromeInsets`.
     @State private var topChromeHeight: CGFloat = 132
-    @State private var bottomChromeHeight: CGFloat = 108
+    @State private var bottomChromeHeight: CGFloat = 96
 
     // Presentation — one route, one sheet. Six independent `isPresented` flags on a
     // single view is how the importer→confirmation race got in.
@@ -459,17 +459,29 @@ struct MapScreen: View {
     /// logo and legal link — obscuring them is an App Review rejection.
     ///
     /// **Measured, not assumed.** These were hardcoded at 132/108, which is only
-    /// correct at the default text size. At accessibility sizes the summary card is
+    /// correct at the default text size. In normal browsing, the location button
+    /// sits on the right and must not push the left-aligned Apple attribution up by
+    /// its full height. MapKit adds the tab bar's safe-area clearance on top of the
+    /// margin, so a 96 pt lane places the attribution directly above the full-width
+    /// action bar. Route panels really do span that space, so only
+    /// those modes use the measured height. At accessibility sizes the summary card is
     /// several times taller and the action bar wraps, so MapKit went on positioning
     /// the attribution as though the chrome were 132 pt tall and the "Rechtl.
     /// Informationen" link ended up underneath the floating buttons — the exact
     /// rejection this comment warns about. The fallbacks below are the old constants,
     /// used only for the frames before the chrome has been measured.
     private var chromeInsets: UIEdgeInsets {
-        UIEdgeInsets(
+        let attributionBottomInset: CGFloat
+        switch routePhase {
+        case .off:
+            attributionBottomInset = 96
+        case .choosingStart, .pickingOnMap, .running:
+            attributionBottomInset = max(bottomChromeHeight, 96)
+        }
+        return UIEdgeInsets(
             top: max(topChromeHeight, 132),
             left: 7,
-            bottom: max(bottomChromeHeight, 108),
+            bottom: attributionBottomInset,
             right: 7
         )
     }

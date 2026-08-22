@@ -128,8 +128,11 @@ struct ExportSheet: View {
             } else {
                 if let pdfURL {
                     ShareLink(item: pdfURL) {
-                        Label("PDF teilen", systemImage: "doc.text")
-                            .frame(minHeight: AppTouch.minimum)
+                        exportAction(
+                            title: "PDF-Bericht",
+                            subtitle: "Für Ablage und Ausdruck",
+                            systemImage: "doc.richtext"
+                        )
                     }
                 } else {
                     HStack {
@@ -142,12 +145,45 @@ struct ExportSheet: View {
 
                 if let document {
                     ShareLink(item: DayExportService.makeText(document)) {
-                        Label("Als Text teilen", systemImage: "text.alignleft")
-                            .frame(minHeight: AppTouch.minimum)
+                        exportAction(
+                            title: "Textbericht",
+                            subtitle: "Lesbar in Mail und Messenger",
+                            systemImage: "text.alignleft"
+                        )
+                    }
+                    ShareLink(item: DayExportService.makeLegacyText(document)) {
+                        exportAction(
+                            title: "Legacy-Adressliste",
+                            subtitle: "Straßen, Hausnummern und Statussymbole",
+                            systemImage: "list.bullet.rectangle"
+                        )
                     }
                 }
             }
+        } header: {
+            Text("Format")
+        } footer: {
+            Text("Die Legacy-Liste entspricht dem früheren kompakten Adressschema und enthält keine Notizen.")
         }
+    }
+
+    private func exportAction(title: String, subtitle: String, systemImage: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.title3)
+                .foregroundStyle(.tint)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).fontWeight(.medium)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "square.and.arrow.up")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(minHeight: AppTouch.minimum)
+        .contentShape(Rectangle())
     }
 
     // MARK: Build

@@ -26,6 +26,8 @@ nonisolated struct ExportDocument: Sendable {
     let title: String
     let place: String
     let dateRange: String
+    /// Compact, numeric campaign date used by the old field-list format.
+    let legacyDateLabel: String
     let scopeLabel: String
     let generatedAt: Date
     /// In the order the round actually happened.
@@ -51,6 +53,9 @@ nonisolated struct ExportHouse: Sendable {
     let recordedAt: Date?
     /// "Dabei" for a single household, "3 von 8 Türen" for an apartment building.
     let result: String
+    /// The compact status used by the legacy field list. Empty for apartment
+    /// buildings, whose individual doors carry their own symbols.
+    let symbol: String
     /// Empty for a single household — the result already says everything.
     let doors: [ExportDoor]
 }
@@ -58,6 +63,7 @@ nonisolated struct ExportHouse: Sendable {
 nonisolated struct ExportDoor: Sendable {
     let label: String
     let result: String
+    let symbol: String
     let recordedAt: Date?
 }
 
@@ -102,6 +108,7 @@ enum DayExportService {
         let title = gebiet.displayName
         let place = gebiet.districtOrCity
         let dateRange = gebiet.formattedDateRange
+        let legacyDateLabel = legacyDateLabel(for: gebiet, scope: scope)
         let isTwoDay = gebiet.isTwoDay
         let raw = houses.map {
             RawExportHouse(
@@ -113,7 +120,7 @@ enum DayExportService {
         }
         return await Task.detached(priority: .userInitiated) {
             build(
-                title: title, place: place, dateRange: dateRange,
+                title: title, place: place, dateRange: dateRange, legacyDateLabel: legacyDateLabel,
                 isTwoDay: isTwoDay, raw: raw, scope: scope, options: options
             )
         }.value
@@ -123,6 +130,7 @@ enum DayExportService {
         title: String,
         place: String,
         dateRange: String,
+        legacyDateLabel: String,
         isTwoDay: Bool,
         raw: [RawExportHouse],
         scope: DayScope,
@@ -170,6 +178,7 @@ enum DayExportService {
                         ExportDoor(
                             label: $0.0.label,
                             result: $0.1.title,
+                            symbol: $0.1.emoji,
                             recordedAt: $0.0.timestamp(in: scope)
                         )
                     }
@@ -177,6 +186,7 @@ enum DayExportService {
                         ExportDoor(
                             label: $0.label,
                             result: $0.recordedOutcome(in: scope)?.title ?? "Ohne Status",
+                            symbol: $0.recordedOutcome(in: scope)?.emoji ?? "○",
                             recordedAt: $0.timestamp(in: scope)
                         )
                     }
@@ -195,6 +205,7 @@ enum DayExportService {
                     // Arrival time: the first door recorded here.
                     recordedAt: recorded.compactMap { $0.0.timestamp(in: scope) }.min(),
                     result: result,
+                    symbol: isSingleHousehold ? (recorded.first?.1.emoji ?? "○") : "",
                     doors: exportDoors
                 )
             )
@@ -218,6 +229,7 @@ enum DayExportService {
             title: title,
             place: place,
             dateRange: dateRange,
+            legacyDateLabel: legacyDateLabel,
             scopeLabel: scopeLabel,
             generatedAt: .now,
             houses: exported,
@@ -226,6 +238,23 @@ enum DayExportService {
             totalHouses: raw.count,
             visitedOnly: options.visitedOnly
         )
+    }
+
+    private static func legacyDateLabel(for gebiet: Gebiet, scope: DayScope) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_AT")
+        formatter.dateFormat = "dd.MM.yyyy"
+        switch scope {
+        case .day1:
+            return formatter.string(from: gebiet.day1Date)
+        case .day2:
+            return formatter.string(from: gebiet.day2Date ?? gebiet.day1Date)
+        case .combined:
+            guard gebiet.isTwoDay, let day2 = gebiet.day2Date else {
+                return formatter.string(from: gebiet.day1Date)
+            }
+            return "\(formatter.string(from: gebiet.day1Date))–\(formatter.string(from: day2))"
+        }
     }
 
     // MARK: - Text
@@ -258,6 +287,55 @@ enum DayExportService {
             }
         }
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Compact field-list format kept for teams that still paste the old address
+    /// overview into Notes or a messenger. Street order follows the actual round.
+    nonisolated static func makeLegacyText(_ document: ExportDocument) -> String {
+        var lines = [document.legacyDateLabel, ""]
+        var groups: [(street: String, houses: [ExportHouse])] = []
+
+        for house in document.houses {
+            let street = StreetNameParser.street(from: house.address)
+            if let index = groups.firstIndex(where: { $0.street == street }) {
+                groups[index].houses.append(house)
+            } else {
+                groups.append((street, [house]))
+            }
+        }
+
+        for group in groups {
+            var compact = group.street
+            var hasCompactHouse = false
+            for house in group.houses {
+                let number = legacyHouseNumber(from: house.address, street: group.street)
+                if house.doors.isEmpty {
+                    compact += " \(number)\(house.symbol)"
+                    hasCompactHouse = true
+                } else {
+                    if hasCompactHouse { lines.append(compact) }
+                    lines.append("\(group.street) \(number):")
+                    lines.append(house.doors.map { "\(legacyDoorLabel($0.label))\($0.symbol)" }.joined(separator: " "))
+                    compact = group.street
+                    hasCompactHouse = false
+                }
+            }
+            if hasCompactHouse { lines.append(compact) }
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private nonisolated static func legacyHouseNumber(from address: String, street: String) -> String {
+        let head = address.split(separator: ",", maxSplits: 1).first.map(String.init) ?? address
+        let remainder = head.dropFirst(min(street.count, head.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return remainder.isEmpty ? head.trimmingCharacters(in: .whitespacesAndNewlines) : remainder
+    }
+
+    private nonisolated static func legacyDoorLabel(_ label: String) -> String {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("tür ") { return String(trimmed.dropFirst(4)) }
+        return trimmed
     }
 
     // MARK: - PDF

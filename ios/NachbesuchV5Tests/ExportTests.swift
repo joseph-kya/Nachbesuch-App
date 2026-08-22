@@ -206,6 +206,26 @@ struct ExportTests {
         #expect(!text.contains("VOLKSHILFE"))
     }
 
+    @Test("Legacy-Export gruppiert Straßen und nutzt Statussymbole")
+    func legacyTextMatchesFieldList() async {
+        let gebiet = makeGebiet()
+        let houses = [
+            addHouse(to: gebiet, address: "Neugasse 3", doors: [DoorResult(label: "Haushalt", outcome: .earlyNo)]),
+            addHouse(to: gebiet, address: "Neugasse 7", doors: [DoorResult(label: "Haushalt", outcome: .notHome)]),
+            addHouse(to: gebiet, address: "Hubertusstraße 44", doors: [
+                DoorResult(label: "Tür 1", outcome: .notHome),
+                DoorResult(label: "Tür 2", outcome: .joined)
+            ])
+        ]
+        let document = await DayExportService.makeDocument(
+            gebiet: gebiet, houses: houses, scope: .combined, options: ExportOptions()
+        )
+        let legacy = DayExportService.makeLegacyText(document)
+        #expect(legacy.contains("Neugasse 3🚫 7🔴"))
+        #expect(legacy.contains("Hubertusstraße 44:\n1🔴 2❤️‍🔥"))
+        #expect(!legacy.contains("Notiz:"))
+    }
+
     @Test("Leerer Export sagt das klar und erzeugt kein PDF-Gerüst")
     func emptyExportIsExplicit() async {
         let gebiet = makeGebiet()

@@ -117,7 +117,6 @@ struct ArchiveScreen: View {
             debouncedQuery = searchText
         }
         .onChange(of: debouncedQuery) { _, _ in recomputeResults() }
-        .onChange(of: filter) { _, _ in recomputeResults() }
     }
 
     /// A native `List` combines UIKit cell reuse, elastic section headers, searchable
@@ -136,7 +135,7 @@ struct ArchiveScreen: View {
                         contextLabel: "Archiv",
                         onSelect: { id in
                             guard let value = ArchiveFilter(rawValue: id) else { return }
-                            withAnimation(.appFeedback(reduceMotion: reduceMotion)) { filter = value }
+                            applyFilter(value)
                         }
                     )
 
@@ -398,12 +397,30 @@ struct ArchiveScreen: View {
     /// Memoized: the search used to run inside `body`, so it re-executed against an
     /// unchanged query on every keystroke, filter tap and notice.
     private func recomputeResults() {
+        results = searchResults(filter: filter)
+    }
+
+    private func searchResults(filter: ArchiveFilter) -> [ArchiveSearchResult] {
         let order = gebiete.map(\.id)
         var found = ArchiveSearchEngine.search(query: debouncedQuery, index: index, order: order)
         if filter == .open {
             found = found.filter { (index.entry(for: $0.gebietID)?.overall.open ?? 0) > 0 }
         }
-        results = found
+        return found
+    }
+
+    /// Balance visibility and filtered cards change atomically and without a layout
+    /// animation. Animating removal of the chart's glass card leaves a compositor
+    /// snapshot behind for several frames, so the balance flashes over the new list.
+    private func applyFilter(_ value: ArchiveFilter) {
+        guard filter != value else { return }
+        let nextResults = searchResults(filter: value)
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            filter = value
+            results = nextResults
+        }
     }
 
     // MARK: Routing
