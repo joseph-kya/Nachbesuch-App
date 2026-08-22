@@ -1,11 +1,18 @@
 # Status
 
-Last updated: 2026-08-21T02:10:00+02:00 · HEAD: e8a5c73 · Tests: iOS 78 passing, 1 skipped; Android domain 11 passing
+Last updated: 2026-08-22T16:40:00+02:00 · HEAD: d8750dc · Tests: iOS 78 passing, 1 skipped; Android 31 domain + 5 data passing
 
 ## In flight
 - None.
 
 ## Done
+- [x] Android UI-Parität · `d8750dc` · Oberfläche neu gebaut, Domain und Daten
+  aus der Parallel-Sitzung übernommen. Einstellungen, NoticeCenter, Undo,
+  Legende, Bilanz, Filter, Gebietseditor, Exportoptionen, App-Icon und eine
+  dunkle Kartenpalette sind dazugekommen; drei echte Fehler behoben
+  (Straßenumbruch, gestauchter Inhalt unter der Tableiste, ignorierte
+  Exportoptionen). Tests: 31 Domain, 5 Data. Am Emulator geprüft
+  (Pixel 10a, API 36). Die iOS-App ist unverändert.
 - [x] Android visual quality pass · `e8a5c73` · full neutral colour scheme replacing
   the four-token Material-baseline override (was leaking violet into every
   surfaceContainer/chip/nav-bar tone), bolder type ramp, unified `ChromePanel`/

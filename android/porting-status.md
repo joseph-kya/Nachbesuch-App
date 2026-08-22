@@ -50,6 +50,36 @@
 - [ ] M12 remainder: fixture round-trip, accessibility audit, baseline profile and
   release signing
 
+## UI-Parität mit iOS (2026-08-22)
+
+Die Oberfläche ist neu gebaut; Domain und Daten blieben bestehen. Neu gegenüber
+dem vorherigen Stand:
+
+- [x] Einstellungen: Darstellung (System/Hell/Dunkel) und vier Akzentfarben,
+  über DataStore gesichert — vorher gab es auf Android gar keine Einstellungen
+- [x] NoticeCenter samt Banner; jeder Schreibpfad meldet Fehler, statt sie zu
+  verschlucken
+- [x] Undo für Statuseingaben
+- [x] Statuslegende samt Gestenhilfe
+- [x] Liste: Statusfilter mit Trefferzahlen, einklappbare Straßenabschnitte mit
+  Fortschritt, Sortierung nach offener Arbeit oder Entfernung, Schnellstatus
+  per Langdruck, Leerzustand je Filter
+- [x] Archiv: Bilanz mit Fortschritt, Kacheln und Diagramm, Gruppierung nach
+  Kampagnentag, gewichtete Suche, Gebiete bearbeiten
+- [x] Detailblatt: Adresse und Notiz bearbeitbar, Türen umbenennbar,
+  Sammelaktion, Zeitstempel, Fußroute, Adresse kopieren
+- [x] Export mit Zeitraum, "nur besuchte Adressen" und "Notizen einbeziehen"
+- [x] Gemeinsame Positionsquelle (LocationService) für Karte und Liste
+- [x] Adaptives App-Icon in der Bildsprache des iOS-Icons
+- [x] Karte folgt dem Farbschema (dunkle Palette im Dunkelmodus)
+
+Behobene Fehler: Straßenname brach am falschen Muster um; die Tableiste
+stauchte den Inhalt und hinterließ schwarze Kerben; die Exportoptionen
+erreichten den Dokumentenbau nie.
+
+MapSurface.kt (1.273 Zeilen) ist in MapSurface/MapChrome/MapDialogs/MapSupport
+aufgeteilt, AppScreens.kt in eigene Screens unter `feature/`.
+
 The new project is intentionally not sharing code with the old Android app. It is a
 fresh implementation from `porting.md`; the unchecked items are explicit follow-up
 work rather than silently substituted behaviour.
