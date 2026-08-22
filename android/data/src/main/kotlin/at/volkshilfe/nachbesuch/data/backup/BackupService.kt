@@ -2,9 +2,11 @@ package at.volkshilfe.nachbesuch.data.backup
 
 import androidx.room.withTransaction
 import at.volkshilfe.nachbesuch.data.json.AppBackup
+import at.volkshilfe.nachbesuch.data.json.AppJson
 import at.volkshilfe.nachbesuch.data.json.BackupCodec
 import at.volkshilfe.nachbesuch.data.json.toBackup
 import at.volkshilfe.nachbesuch.data.local.AppDatabase
+import at.volkshilfe.nachbesuch.data.local.toDomain
 import at.volkshilfe.nachbesuch.data.local.toEntity
 import at.volkshilfe.nachbesuch.domain.model.Gebiet
 import at.volkshilfe.nachbesuch.domain.model.House
@@ -13,11 +15,22 @@ import kotlinx.coroutines.withContext
 
 data class BackupImportResult(val insertedGebiete: Int, val insertedHouses: Int, val skippedHouses: Int)
 
+/** Raised instead of silently exporting a house whose doors cannot be decoded. */
+class UnreadableHouseException(val address: String) :
+    IllegalStateException("Unlesbares Haus: $address")
+
 class BackupService(private val database: AppDatabase) {
+    /**
+     * Strict like the iOS exporter: one damaged house aborts the whole backup,
+     * because a backup that quietly drops door data is worse than no backup.
+     */
     suspend fun export(gebiete: List<Gebiet>, houses: List<House>): String = withContext(Dispatchers.Default) {
+        val damaged = houses.firstOrNull { it.isDamaged }
+            ?: houses.firstOrNull { it.units.isEmpty() }
+        if (damaged != null) throw UnreadableHouseException(damaged.address)
         BackupCodec.encode(
             AppBackup(
-                exportedAt = java.time.Instant.now().toString(),
+                exportedAt = AppJson.isoNow(),
                 gebiete = gebiete.map(Gebiet::toBackup),
                 houses = houses.map(House::toBackup)
             )
@@ -32,10 +45,27 @@ class BackupService(private val database: AppDatabase) {
         database.withTransaction {
             backup.gebiete.forEach { candidate ->
                 val id = candidate.id.uppercase()
-                if (database.gebietDao().find(id) == null) {
+                val existing = database.gebietDao().find(id)
+                if (existing == null) {
                     runCatching { candidate.toDomain().toEntity() }.getOrNull()?.let {
                         database.gebietDao().upsert(it)
                         territoryCount++
+                    } ?: run { skipped++ }
+                } else {
+                    // Merge semantics from the iOS importer: backfill what the
+                    // existing territory is missing instead of skipping outright.
+                    runCatching { candidate.toDomain() }.getOrNull()?.let { incoming ->
+                        val current = existing.toDomain() ?: return@let
+                        val needsBoundary = current.boundary.isEmpty() && incoming.boundary.isNotEmpty()
+                        val needsName = current.name.isBlank() && incoming.name.isNotBlank()
+                        if (needsBoundary || needsName) {
+                            database.gebietDao().upsert(
+                                current.copy(
+                                    boundary = if (needsBoundary) incoming.boundary else current.boundary,
+                                    name = if (needsName) incoming.name else current.name
+                                ).touch().toEntity()
+                            )
+                        }
                     }
                 }
             }

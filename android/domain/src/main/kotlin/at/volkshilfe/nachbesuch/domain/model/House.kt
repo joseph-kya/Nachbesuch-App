@@ -55,5 +55,45 @@ data class House(
         )
     }
 
+    /** Writes one outcome to every door that is still open in [scope]. */
+    fun setOutcomeForOpenDoors(
+        outcome: VisitOutcome?,
+        scope: DayScope,
+        now: Long = System.currentTimeMillis()
+    ): House? {
+        if (isDamaged || scope == DayScope.COMBINED) return null
+        var changedAny = false
+        val changed = units.map { door ->
+            if (!door.isOpen(scope)) return@map door
+            changedAny = true
+            when (scope) {
+                DayScope.DAY_1 -> door.copy(outcome = outcome, updatedAt = outcome?.let { now })
+                DayScope.DAY_2 -> door.copy(day2Outcome = outcome, day2UpdatedAt = outcome?.let { now })
+                DayScope.COMBINED -> door
+            }
+        }
+        if (!changedAny) return this
+        return copy(units = changed, updatedAt = monotonicTimestamp(now))
+    }
+
+    /** Undo helper: puts a previous units state back without losing damage flags. */
+    fun restore(units: List<DoorResult>, now: Long = System.currentTimeMillis()): House =
+        copy(units = units, updatedAt = monotonicTimestamp(now))
+
+    /** Door labels stay editable after creation, like on iOS. */
+    fun renameUnit(unitID: String, label: String, now: Long = System.currentTimeMillis()): House? {
+        if (isDamaged) return null
+        val clean = label.trim()
+        if (clean.isEmpty()) return null
+        var changedAny = false
+        val changed = units.map { door ->
+            if (door.id != unitID || door.label == clean) return@map door
+            changedAny = true
+            door.copy(label = clean)
+        }
+        if (!changedAny) return this
+        return copy(units = changed, updatedAt = monotonicTimestamp(now))
+    }
+
     private fun monotonicTimestamp(now: Long): Long = maxOf(now, updatedAt + 1L)
 }

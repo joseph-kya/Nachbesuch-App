@@ -40,10 +40,37 @@ data class Gebiet(
 
     /** The write day follows today's calendar, not the currently visible picker. */
     fun writeScope(now: Long = System.currentTimeMillis()): DayScope {
+        // Only the exact second campaign day writes to Tag 2 — matching iOS
+        // dayIndex(on:). Any later date falls back to Tag 1 so late corrections
+        // land on the first day instead of silently extending day 2 forever.
         val today = CampaignDays.startOfDay(now)
-        return if (isTwoDay && day2Date != null && today >= CampaignDays.startOfDay(day2Date)) {
+        return if (isTwoDay && day2Date != null && today == CampaignDays.startOfDay(day2Date)) {
             DayScope.DAY_2
         } else DayScope.DAY_1
+    }
+
+    /** 0-based index of today inside the campaign window; -1 when outside. */
+    fun dayIndex(now: Long = System.currentTimeMillis()): Int {
+        if (!isTwoDay) return -1
+        val today = CampaignDays.startOfDay(now)
+        return when (today) {
+            CampaignDays.startOfDay(day1Date) -> 0
+            day2Date?.let(CampaignDays::startOfDay) -> 1
+            else -> -1
+        }
+    }
+
+    /** "21. August 2026" or "21.–22. August 2026" for two-day territories. */
+    fun formattedDateRange(): String {
+        val zone = ZoneId.systemDefault()
+        val locale = Locale.forLanguageTag("de-AT")
+        val formatter = DateTimeFormatter.ofPattern("d.", locale)
+        val fullFormatter = DateTimeFormatter.ofPattern("d. MMMM yyyy", locale)
+        val day2 = day2Date?.takeIf { isTwoDay } ?: return Instant.ofEpochMilli(day1Date)
+            .atZone(zone).toLocalDate().format(fullFormatter)
+        val start = Instant.ofEpochMilli(day1Date).atZone(zone).toLocalDate()
+        val end = Instant.ofEpochMilli(day2).atZone(zone).toLocalDate()
+        return "${start.format(formatter)}–${end.format(fullFormatter)}"
     }
 
     fun touch(now: Long = System.currentTimeMillis()): Gebiet =

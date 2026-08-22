@@ -24,4 +24,12 @@ enum class VisitOutcome {
         LATE_NO -> "Spätes Nein"
         JOINED -> "Dabei"
     }
+
+    /** Compact form for chips and tight rows. */
+    val shortTitle: String get() = when (this) {
+        NOT_HOME -> "Niemand"
+        EARLY_NO -> "Früh"
+        LATE_NO -> "Spät"
+        JOINED -> "Dabei"
+    }
 }

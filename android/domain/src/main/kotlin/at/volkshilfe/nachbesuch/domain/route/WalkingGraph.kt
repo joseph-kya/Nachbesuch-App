@@ -30,6 +30,79 @@ class WalkingGraph private constructor(
         return best
     }
 
+    /**
+     * Snaps a stop onto the network like the iOS planner: the nearest point on
+     * the nearest street *segment* wins over the nearest junction, so stops in
+     * the middle of a long residential way still get a street route instead of
+     * aborting the graph plan. Returns the (possibly enlarged) graph plus the
+     * node index to route through, or null when nothing lies within [maxMetres].
+     */
+    fun snapped(coordinate: StoredCoordinate, maxMetres: Double = 120.0): Pair<WalkingGraph, Int>? {
+        val nearestVertex = nearestNode(coordinate, maxMetres)
+        val vertexMetres = nearestVertex?.let { RoutePlanner.metres(coordinate, nodes[it]) } ?: Double.MAX_VALUE
+
+        // Best perpendicular projection across all undirected segments.
+        var bestSegment: Triple<Int, Int, StoredCoordinate>? = null
+        var bestSegmentMetres = maxMetres
+        for (from in adjacency.indices) {
+            val fromPoint = nodes[from]
+            adjacency[from].forEach { edge ->
+                val to = edge.to
+                if (to <= from) return@forEach // one direction per undirected edge
+                val projected = projectOntoSegment(coordinate, fromPoint, nodes[to]) ?: return@forEach
+                val distance = RoutePlanner.metres(coordinate, projected)
+                if (distance < bestSegmentMetres) {
+                    bestSegmentMetres = distance
+                    bestSegment = Triple(from, to, projected)
+                }
+            }
+        }
+        val segment = bestSegment
+        // Only pay for a graph split when it clearly beats walking to the junction.
+        if (segment == null || vertexMetres <= bestSegmentMetres + 5.0) {
+            return nearestVertex?.let { this to it }
+        }
+        val (from, to, projected) = segment
+        val newNodes = nodes + projected
+        val newAdjacency = adjacency.map(List<Edge>::toMutableList)
+        val halfA = RoutePlanner.metres(nodes[from], projected)
+        val halfB = RoutePlanner.metres(projected, nodes[to])
+        val fresh = newAdjacency[from]
+        fresh.removeAll { it.to == to }
+        fresh += Edge(newNodes.lastIndex, halfA, listOf(nodes[from], projected))
+        val reverse = newAdjacency[to]
+        reverse.removeAll { it.to == from }
+        reverse += Edge(newNodes.lastIndex, halfB, listOf(nodes[to], projected))
+        (newAdjacency as ArrayList).add(
+            mutableListOf(
+                Edge(from, halfA, listOf(projected, nodes[from])),
+                Edge(to, halfB, listOf(projected, nodes[to]))
+            )
+        )
+
+        return WalkingGraph(newNodes, newAdjacency.toTypedArray()) to newNodes.lastIndex
+    }
+
+    /** Perpendicular foot on the (lat/lon-scaled) segment, or an endpoint when outside. */
+    private fun projectOntoSegment(point: StoredCoordinate, a: StoredCoordinate, b: StoredCoordinate): StoredCoordinate? {
+        val midLat = (a.latitude + b.latitude) / 2.0
+        val latScale = 110_540.0
+        val lonScale = 111_320.0 * cos(Math.toRadians(midLat))
+        val ax = (a.longitude - point.longitude) * lonScale
+        val ay = (a.latitude - point.latitude) * latScale
+        val bx = (b.longitude - point.longitude) * lonScale
+        val by = (b.latitude - point.latitude) * latScale
+        val dx = bx - ax
+        val dy = by - ay
+        val lengthSquared = dx * dx + dy * dy
+        if (lengthSquared <= 0.0) return null
+        val t = ((-(ax * dx + ay * dy)) / lengthSquared).coerceIn(0.0, 1.0)
+        return StoredCoordinate(
+            latitude = point.latitude + (ay + t * dy) / latScale,
+            longitude = point.longitude + (ax + t * dx) / lonScale
+        )
+    }
+
     fun coordinate(node: Int): StoredCoordinate? = nodes.getOrNull(node)
 
     fun shortestDistance(from: Int, to: Int): Double? = shortest(from, to, includePath = false)?.first
