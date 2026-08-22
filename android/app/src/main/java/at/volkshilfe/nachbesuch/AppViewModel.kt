@@ -11,6 +11,7 @@ import at.volkshilfe.nachbesuch.data.local.AppDatabase
 import at.volkshilfe.nachbesuch.data.local.TerritoryRepository
 import at.volkshilfe.nachbesuch.data.prefs.AppSettingsStore
 import at.volkshilfe.nachbesuch.domain.export.ExportDocumentBuilder
+import at.volkshilfe.nachbesuch.domain.export.LegacyTextExport
 import at.volkshilfe.nachbesuch.domain.export.PlainTextExport
 import at.volkshilfe.nachbesuch.domain.list.HouseListBuilder
 import at.volkshilfe.nachbesuch.domain.list.HouseRow
@@ -476,28 +477,49 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     suspend fun importBackup(raw: String): BackupImportResult = backupService.import(raw)
 
-    suspend fun exportCurrentText(): String = withContext(Dispatchers.Default) {
-        val territory = activeGebiet.value ?: return@withContext ""
+    /**
+     * The houses an export should cover.
+     *
+     * [houseIDs] is the map's selection, or null for the whole active territory.
+     * Filtering here rather than in three call sites keeps every format — text,
+     * legacy list and PDF — honest about the same subset.
+     */
+    private fun exportHouses(houseIDs: Set<String>?): List<House> {
+        val all = houses.value
+        return if (houseIDs == null) all else all.filter { it.id in houseIDs }
+    }
+
+    private fun exportDocument(houseIDs: Set<String>?) = activeGebiet.value?.let { territory ->
         val options = _exportOptions.value
-        PlainTextExport.render(
-            ExportDocumentBuilder.build(
-                territory, houses.value, options.scope,
-                visitedOnly = options.visitedOnly, includeNotes = options.includeNotes
-            )
+        ExportDocumentBuilder.build(
+            territory, exportHouses(houseIDs), options.scope,
+            visitedOnly = options.visitedOnly, includeNotes = options.includeNotes
         )
     }
 
-    suspend fun exportCurrentPdf(target: File) = withContext(Dispatchers.Default) {
-        val territory = activeGebiet.value ?: return@withContext
-        val options = _exportOptions.value
-        PdfExporter.write(
-            ExportDocumentBuilder.build(
-                territory, houses.value, options.scope,
-                visitedOnly = options.visitedOnly, includeNotes = options.includeNotes
-            ),
-            target
-        )
+    suspend fun exportCurrentText(houseIDs: Set<String>? = null): String = withContext(Dispatchers.Default) {
+        exportDocument(houseIDs)?.let(PlainTextExport::render).orEmpty()
     }
+
+    /**
+     * The compact address list: streets, house numbers and status symbols.
+     *
+     * The renderer has existed in the domain module since the port and is
+     * covered by tests, but nothing in the UI ever reached it — so the one
+     * format the field actually passes around was the one Android could not
+     * produce.
+     */
+    suspend fun exportCurrentLegacyText(houseIDs: Set<String>? = null): String = withContext(Dispatchers.Default) {
+        exportDocument(houseIDs)?.let(LegacyTextExport::render).orEmpty()
+    }
+
+    suspend fun exportCurrentPdf(target: File, houseIDs: Set<String>? = null) = withContext(Dispatchers.Default) {
+        val document = exportDocument(houseIDs) ?: return@withContext
+        PdfExporter.write(document, target)
+    }
+
+    /** How many houses an export would actually cover, for the sheet's summary. */
+    fun exportHouseCount(houseIDs: Set<String>?): Int = exportHouses(houseIDs).size
 
     override fun onCleared() {
         database.close()

@@ -37,6 +37,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
@@ -161,6 +162,7 @@ internal fun MapTopChrome(
     onStartSelection: () -> Unit,
     onCancelSelection: () -> Unit,
     onToggleAll: () -> Unit,
+    onExportSelection: () -> Unit,
     onDeleteSelection: () -> Unit
 ) {
     val tally = remember(houses, scope) { houses.map { it.tally(scope) } }
@@ -178,6 +180,9 @@ internal fun MapTopChrome(
                     Text("von ${houses.size}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 TextButton(onClick = onToggleAll) { Text(if (selectedCount == houses.size) "Keine" else "Alle") }
+                IconButton(onClick = onExportSelection, enabled = selectedCount > 0) {
+                    Icon(Icons.Default.IosShare, "Auswahl exportieren")
+                }
                 IconButton(onClick = onDeleteSelection, enabled = selectedCount > 0) {
                     Icon(Icons.Default.DeleteOutline, "Auswahl löschen", tint = MaterialTheme.colorScheme.error)
                 }

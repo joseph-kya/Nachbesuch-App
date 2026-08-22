@@ -181,6 +181,8 @@ fun MapSurface(
     onMapLongPress: (StoredCoordinate) -> Unit,
     onBoundaryChanged: (List<StoredCoordinate>) -> Unit = {},
     onDeleteHouses: (Set<String>) -> Unit = {},
+    /** Hand the current map selection to the export sheet. */
+    onExportSelection: (Set<String>) -> Unit = {},
     onImportHouses: (List<ImportedAreaAddress>) -> Unit = {},
     /**
      * Raised instead of [onHouseSelected] when the tapped pin has others stacked
@@ -574,6 +576,7 @@ fun MapSurface(
             onStartSelection = { mode = MapMode.SELECTING; selectedIDs = emptySet() },
             onCancelSelection = { mode = MapMode.BROWSING; selectedIDs = emptySet() },
             onToggleAll = { selectedIDs = if (selectedIDs.size == houses.size) emptySet() else houses.mapTo(mutableSetOf()) { it.id } },
+            onExportSelection = { if (selectedIDs.isNotEmpty()) onExportSelection(selectedIDs) },
             onDeleteSelection = { if (selectedIDs.isNotEmpty()) deleteSelectionPending = true }
         )
 

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.HomeWork
+import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -115,6 +116,24 @@ fun ListScreen(
                     modifier = Modifier.weight(1f)
                 )
                 SortMenu(state.sort, state.canSortByDistance, state.onSort)
+                // The same share action the iOS list carries in its toolbar: the
+                // list is where you stand when you want to hand the round on, and
+                // walking to the archive for it was a detour.
+                Box(
+                    Modifier
+                        .size(MinTouchTarget)
+                        .clip(RoundedCornerShape(22.dp))
+                        .clickable(enabled = state.canExport, onClick = state.onExport),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.IosShare,
+                        contentDescription = "Gebiet exportieren",
+                        tint = if (state.canExport) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
             Spacer(Modifier.height(10.dp))
             SearchField(state.query, state.onQuery)
