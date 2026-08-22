@@ -78,7 +78,7 @@ fun ArchiveScreen(
 ) {
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(horizontal = 16.dp)) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(contentPadding.calculateTopPadding() + 8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Archiv", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f))
                 ArchiveMenu(state)

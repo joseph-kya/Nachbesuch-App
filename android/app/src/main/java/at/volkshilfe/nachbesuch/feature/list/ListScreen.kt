@@ -98,7 +98,7 @@ fun ListScreen(
 ) {
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(horizontal = 16.dp)) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(contentPadding.calculateTopPadding() + 8.dp))
             Text("Nachbesuche", style = MaterialTheme.typography.headlineLarge)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(

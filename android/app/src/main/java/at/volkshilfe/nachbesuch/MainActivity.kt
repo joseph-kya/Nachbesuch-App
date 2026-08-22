@@ -131,7 +131,7 @@ class MainActivity : ComponentActivity() {
         }
 
         RootScaffold(
-            map = {
+            map = { padding ->
                 MapSurface(
                     houses = houses,
                     gebiet = activeGebiet,
@@ -142,12 +142,21 @@ class MainActivity : ComponentActivity() {
                     onMapLongPress = { addCoordinate = it },
                     onBoundaryChanged = viewModel::updateBoundary,
                     onDeleteHouses = viewModel::deleteHouses,
-                    onImportHouses = viewModel::addImportedHouses
+                    onImportHouses = viewModel::addImportedHouses,
+                    locationFlow = viewModel.location.location,
+                    contentPadding = padding
                 )
             },
-            list = { ListTab(onHouse = { sheet = AppSheet.House(it) }, onLegend = { sheet = AppSheet.Legend }) },
-            archive = {
+            list = { padding ->
+                ListTab(
+                    contentPadding = padding,
+                    onHouse = { sheet = AppSheet.House(it) },
+                    onLegend = { sheet = AppSheet.Legend }
+                )
+            },
+            archive = { padding ->
                 ArchiveTab(
+                    contentPadding = padding,
                     onEdit = { sheet = AppSheet.EditGebiet(it) },
                     onCreate = { sheet = AppSheet.EditGebiet(null) },
                     onExport = { sheet = AppSheet.Export },
@@ -270,7 +279,11 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun ListTab(onHouse: (String) -> Unit, onLegend: () -> Unit) {
+    private fun ListTab(
+        contentPadding: androidx.compose.foundation.layout.PaddingValues,
+        onHouse: (String) -> Unit,
+        onLegend: () -> Unit
+    ) {
         val sections by viewModel.listSections.collectAsStateWithLifecycleCompat()
         val counts by viewModel.filterCounts.collectAsStateWithLifecycleCompat()
         val filter by viewModel.listFilter.collectAsStateWithLifecycleCompat()
@@ -320,12 +333,14 @@ class MainActivity : ComponentActivity() {
             ),
             onHouseSelected = onHouse,
             onQuickStatus = { row, outcome -> viewModel.quickStatus(row.id, outcome) },
-            onShowLegend = onLegend
+            onShowLegend = onLegend,
+            contentPadding = contentPadding
         )
     }
 
     @Composable
     private fun ArchiveTab(
+        contentPadding: androidx.compose.foundation.layout.PaddingValues,
         onEdit: (String) -> Unit,
         onCreate: () -> Unit,
         onExport: () -> Unit,
@@ -368,7 +383,8 @@ class MainActivity : ComponentActivity() {
                 onCreate = onCreate,
                 onExport = onExport,
                 onSettings = onSettings
-            )
+            ),
+            contentPadding = contentPadding
         )
     }
 
