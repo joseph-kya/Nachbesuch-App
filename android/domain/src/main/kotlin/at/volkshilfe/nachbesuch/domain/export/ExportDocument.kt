@@ -117,6 +117,24 @@ object PlainTextExport {
             }
         }
     }.trimEnd()
+
+    /**
+     * What follows the street in the compact list, ported from the iOS
+     * `legacyHouseNumber`.
+     *
+     * Falls back to the address itself when there is no house number — an entry
+     * like "Am Hof" then reads "Am Hof Am Hof", which looks odd but is what the
+     * field's list has always shown and what iOS still produces.
+     *
+     * The fallback is the part **before the comma**, not the whole address.
+     * Android used the whole thing, so a numberless imported address dragged its
+     * postal code and city into the line: "Teststrasse Teststrasse, 1010 Wien".
+     */
+    private fun legacyHouseNumber(address: String, street: String): String {
+        val head = address.substringBefore(',').trim()
+        val remainder = head.drop(minOf(street.length, head.length)).trim()
+        return remainder.ifEmpty { head }
+    }
 }
 
 /** The compact, emoji-based address list used by the original field workflow. */
@@ -134,7 +152,7 @@ object LegacyTextExport {
             var compact = StringBuilder(street)
             var hasCompactHouse = false
             houses.forEach { house ->
-                val number = StreetNameParser.parse(house.address).second ?: house.address
+                val number = legacyHouseNumber(house.address, street)
                 if (house.totalDoors <= 1) {
                     val symbol = house.doors.firstOrNull()?.outcome?.emoji ?: "○"
                     compact.append(" ").append(number).append(symbol)
@@ -152,4 +170,22 @@ object LegacyTextExport {
             if (hasCompactHouse) appendLine(compact.toString())
         }
     }.trimEnd()
+
+    /**
+     * What follows the street in the compact list, ported from the iOS
+     * `legacyHouseNumber`.
+     *
+     * Falls back to the address itself when there is no house number — an entry
+     * like "Am Hof" then reads "Am Hof Am Hof", which looks odd but is what the
+     * field's list has always shown and what iOS still produces.
+     *
+     * The fallback is the part **before the comma**, not the whole address.
+     * Android used the whole thing, so a numberless imported address dragged its
+     * postal code and city into the line: "Teststrasse Teststrasse, 1010 Wien".
+     */
+    private fun legacyHouseNumber(address: String, street: String): String {
+        val head = address.substringBefore(',').trim()
+        val remainder = head.drop(minOf(street.length, head.length)).trim()
+        return remainder.ifEmpty { head }
+    }
 }

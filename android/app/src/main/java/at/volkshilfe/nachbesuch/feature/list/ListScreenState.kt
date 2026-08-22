@@ -29,6 +29,9 @@ data class ListScreenState(
     /** Non-null while a quick status can still be taken back. */
     val undoLabel: String?,
     val onUndo: () -> Unit,
+    /** False when there is no territory to export. */
+    val canExport: Boolean,
+    val onExport: () -> Unit,
     val onQuery: (String) -> Unit,
     val onFilter: (ListFilter) -> Unit,
     val onScope: (DayScope) -> Unit,

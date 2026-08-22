@@ -66,7 +66,8 @@ private sealed interface AppSheet {
     data class EditGebiet(val id: String?) : AppSheet
     /** Several pins coincide; the user picks which house they meant. */
     data class StackedPins(val ids: List<String>) : AppSheet
-    data object Export : AppSheet
+    /** [houseIDs] null exports the whole active territory; a set exports a map selection. */
+    data class Export(val houseIDs: Set<String>? = null) : AppSheet
     data object Settings : AppSheet
     data object Legend : AppSheet
 }
@@ -91,7 +92,8 @@ class MainActivity : ComponentActivity() {
         var sheet by remember { mutableStateOf<AppSheet?>(null) }
         var addCoordinate by remember { mutableStateOf<StoredCoordinate?>(null) }
         var locationDenied by remember { mutableStateOf(false) }
-        var pendingExport by remember { mutableStateOf<ExportFormat?>(null) }
+        // Format plus the houses it covers, held across the document-picker trip.
+        var pendingExport by remember { mutableStateOf<Pair<ExportFormat, Set<String>?>?>(null) }
 
         val houses by viewModel.houses.collectAsStateWithLifecycleCompat()
         val activeGebiet by viewModel.activeGebiet.collectAsStateWithLifecycleCompat()
@@ -126,9 +128,9 @@ class MainActivity : ComponentActivity() {
         val exportLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.CreateDocument("application/octet-stream")
         ) { uri ->
-            val format = pendingExport
+            val pending = pendingExport
             pendingExport = null
-            if (uri != null && format != null) writeExport(format, uri)
+            if (uri != null && pending != null) writeExport(pending.first, pending.second, uri)
         }
 
         RootScaffold(
@@ -144,6 +146,7 @@ class MainActivity : ComponentActivity() {
                     onMapLongPress = { addCoordinate = it },
                     onBoundaryChanged = viewModel::updateBoundary,
                     onDeleteHouses = viewModel::deleteHouses,
+                    onExportSelection = { ids -> sheet = AppSheet.Export(ids) },
                     onImportHouses = viewModel::addImportedHouses,
                     locationFlow = viewModel.location.location,
                     contentPadding = padding
@@ -153,7 +156,8 @@ class MainActivity : ComponentActivity() {
                 ListTab(
                     contentPadding = padding,
                     onHouse = { sheet = AppSheet.House(it) },
-                    onLegend = { sheet = AppSheet.Legend }
+                    onLegend = { sheet = AppSheet.Legend },
+                    onExport = { sheet = AppSheet.Export() }
                 )
             },
             archive = { padding ->
@@ -161,7 +165,7 @@ class MainActivity : ComponentActivity() {
                     contentPadding = padding,
                     onEdit = { sheet = AppSheet.EditGebiet(it) },
                     onCreate = { sheet = AppSheet.EditGebiet(null) },
-                    onExport = { sheet = AppSheet.Export },
+                    onExport = { sheet = AppSheet.Export() },
                     onSettings = { sheet = AppSheet.Settings }
                 )
             },
@@ -221,19 +225,22 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
-            AppSheet.Export -> {
+            is AppSheet.Export -> {
                 val options by viewModel.exportOptions.collectAsStateWithLifecycleCompat()
                 ExportSheet(
                     options = options,
                     isTwoDay = activeGebiet?.isTwoDay == true,
-                    houseCount = houses.size,
+                    houseCount = viewModel.exportHouseCount(current.houseIDs),
+                    isSelection = current.houseIDs != null,
                     onOptions = viewModel::setExportOptions,
                     onExport = { format ->
+                        val ids = current.houseIDs
                         sheet = null
-                        pendingExport = format
+                        pendingExport = format to ids
                         exportLauncher.launch(
                             when (format) {
                                 ExportFormat.TEXT -> "nachbesuche.txt"
+                                ExportFormat.LEGACY_TEXT -> "nachbesuchsliste.txt"
                                 ExportFormat.PDF -> "nachbesuche.pdf"
                                 ExportFormat.JSON -> "nachbesuch-backup.json"
                             }
@@ -301,7 +308,8 @@ class MainActivity : ComponentActivity() {
     private fun ListTab(
         contentPadding: androidx.compose.foundation.layout.PaddingValues,
         onHouse: (String) -> Unit,
-        onLegend: () -> Unit
+        onLegend: () -> Unit,
+        onExport: () -> Unit
     ) {
         val sections by viewModel.listSections.collectAsStateWithLifecycleCompat()
         val counts by viewModel.filterCounts.collectAsStateWithLifecycleCompat()
@@ -347,6 +355,8 @@ class MainActivity : ComponentActivity() {
                 collapsedSections = collapsed,
                 undoLabel = undoLabel?.label,
                 onUndo = viewModel::performUndo,
+                canExport = gebiet != null,
+                onExport = onExport,
                 onQuery = viewModel::setQuery,
                 onFilter = viewModel::setListFilter,
                 onScope = viewModel::selectScope,
@@ -430,16 +440,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun writeExport(format: ExportFormat, uri: Uri) {
+    private fun writeExport(format: ExportFormat, houseIDs: Set<String>?, uri: Uri) {
         lifecycleScope.launch {
             runCatching {
                 val bytes = withContext(Dispatchers.IO) {
                     when (format) {
+                        // A backup is always the whole database, so it ignores any
+                        // selection by definition.
                         ExportFormat.JSON -> viewModel.exportBackupJson().toByteArray()
-                        ExportFormat.TEXT -> viewModel.exportCurrentText().toByteArray()
+                        ExportFormat.TEXT -> viewModel.exportCurrentText(houseIDs).toByteArray()
+                        ExportFormat.LEGACY_TEXT -> viewModel.exportCurrentLegacyText(houseIDs).toByteArray()
                         ExportFormat.PDF -> {
                             val scratch = File(cacheDir, "nachbesuche-export.pdf")
-                            viewModel.exportCurrentPdf(scratch)
+                            viewModel.exportCurrentPdf(scratch, houseIDs)
                             scratch.readBytes().also { scratch.delete() }
                         }
                     }

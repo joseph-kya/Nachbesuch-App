@@ -1,5 +1,10 @@
 package at.volkshilfe.nachbesuch.domain
 
+import at.volkshilfe.nachbesuch.domain.export.ExportDocument
+import at.volkshilfe.nachbesuch.domain.export.ExportDocumentBuilder
+import at.volkshilfe.nachbesuch.domain.export.LegacyTextExport
+import at.volkshilfe.nachbesuch.domain.model.Gebiet
+import org.junit.Assert.assertFalse
 import at.volkshilfe.nachbesuch.domain.list.HouseListBuilder
 import at.volkshilfe.nachbesuch.domain.list.ListFilter
 import at.volkshilfe.nachbesuch.domain.list.SearchText
@@ -282,5 +287,37 @@ class MarkerOutcomeParityTest {
         val doors = listOf(DoorResult(label = "H", outcome = VisitOutcome.NOT_HOME, updatedAt = 1L))
         assertNull(MapPinSnapshotBuilder.markerOutcome(doors, DayScope.DAY_2))
         assertEquals(VisitOutcome.NOT_HOME, MapPinSnapshotBuilder.markerOutcome(doors, DayScope.DAY_1))
+    }
+}
+
+class LegacyExportNumberTest {
+
+    private fun document(vararg addresses: String): ExportDocument {
+        val territory = Gebiet(name = "Test", day1Date = 0L)
+        val houses = addresses.mapIndexed { index, address ->
+            House(
+                address = address, latitude = 48.21, longitude = 16.37, gebietID = territory.id,
+                units = listOf(DoorResult(label = "Haushalt", outcome = VisitOutcome.JOINED, updatedAt = 1L)),
+                createdAt = index.toLong(), updatedAt = index.toLong()
+            )
+        }
+        return ExportDocumentBuilder.build(territory, houses, DayScope.DAY_1)
+    }
+
+    @Test
+    fun `a numberless address does not drag its city into the list`() {
+        // Android fell back to the whole address here, so an imported entry with
+        // no house number printed "Teststrasse Teststrasse, 1010 Wien".
+        val rendered = LegacyTextExport.render(document("Teststrasse, 1010 Wien"))
+        assertTrue(rendered, rendered.contains("Teststrasse Teststrasse"))
+        assertFalse(rendered.contains("1010 Wien"))
+    }
+
+    @Test
+    fun `a normal address contributes only its house number`() {
+        val rendered = LegacyTextExport.render(document("Graben 7, 1010 Wien", "Graben 8, 1010 Wien"))
+        assertTrue(rendered, rendered.contains("Graben 7"))
+        assertTrue(rendered, rendered.contains("8"))
+        assertFalse(rendered.contains("1010"))
     }
 }

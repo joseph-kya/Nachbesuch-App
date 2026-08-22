@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.PictureAsPdf
@@ -38,7 +39,7 @@ import at.volkshilfe.nachbesuch.ui.theme.RadiusCard
 import at.volkshilfe.nachbesuch.ui.theme.RadiusControl
 
 /** Which document the user asked for. */
-enum class ExportFormat { TEXT, PDF, JSON }
+enum class ExportFormat { TEXT, LEGACY_TEXT, PDF, JSON }
 
 /** The export options, mirroring the iOS `ExportSheet` toggles. */
 data class ExportOptions(
@@ -64,7 +65,9 @@ fun ExportSheet(
     onOptions: (ExportOptions) -> Unit,
     onExport: (ExportFormat) -> Unit,
     onImport: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** Set when exporting a map selection rather than the whole territory. */
+    isSelection: Boolean = false
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -79,7 +82,10 @@ fun ExportSheet(
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Text("Exportieren", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                if (isSelection) "Auswahl exportieren" else "Exportieren",
+                style = MaterialTheme.typography.headlineSmall
+            )
 
             if (isTwoDay) {
                 ExportGroup("Zeitraum") {
@@ -127,7 +133,8 @@ fun ExportSheet(
                     onChange = { onOptions(options.copy(visitedOnly = it)) }
                 )
                 Text(
-                    "$houseCount Häuser im aktiven Gebiet",
+                    if (isSelection) "$houseCount ${if (houseCount == 1) "Haus" else "Häuser"} ausgewählt"
+                    else "$houseCount ${if (houseCount == 1) "Haus" else "Häuser"} im aktiven Gebiet",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -143,18 +150,34 @@ fun ExportSheet(
             }
 
             ExportGroup("Format") {
-                ExportAction(Icons.Default.Description, "Textliste", "Zum Weitergeben per Nachricht") {
+                ExportAction(Icons.Default.Description, "Textbericht", "Lesbar in Mail und Messenger") {
                     onExport(ExportFormat.TEXT)
+                }
+                ExportAction(
+                    Icons.AutoMirrored.Filled.FormatListBulleted,
+                    "Nachbesuchsliste",
+                    "Straßen, Hausnummern und Statussymbole"
+                ) {
+                    onExport(ExportFormat.LEGACY_TEXT)
                 }
                 ExportAction(Icons.Default.PictureAsPdf, "PDF", "Zum Ausdrucken oder Archivieren") {
                     onExport(ExportFormat.PDF)
                 }
-                ExportAction(Icons.Default.DataObject, "Backup (JSON)", "Vollständige Sicherung aller Gebiete") {
-                    onExport(ExportFormat.JSON)
+                if (!isSelection) {
+                    ExportAction(Icons.Default.DataObject, "Backup (JSON)", "Vollständige Sicherung aller Gebiete") {
+                        onExport(ExportFormat.JSON)
+                    }
                 }
-                ExportAction(Icons.Default.Upload, "Backup einlesen", "Fügt fehlende Datensätze hinzu, überschreibt nichts") {
-                    onImport()
+                if (!isSelection) {
+                    ExportAction(Icons.Default.Upload, "Backup einlesen", "Fügt fehlende Datensätze hinzu, überschreibt nichts") {
+                        onImport()
+                    }
                 }
+                Text(
+                    "Die Nachbesuchsliste entspricht dem kompakten Adressschema und enthält keine Notizen.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
