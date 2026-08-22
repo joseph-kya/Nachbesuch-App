@@ -55,7 +55,11 @@ import at.volkshilfe.nachbesuch.ui.theme.RadiusChrome
 fun RootScaffold(
     map: @Composable () -> Unit,
     list: @Composable () -> Unit,
-    archive: @Composable () -> Unit
+    archive: @Composable () -> Unit,
+    /** Floats over the content at the top — the notice banner. */
+    topOverlay: @Composable () -> Unit = {},
+    /** Floats over the content just above the tab bar — the undo banner. */
+    bottomOverlay: @Composable () -> Unit = {}
 ) {
     var selected by rememberSaveable { mutableIntStateOf(0) }
     Scaffold(
@@ -68,6 +72,11 @@ fun RootScaffold(
         // headroom to hide it) drew straight under the status bar clock and icons.
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (selected) { 0 -> map(); 1 -> list(); else -> archive() }
+            // Overlays rather than inline rows: a banner that pushes the map or the
+            // list down on every appearance reflows the whole screen under the
+            // user's thumb mid-tap.
+            Box(Modifier.align(Alignment.TopCenter).padding(top = 8.dp)) { topOverlay() }
+            Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) { bottomOverlay() }
         }
     }
 }
