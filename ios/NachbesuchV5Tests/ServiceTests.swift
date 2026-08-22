@@ -1,6 +1,8 @@
 import CoreLocation
+import CoreGraphics
 import Foundation
 import Testing
+import UIKit
 @testable import NachbesuchV5
 
 @Suite("Straßennamen")
@@ -335,6 +337,75 @@ struct PinArtTests {
             #expect(offset.y < 0)
             #expect(offset.x == 0)
         }
+    }
+
+    /// The invariant that makes pin placement race-free.
+    ///
+    /// Every tier must render into the same bitmap and use the same anchor. If a
+    /// tier change alters `bounds`, the per-frame tier swap can land inside a MapKit
+    /// cluster animation — which owns `transform` and `center` on the same view —
+    /// and the pin ends up permanently off its coordinate. That failure is
+    /// timing-dependent, so it reproduces on some zooms and not others; this test is
+    /// the deterministic guard against it coming back.
+    @MainActor
+    @Test("Alle Pin-Größen teilen sich Bitmap-Größe und Anker")
+    func everyScaleSharesCanvasAndAnchor() {
+        let cache = PinArtCache.shared
+        let reference = cache.pinImage(for: PinArtCache.Key(
+            outcome: .joined, text: "", isSelected: false, isDark: false, scale: .full
+        ))
+        let anchor = cache.centerOffset(for: .full)
+
+        for scale in [PinScale.full, .compact, .dot] {
+            let image = cache.pinImage(for: PinArtCache.Key(
+                outcome: .joined, text: "", isSelected: false, isDark: false, scale: scale
+            ))
+            #expect(
+                image.size == reference.size,
+                "\(scale) rendert in eine andere Bitmap-Größe — ein Größenwechsel würde bounds ändern"
+            )
+            #expect(cache.centerOffset(for: scale) == anchor, "\(scale) verschiebt den Anker")
+        }
+    }
+
+    /// The canvas is shared, so a smaller tier has to be drawn *up from the tip*
+    /// rather than centred in the bitmap. Sizes matching is not enough — if the head
+    /// rectangle were still anchored at the top-left padding, every dot would render
+    /// high inside its canvas and sit visibly above its house.
+    @MainActor
+    @Test("Jede Größe wird an der Spitze verankert gezeichnet")
+    func everyScaleIsDrawnAnchoredAtTheTip() throws {
+        let cache = PinArtCache.shared
+
+        func alpha(_ image: UIImage, atFractionX fx: CGFloat, fractionY fy: CGFloat) throws -> Int {
+            let cg = try #require(image.cgImage)
+            let x = min(max(Int(CGFloat(cg.width) * fx), 0), cg.width - 1)
+            let y = min(max(Int(CGFloat(cg.height) * fy), 0), cg.height - 1)
+            var pixel = [UInt8](repeating: 0, count: 4)
+            let space = CGColorSpaceCreateDeviceRGB()
+            let context = try #require(CGContext(
+                data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.draw(cg, in: CGRect(x: -x, y: -(cg.height - 1 - y), width: cg.width, height: cg.height))
+            return Int(pixel[3])
+        }
+
+        for scale in [PinScale.full, .compact, .dot] {
+            let image = cache.pinImage(for: PinArtCache.Key(
+                outcome: .joined, text: "", isSelected: false, isDark: false, scale: scale
+            ))
+            // Just above the tip: every tier must have ink here.
+            let atTip = try alpha(image, atFractionX: 0.5, fractionY: 0.92)
+            #expect(atTip > 0, "\(scale) zeichnet nichts an der Spitze")
+        }
+
+        // The smallest tier must leave the top of the shared canvas empty — that is
+        // what proves it grew upward from the tip instead of down from the padding.
+        let dot = cache.pinImage(for: PinArtCache.Key(
+            outcome: .joined, text: "", isSelected: false, isDark: false, scale: .dot
+        ))
+        #expect(try alpha(dot, atFractionX: 0.5, fractionY: 0.05) == 0, "Punkt-Pin klebt oben statt an der Spitze")
     }
 
     @MainActor

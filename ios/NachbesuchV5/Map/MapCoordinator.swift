@@ -470,15 +470,33 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         guard shouldCluster != clusteringEnabled else { return }
         clusteringEnabled = shouldCluster
 
-        // MapKit decides clustering when it builds an annotation view, so the mode
-        // change only reaches views that already exist by re-declaring them.
-        // Bounded to the padded viewport: everything off-screen picks the new mode
-        // up from `viewFor` when it is eventually created.
-        let affected = houseAnnotations(in: paddedVisibleRect(mapView), of: mapView)
-        guard !affected.isEmpty else { return }
-        UIView.performWithoutAnimation {
-            mapView.removeAnnotations(affected)
-            mapView.addAnnotations(affected)
+        // **The annotation set is never touched by camera movement.**
+        //
+        // This used to remove and re-add the affected annotations so the new mode
+        // would reach views that already existed. It runs from
+        // `regionDidChangeAnimated`, so on a fast pinch it could pull annotations out
+        // from under a cluster animation that was still running — a second
+        // timing-dependent writer alongside the per-frame tier swap, and part of why
+        // the corruption showed up on some zooms and not others.
+        //
+        // The two properties MapKit actually reads are set in place instead.
+        applyClusteringBehaviour(mapView)
+    }
+
+    /// Pushes the current gate decision onto realised pin views.
+    ///
+    /// `viewFor` applies the same two properties on dequeue, so any view created
+    /// later picks the decision up by itself; this exists only for views that
+    /// already exist at the moment the gate flips.
+    private func applyClusteringBehaviour(_ mapView: MKMapView) {
+        let identifier = clusteringEnabled ? HousePinView.clusteringIdentifier : nil
+        let collision: MKAnnotationView.CollisionMode = clusteringEnabled ? .circle : .none
+        for annotation in mapView.annotations {
+            guard let house = annotation as? HouseAnnotation,
+                  let view = mapView.view(for: house) as? HousePinView
+            else { continue }
+            if view.clusteringIdentifier != identifier { view.clusteringIdentifier = identifier }
+            if view.collisionMode != collision { view.collisionMode = collision }
         }
     }
 

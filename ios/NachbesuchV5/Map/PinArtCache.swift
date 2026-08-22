@@ -77,16 +77,48 @@ final class PinArtCache {
         scale.headDiameter * (12.0 / 34.0)
     }
 
-    private func canvasSize(for scale: PinScale) -> CGSize {
+    /// **One canvas for every tier.**
+    ///
+    /// The tiers used to render into differently sized bitmaps, so changing tier
+    /// changed the annotation view's `bounds`. MapKit owns `transform` and `center`
+    /// on a member view for the whole duration of a cluster animation, and the tier
+    /// swap runs from `mapViewDidChangeVisibleRegion` — once per frame of a pinch.
+    /// Whether those two collided came down to frame timing, which is why the pins
+    /// scattered on some zooms and not others.
+    ///
+    /// A fixed canvas removes the collision instead of trying to sequence it: the
+    /// artwork can now be replaced at any moment, mid-animation or not, because the
+    /// geometry MapKit is positioning never changes.
+    private var canvasSize: CGSize {
         CGSize(
-            width: scale.headDiameter + shadowPadding * 2,
-            height: scale.headDiameter + tipHeight(for: scale) + shadowPadding * 2
+            width: PinScale.full.headDiameter + shadowPadding * 2,
+            height: PinScale.full.headDiameter + tipHeight(for: .full) + shadowPadding * 2
+        )
+    }
+
+    /// Where the pin's tip sits inside the bitmap — identical in every tier, so a
+    /// smaller pin is drawn *up* from the same point rather than in a smaller frame.
+    private var tipPoint: CGPoint {
+        CGPoint(x: canvasSize.width / 2, y: canvasSize.height - shadowPadding)
+    }
+
+    /// The head rectangle for a tier, anchored so its tip lands on `tipPoint`.
+    private func headRect(for scale: PinScale) -> CGRect {
+        CGRect(
+            x: tipPoint.x - scale.headDiameter / 2,
+            y: tipPoint.y - tipHeight(for: scale) - scale.headDiameter,
+            width: scale.headDiameter,
+            height: scale.headDiameter
         )
     }
 
     /// Offset that puts the pin's point exactly on the annotation coordinate.
-    func centerOffset(for scale: PinScale) -> CGPoint {
-        CGPoint(x: 0, y: -canvasSize(for: scale).height / 2 + shadowPadding)
+    ///
+    /// Constant now, because the canvas is. `scale` is kept in the signature so call
+    /// sites read the same, but a tier change no longer moves the anchor — which is
+    /// the other half of what made pin placement racy.
+    func centerOffset(for scale: PinScale = .full) -> CGPoint {
+        CGPoint(x: 0, y: -(canvasSize.height / 2 - shadowPadding))
     }
 
     /// Offset that centres something on the pin's **head** rather than on its tip.
@@ -179,13 +211,8 @@ final class PinArtCache {
     }
 
     private func renderPin(_ key: Key) -> UIImage {
-        let size = canvasSize(for: key.scale)
-        let head = CGRect(
-            x: shadowPadding,
-            y: shadowPadding,
-            width: key.scale.headDiameter,
-            height: key.scale.headDiameter
-        )
+        let size = canvasSize
+        let head = headRect(for: key.scale)
 
         let format = UIGraphicsImageRendererFormat.preferred()
         format.opaque = false
