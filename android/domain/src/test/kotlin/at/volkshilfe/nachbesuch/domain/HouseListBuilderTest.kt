@@ -4,6 +4,8 @@ import at.volkshilfe.nachbesuch.domain.list.HouseListBuilder
 import at.volkshilfe.nachbesuch.domain.list.ListFilter
 import at.volkshilfe.nachbesuch.domain.list.SearchText
 import at.volkshilfe.nachbesuch.domain.list.StreetNameParser
+import at.volkshilfe.nachbesuch.domain.map.PinScale
+import at.volkshilfe.nachbesuch.domain.map.PinStacking
 import at.volkshilfe.nachbesuch.domain.model.DayScope
 import at.volkshilfe.nachbesuch.domain.model.DoorResult
 import at.volkshilfe.nachbesuch.domain.model.House
@@ -172,5 +174,74 @@ class StreetNameParserTest {
     fun `multi-word streets survive`() {
         assertEquals("Maria-Theresien-Straße" to "8", StreetNameParser.parse("Maria-Theresien-Straße 8/3"))
         assertEquals("Am Augarten" to "3", StreetNameParser.parse("Am Augarten 3"))
+    }
+}
+
+class PinScaleTest {
+
+    @Test
+    fun `every pin scale carries the head diameter the painter draws`() {
+        // The hit test that decides whether two pins are stacked and the painter
+        // that draws the head must agree; these were two separate numbers before.
+        assertEquals(34f, PinScale.FULL.headDiameterDp)
+        assertEquals(25f, PinScale.COMPACT.headDiameterDp)
+        assertEquals(15f, PinScale.DOT.headDiameterDp)
+    }
+}
+
+class PinStackingTest {
+
+    private fun points(vararg entries: Pair<String, Pair<Float, Float>>) =
+        entries.associate { (id, xy) -> id to PinStacking.Point(xy.first, xy.second) }
+
+    @Test
+    fun `a pin whose centre is under another's head counts as stacked`() {
+        // The real case from the field data: two OSM addresses a few metres
+        // apart whose pins coincide once you zoom out.
+        val radius = PinStacking.radiusPx(PinScale.FULL, density = 2.75f)
+        val ids = PinStacking.idsAt(
+            "a",
+            points("a" to (100f to 100f), "b" to (110f to 105f)),
+            radius
+        )
+        assertEquals(listOf("a", "b"), ids)
+    }
+
+    @Test
+    fun `merely adjacent pins are not stacked`() {
+        // Deliberate: overlapping pins are still individually tappable, and
+        // popping a chooser for them would be noise on every dense street.
+        val radius = PinStacking.radiusPx(PinScale.FULL, density = 2.75f)
+        val ids = PinStacking.idsAt(
+            "a",
+            points("a" to (100f to 100f), "b" to (160f to 100f)),
+            radius
+        )
+        assertEquals(listOf("a"), ids)
+    }
+
+    @Test
+    fun `the tapped pin is always first`() {
+        val radius = PinStacking.radiusPx(PinScale.FULL, density = 2.75f)
+        val ids = PinStacking.idsAt(
+            "m",
+            points("a" to (100f to 100f), "m" to (101f to 101f), "z" to (99f to 99f)),
+            radius
+        )
+        assertEquals("m", ids.first())
+        assertEquals(setOf("a", "m", "z"), ids.toSet())
+    }
+
+    @Test
+    fun `an unknown id yields only itself`() {
+        assertEquals(listOf("ghost"), PinStacking.idsAt("ghost", points("a" to (0f to 0f)), 50f))
+    }
+
+    @Test
+    fun `the radius scales with the pin size`() {
+        // A DOT pin is smaller, so pins must be closer before they count as stacked.
+        assertTrue(
+            PinStacking.radiusPx(PinScale.DOT, 2f) < PinStacking.radiusPx(PinScale.FULL, 2f)
+        )
     }
 }

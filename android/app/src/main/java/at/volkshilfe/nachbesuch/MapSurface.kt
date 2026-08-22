@@ -86,6 +86,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import at.volkshilfe.nachbesuch.data.prefs.MapCameraStore
@@ -180,6 +181,12 @@ fun MapSurface(
     onBoundaryChanged: (List<StoredCoordinate>) -> Unit = {},
     onDeleteHouses: (Set<String>) -> Unit = {},
     onImportHouses: (List<ImportedAreaAddress>) -> Unit = {},
+    /**
+     * Raised instead of [onHouseSelected] when the tapped pin has others stacked
+     * underneath it, so the UI can offer a choice rather than silently picking
+     * whichever marker happened to be on top.
+     */
+    onStackedPins: (List<String>) -> Unit = {},
     /** The app-wide position feed; see [at.volkshilfe.nachbesuch.location.LocationService]. */
     locationFlow: StateFlow<Location?> = MutableStateFlow(null),
     /**
@@ -217,6 +224,7 @@ fun MapSurface(
     var areaImportVisible by remember { mutableStateOf(false) }
     var visibleBounds by remember { mutableStateOf<LatLngBounds?>(null) }
     var pinScale by remember { mutableStateOf(PinScale.FULL) }
+    val displayDensity = LocalDensity.current.density
     var clustered by remember { mutableStateOf(false) }
     // Position comes from the shared LocationService, not a private subscription:
     // the list needs the same fix for "nearest first", and two subscriptions meant
@@ -398,7 +406,11 @@ fun MapSurface(
             if (boundary.size >= 3 && boundary.all { it.isPlausible }) {
                 Polygon(
                     points = boundary.map { LatLng(it.latitude, it.longitude) },
-                    fillColor = Accent.copy(alpha = 0.10f),
+                    // Lighter over dark tiles. The same 10% red that reads as a
+                    // faint tint on the light map turns the whole territory
+                    // maroon against the dark one — the boundary should mark an
+                    // area, not recolour the city inside it.
+                    fillColor = Accent.copy(alpha = if (darkMap) 0.055f else 0.10f),
                     strokeColor = Accent,
                     strokeWidth = 4f,
                     clickable = mode == MapMode.BROWSING,
@@ -456,9 +468,20 @@ fun MapSurface(
                         zIndex = if (selected) 12f else 5f,
                         onClick = {
                             when {
-                                routePhase == RoutePhase.PICKING_ON_MAP -> planRoute(StoredCoordinate(house.latitude, house.longitude))
+                                // Picking a route start wants one house, not a menu.
+                                routePhase == RoutePhase.PICKING_ON_MAP ->
+                                    planRoute(StoredCoordinate(house.latitude, house.longitude))
                                 mode == MapMode.SELECTING -> selectedIDs = selectedIDs.toggle(house.id)
-                                else -> onHouseSelected(house)
+                                else -> {
+                                    val stacked = stackedHouseIDs(
+                                        houseID = house.id,
+                                        houses = visibleHouses,
+                                        projection = camera.projection,
+                                        pinScale = pinScale,
+                                        density = displayDensity
+                                    )
+                                    if (stacked.size > 1) onStackedPins(stacked) else onHouseSelected(house)
+                                }
                             }
                             true
                         }
