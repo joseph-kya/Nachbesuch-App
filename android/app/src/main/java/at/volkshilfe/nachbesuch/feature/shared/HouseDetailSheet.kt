@@ -81,6 +81,8 @@ fun HouseDetailSheet(
      * single most confusing thing this sheet can do.
      */
     writeScope: DayScope,
+    /** One-day territories have no Tag-2 anything; see [isTwoDay] use below. */
+    isTwoDay: Boolean,
     onScopeChange: (DayScope) -> Unit,
     onOutcome: (String, VisitOutcome?) -> Unit,
     onRenameUnit: (String, String) -> Unit,
@@ -114,6 +116,9 @@ fun HouseDetailSheet(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            // The drag handle sits directly above; without this the address
+            // field's floating label is clipped against it.
+            item(key = "top") { Spacer(Modifier.height(4.dp)) }
             if (house.isDamaged) {
                 item(key = "damaged") {
                     Row(
@@ -156,8 +161,10 @@ fun HouseDetailSheet(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    if (writeScope != scope) {
-                        // The picker filters; the calendar decides where writes go.
+                    // The picker filters; the calendar decides where writes go. Only
+                    // worth saying when the two can actually differ — on a one-day
+                    // territory every write lands on Tag 1 and the notice is noise.
+                    if (isTwoDay && writeScope != scope) {
                         Text(
                             "Einträge werden auf ${writeScope.germanLabel()} gespeichert.",
                             style = MaterialTheme.typography.labelSmall,
@@ -167,7 +174,7 @@ fun HouseDetailSheet(
                 }
             }
 
-            item(key = "scope") {
+            if (isTwoDay) item(key = "scope") {
                 Row(
                     Modifier
                         .fillMaxWidth()

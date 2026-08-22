@@ -5,11 +5,17 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -22,6 +28,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
@@ -46,11 +55,7 @@ fun NoticeBanner(notice: NoticeCenter.Notice?, onDismiss: () -> Unit, modifier: 
     ) {
         // Held so the text does not blank out mid-exit-animation.
         val shown = notice ?: return@AnimatedVisibility
-        ChromePanel(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            cornerRadius = RadiusCard,
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp)
-        ) {
+        BannerSurface(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Icon(
                     if (shown.isError) Icons.Default.ErrorOutline else Icons.Default.Info,
@@ -63,16 +68,36 @@ fun NoticeBanner(notice: NoticeCenter.Notice?, onDismiss: () -> Unit, modifier: 
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f)
                 )
-                ChromeIconButton(onClick = onDismiss, size = 34.dp) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = "Hinweis schließen",
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Hinweis schließen",
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onDismiss)
+                        .padding(11.dp)
+                )
             }
         }
     }
+}
+
+/**
+ * The shared banner material.
+ *
+ * Opaque, unlike the map's [ChromePanel]: these float over list rows and cards,
+ * and at the chrome's 94% the text underneath showed straight through the
+ * message — exactly when the user most needs to read it.
+ */
+@Composable
+private fun BannerSurface(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Box(
+        modifier
+            .shadow(8.dp, RoundedCornerShape(RadiusCard), clip = false)
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(RadiusCard))
+            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(RadiusCard))
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) { content() }
 }
 
 /**
@@ -94,17 +119,15 @@ fun UndoBanner(
         modifier = modifier
     ) {
         val shown = label ?: return@AnimatedVisibility
-        ChromePanel(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 8.dp)
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        BannerSurface(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     shown,
                     style = MaterialTheme.typography.bodyMedium,
+                    // One line: the label is "<address>: <status>", and letting a
+                    // long address wrap doubled the banner's height over the list.
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
                 TextButton(onClick = onUndo) {

@@ -178,6 +178,7 @@ class MainActivity : ComponentActivity() {
                         house = house,
                         scope = scope,
                         writeScope = activeGebiet?.writeScope() ?: DayScope.DAY_1,
+                        isTwoDay = activeGebiet?.isTwoDay == true,
                         onScopeChange = viewModel::selectScope,
                         onOutcome = { unitID, outcome -> viewModel.recordOutcome(house.id, unitID, outcome) },
                         onRenameUnit = { unitID, label -> viewModel.renameUnit(house.id, unitID, label) },
