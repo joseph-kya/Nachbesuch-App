@@ -37,6 +37,8 @@ import at.volkshilfe.nachbesuch.ui.notice.NoticeCenter
 import at.volkshilfe.nachbesuch.ui.theme.AppAccent
 import at.volkshilfe.nachbesuch.ui.theme.AppAppearance
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -136,6 +138,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _undo = MutableStateFlow<UndoEntry?>(null)
     val undo: StateFlow<UndoEntry?> = _undo.asStateFlow()
+    private var undoJob: Job? = null
+
+    /**
+     * Shows the undo affordance for a few seconds, then drops it.
+     *
+     * It used to have no expiry at all, so a single quick status left a banner
+     * sitting over the list until it was tapped. iOS gives it five seconds and
+     * then forgets: undo is a rescue for the tap you just made, not a permanent
+     * strip of chrome.
+     */
+    private fun offerUndo(entry: UndoEntry) {
+        undoJob?.cancel()
+        _undo.value = entry
+        undoJob = viewModelScope.launch {
+            delay(UNDO_TIMEOUT_MS)
+            _undo.value = null
+        }
+    }
 
     /** The unfiltered corpus for the active territory, rebuilt off the main thread. */
     private val corpus: StateFlow<List<HouseRow>> = combine(houses, _scope) { values, scope ->
@@ -374,20 +394,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * The visible picker is a filter only. Writes follow the territory calendar,
      * matching the iOS rule and preventing Tag-2 edits from landing in Tag 1.
      */
-    fun recordOutcome(houseID: String, unitID: String, outcome: VisitOutcome?, registerUndo: Boolean = true) {
+    fun recordOutcome(houseID: String, unitID: String, outcome: VisitOutcome?) {
         val house = houses.value.firstOrNull { it.id == houseID } ?: return
         val writeScope = activeGebiet.value?.writeScope() ?: DayScope.DAY_1
         val updated = house.recordOutcome(unitID, outcome, writeScope) ?: run {
             if (house.isDamaged) notices.reportMessage("Dieses Haus ist beschädigt und kann nicht geändert werden.")
             return
         }
-        if (registerUndo) {
-            _undo.value = UndoEntry(
-                houseID = house.id,
-                previousUnits = house.units,
-                label = "${house.address}: ${outcome?.germanTitle ?: "Status entfernt"}"
-            )
-        }
+        // Deliberately no undo here. The sheet shows the choice you just made,
+        // with the tapped option marked and one tap to clear it — an undo banner
+        // on top of that is a second way to say the same thing. iOS offers undo
+        // only where the row moves out from under you: the list's quick status.
         write(updated, "Status konnte nicht gespeichert werden")
     }
 
@@ -399,7 +416,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             if (house.isDamaged) notices.reportMessage("Dieses Haus ist beschädigt und kann nicht geändert werden.")
             return
         }
-        _undo.value = UndoEntry(house.id, house.units, "${house.address}: ${outcome.germanTitle}")
+        // Concrete, so it is clear what is being undone after the list re-sorts
+        // and the row has moved.
+        offerUndo(UndoEntry(house.id, house.units, "${house.address} → ${outcome.germanTitle}"))
         write(updated, "Status konnte nicht gespeichert werden")
     }
 
@@ -407,12 +426,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun performUndo() {
         val entry = _undo.value ?: return
-        val house = houses.value.firstOrNull { it.id == entry.houseID } ?: return
+        undoJob?.cancel()
         _undo.value = null
+        val house = houses.value.firstOrNull { it.id == entry.houseID } ?: return
         write(house.restore(entry.previousUnits), "Rückgängig fehlgeschlagen")
     }
 
-    fun dismissUndo() { _undo.value = null }
+    fun dismissUndo() {
+        undoJob?.cancel()
+        _undo.value = null
+    }
 
     fun makeApartment(houseID: String, count: Int) {
         val house = houses.value.firstOrNull { it.id == houseID } ?: return
@@ -483,5 +506,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val SEARCH_DEBOUNCE_MS = 180L
+        /** Matches the iOS undo window. */
+        const val UNDO_TIMEOUT_MS = 5_000L
     }
 }

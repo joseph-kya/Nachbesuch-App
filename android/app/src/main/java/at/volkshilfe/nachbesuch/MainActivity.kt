@@ -54,7 +54,6 @@ import at.volkshilfe.nachbesuch.ui.components.AppearanceSettingsSheet
 import at.volkshilfe.nachbesuch.ui.components.FilterChipSpec
 import at.volkshilfe.nachbesuch.ui.components.NoticeBanner
 import at.volkshilfe.nachbesuch.ui.components.StatusLegendSheet
-import at.volkshilfe.nachbesuch.ui.components.UndoBanner
 import at.volkshilfe.nachbesuch.ui.status.tint
 import at.volkshilfe.nachbesuch.ui.theme.NachbesuchTheme
 import kotlinx.coroutines.Dispatchers
@@ -98,7 +97,6 @@ class MainActivity : ComponentActivity() {
         val activeGebiet by viewModel.activeGebiet.collectAsStateWithLifecycleCompat()
         val scope by viewModel.scope.collectAsStateWithLifecycleCompat()
         val notice by viewModel.notices.current.collectAsStateWithLifecycleCompat()
-        val undo by viewModel.undo.collectAsStateWithLifecycleCompat()
 
         // One shared position source for the whole app; the list needs it for
         // "nearest first" and the map for the location puck.
@@ -167,8 +165,7 @@ class MainActivity : ComponentActivity() {
                     onSettings = { sheet = AppSheet.Settings }
                 )
             },
-            topOverlay = { NoticeBanner(notice, onDismiss = viewModel.notices::dismiss) },
-            bottomOverlay = { UndoBanner(undo?.label, onUndo = viewModel::performUndo) }
+            topOverlay = { NoticeBanner(notice, onDismiss = viewModel.notices::dismiss) }
         )
 
         when (val current = sheet) {
@@ -315,6 +312,7 @@ class MainActivity : ComponentActivity() {
         val collapsed by viewModel.collapsedSections.collectAsStateWithLifecycleCompat()
         val gebiet by viewModel.activeGebiet.collectAsStateWithLifecycleCompat()
         val fix by viewModel.location.location.collectAsStateWithLifecycleCompat()
+        val undoLabel by viewModel.undo.collectAsStateWithLifecycleCompat()
 
         ListScreen(
             state = ListScreenState(
@@ -347,6 +345,8 @@ class MainActivity : ComponentActivity() {
                     )
                 },
                 collapsedSections = collapsed,
+                undoLabel = undoLabel?.label,
+                onUndo = viewModel::performUndo,
                 onQuery = viewModel::setQuery,
                 onFilter = viewModel::setListFilter,
                 onScope = viewModel::selectScope,
