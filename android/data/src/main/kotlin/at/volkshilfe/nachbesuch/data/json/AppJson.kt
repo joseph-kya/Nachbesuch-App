@@ -23,8 +23,10 @@ object AppJson {
         val label: String,
         val outcome: VisitOutcome? = null,
         val updatedAt: Double? = null,
+        val revisitAt: Double? = null,
         val day2Outcome: VisitOutcome? = null,
-        val day2UpdatedAt: Double? = null
+        val day2UpdatedAt: Double? = null,
+        val day2RevisitAt: Double? = null
     )
 
     fun encodeStorageDoors(doors: List<DoorResult>): String = storage.encodeToString(
@@ -32,8 +34,10 @@ object AppJson {
             StorageDoor(
                 id = door.id.uppercase(), label = door.label, outcome = door.outcome,
                 updatedAt = door.updatedAt?.let { it / 1000.0 - APPLE_EPOCH_SECONDS },
+                revisitAt = door.revisitAt?.let { it / 1000.0 - APPLE_EPOCH_SECONDS },
                 day2Outcome = door.day2Outcome,
-                day2UpdatedAt = door.day2UpdatedAt?.let { it / 1000.0 - APPLE_EPOCH_SECONDS }
+                day2UpdatedAt = door.day2UpdatedAt?.let { it / 1000.0 - APPLE_EPOCH_SECONDS },
+                day2RevisitAt = door.day2RevisitAt?.let { it / 1000.0 - APPLE_EPOCH_SECONDS }
             )
         }
     )
@@ -43,8 +47,10 @@ object AppJson {
             DoorResult(
                 id = door.id.uppercase(), label = door.label, outcome = door.outcome,
                 updatedAt = door.updatedAt?.let { ((it + APPLE_EPOCH_SECONDS) * 1000.0).toLong() },
+                revisitAt = door.revisitAt?.let { ((it + APPLE_EPOCH_SECONDS) * 1000.0).toLong() },
                 day2Outcome = door.day2Outcome,
-                day2UpdatedAt = door.day2UpdatedAt?.let { ((it + APPLE_EPOCH_SECONDS) * 1000.0).toLong() }
+                day2UpdatedAt = door.day2UpdatedAt?.let { ((it + APPLE_EPOCH_SECONDS) * 1000.0).toLong() },
+                day2RevisitAt = door.day2RevisitAt?.let { ((it + APPLE_EPOCH_SECONDS) * 1000.0).toLong() }
             )
         }
 

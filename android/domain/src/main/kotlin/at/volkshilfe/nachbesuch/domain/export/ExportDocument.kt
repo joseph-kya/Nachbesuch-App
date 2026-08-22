@@ -5,6 +5,7 @@ import at.volkshilfe.nachbesuch.domain.model.Gebiet
 import at.volkshilfe.nachbesuch.domain.model.House
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
 import at.volkshilfe.nachbesuch.domain.list.StreetNameParser
+import at.volkshilfe.nachbesuch.domain.revisit.label
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -14,8 +15,13 @@ data class ExportDoor(
     val label: String,
     val outcome: VisitOutcome,
     val recordedAt: Long?,
-    val note: String? = null
-)
+    val note: String? = null,
+    /** The booked return time, for a "Später" door. */
+    val revisitAt: Long? = null
+) {
+    /** What a report prints for this door — "Später" always carries its time. */
+    val resultLabel: String get() = outcome.label(revisitAt)
+}
 
 data class ExportHouse(
     val address: String,
@@ -50,7 +56,10 @@ object ExportDocumentBuilder {
         val exported = houses.mapNotNull { house ->
             val doors = house.units.mapNotNull { door ->
                 val outcome = door.recordedOutcome(scope) ?: return@mapNotNull null
-                ExportDoor(door.label, outcome, door.timestamp(scope), house.note.takeIf { includeNotes })
+                ExportDoor(
+                    door.label, outcome, door.timestamp(scope),
+                    house.note.takeIf { includeNotes }, door.displayRevisitAt(scope)
+                )
             }.sortedWith(compareBy<ExportDoor> { it.recordedAt ?: Long.MAX_VALUE }.thenBy { it.label })
             if (visitedOnly && doors.isEmpty()) null else ExportHouse(
                 address = house.address,
@@ -108,7 +117,7 @@ object PlainTextExport {
         } else {
             document.houses.forEach { house ->
                 appendLine("· ${house.address}")
-                house.doors.forEach { door -> appendLine("    ${door.label}: ${door.outcome.germanTitle}") }
+                house.doors.forEach { door -> appendLine("    ${door.label}: ${door.resultLabel}") }
                 house.note?.takeIf(String::isNotBlank)?.let { appendLine("    Notiz: $it") }
             }
             if (document.summary.counts.isNotEmpty()) {

@@ -16,12 +16,23 @@ data class BackupDoor(
     val label: String,
     val outcome: VisitOutcome? = null,
     val updatedAt: String? = null,
+    // iOS encodes `DoorResult` straight into the backup envelope, so a booked
+    // return time arrives here as an ISO string. Dropping it would silently lose
+    // every "Später" on a cross-platform restore.
+    val revisitAt: String? = null,
     val day2Outcome: VisitOutcome? = null,
-    val day2UpdatedAt: String? = null
+    val day2UpdatedAt: String? = null,
+    val day2RevisitAt: String? = null
 ) {
     fun toDomain() = DoorResult(
-        id.uppercase(), label, outcome, AppJson.epochMillis(updatedAt),
-        day2Outcome, AppJson.epochMillis(day2UpdatedAt)
+        id = id.uppercase(),
+        label = label,
+        outcome = outcome,
+        updatedAt = AppJson.epochMillis(updatedAt),
+        revisitAt = AppJson.epochMillis(revisitAt),
+        day2Outcome = day2Outcome,
+        day2UpdatedAt = AppJson.epochMillis(day2UpdatedAt),
+        day2RevisitAt = AppJson.epochMillis(day2RevisitAt)
     )
 }
 
@@ -111,8 +122,9 @@ fun House.toBackup(): BackupHouse = BackupHouse(
     units = units.map {
         BackupDoor(
             id = it.id.uppercase(), label = it.label, outcome = it.outcome,
-            updatedAt = AppJson.iso(it.updatedAt), day2Outcome = it.day2Outcome,
-            day2UpdatedAt = AppJson.iso(it.day2UpdatedAt)
+            updatedAt = AppJson.iso(it.updatedAt), revisitAt = AppJson.iso(it.revisitAt),
+            day2Outcome = it.day2Outcome, day2UpdatedAt = AppJson.iso(it.day2UpdatedAt),
+            day2RevisitAt = AppJson.iso(it.day2RevisitAt)
         )
     },
     createdAt = AppJson.iso(createdAt)!!, updatedAt = AppJson.iso(updatedAt)!!

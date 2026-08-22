@@ -63,6 +63,8 @@ import at.volkshilfe.nachbesuch.domain.list.ListFilter
 import at.volkshilfe.nachbesuch.domain.list.StreetSection
 import at.volkshilfe.nachbesuch.domain.model.DayScope
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
+import at.volkshilfe.nachbesuch.domain.revisit.RevisitPlanner
+import at.volkshilfe.nachbesuch.feature.shared.RevisitTimeSheet
 import at.volkshilfe.nachbesuch.ui.components.FilterBar
 import at.volkshilfe.nachbesuch.ui.components.FilterChipSpec
 import at.volkshilfe.nachbesuch.ui.components.MinTouchTarget
@@ -95,12 +97,17 @@ fun ListScreen(
     state: ListScreenState,
     onHouseSelected: (String) -> Unit,
     onQuickStatus: (HouseRow, VisitOutcome) -> Unit,
+    /** "Später" from the quick menu: books one return time for the whole row. */
+    onQuickLater: (HouseRow, Long) -> Unit,
     onShowLegend: () -> Unit,
     contentPadding: PaddingValues = PaddingValues(0.dp)
 ) {
     // The undo banner belongs to this screen, not to the whole app. It answers a
     // quick status taken here, where the row promptly re-sorts and moves away; on
     // the map or in the archive it was just a strip of chrome with no context.
+    // The row waiting for a return time, once "Später" was picked from its menu.
+    var revisitTarget by remember { mutableStateOf<HouseRow?>(null) }
+
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(horizontal = 16.dp)) {
@@ -174,7 +181,8 @@ fun ListScreen(
                             HouseRowItem(
                                 row = row,
                                 onClick = { onHouseSelected(row.id) },
-                                onQuickStatus = { outcome -> onQuickStatus(row, outcome) }
+                                onQuickStatus = { outcome -> onQuickStatus(row, outcome) },
+                                onQuickLater = { revisitTarget = row }
                             )
                         }
                     }
@@ -190,6 +198,15 @@ fun ListScreen(
             .align(Alignment.BottomCenter)
             .padding(bottom = contentPadding.calculateBottomPadding() + 8.dp)
     )
+    }
+
+    revisitTarget?.let { row ->
+        RevisitTimeSheet(
+            subject = row.address,
+            existing = row.nextRevisitAt,
+            onPick = { atMillis -> onQuickLater(row, atMillis) },
+            onDismiss = { revisitTarget = null }
+        )
     }
 }
 
@@ -364,7 +381,12 @@ private fun StreetHeader(section: StreetSection, isExpanded: Boolean, onToggle: 
 }
 
 @Composable
-private fun HouseRowItem(row: HouseRow, onClick: () -> Unit, onQuickStatus: (VisitOutcome) -> Unit) {
+private fun HouseRowItem(
+    row: HouseRow,
+    onClick: () -> Unit,
+    onQuickStatus: (VisitOutcome) -> Unit,
+    onQuickLater: () -> Unit
+) {
     var showQuick by remember { mutableStateOf(false) }
     Box {
         Row(
@@ -418,7 +440,7 @@ private fun HouseRowItem(row: HouseRow, onClick: () -> Unit, onQuickStatus: (Vis
         // swipe action: a swipe on a row inside a vertically scrolling list is
         // far less discoverable here, and the legend documents both.
         DropdownMenu(expanded = showQuick, onDismissRequest = { showQuick = false }) {
-            VisitOutcome.entries.forEach { outcome ->
+            VisitOutcome.primary.forEach { outcome ->
                 DropdownMenuItem(
                     text = { Text(outcome.germanTitle) },
                     leadingIcon = {
@@ -427,6 +449,20 @@ private fun HouseRowItem(row: HouseRow, onClick: () -> Unit, onQuickStatus: (Vis
                     onClick = { onQuickStatus(outcome); showQuick = false }
                 )
             }
+            // The ellipsis is the promise that a time is still to be chosen — this
+            // entry opens the picker rather than writing a status straight away.
+            DropdownMenuItem(
+                text = { Text("${VisitOutcome.LATER.germanTitle} …") },
+                leadingIcon = {
+                    Icon(
+                        VisitOutcome.LATER.icon,
+                        contentDescription = null,
+                        tint = VisitOutcome.LATER.tint,
+                        modifier = Modifier.size(18.dp)
+                    )
+                },
+                onClick = { onQuickLater(); showQuick = false }
+            )
         }
     }
 }
@@ -435,6 +471,9 @@ private fun HouseRow.subtitleText(): String {
     val base =
         if (isSingleDoor) (markerOutcome?.germanTitle ?: "Noch kein Status")
         else "$completedCount/$unitCount Türen · $openCount offen"
+    // A booked return time replaces the "last recorded" stamp: on a row that says
+    // "Später", when you are due back is the only time that matters.
+    nextRevisitAt?.let { return "$base · zurück um ${RevisitPlanner.clockText(it)}" }
     val time = recordedAt?.let {
         SimpleDateFormat("HH:mm", Locale.GERMAN).format(Date(it))
     } ?: return base

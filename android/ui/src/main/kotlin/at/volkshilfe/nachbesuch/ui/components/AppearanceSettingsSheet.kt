@@ -18,11 +18,13 @@ import androidx.compose.material.icons.filled.Brightness4
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -50,8 +52,18 @@ import at.volkshilfe.nachbesuch.ui.theme.RadiusControl
 fun AppearanceSettingsSheet(
     appearance: AppAppearance,
     accent: AppAccent,
+    /** The standing 14:00 / 16:00 / 18:00 "send the list" reminder. */
+    dailyListReminders: Boolean,
+    /** The hours that reminder fires, so the label cannot drift from the schedule. */
+    reminderHours: List<Int>,
+    /**
+     * Whether the system will actually deliver anything. A toggle that is on but
+     * muted in Android's settings must not silently lie about it.
+     */
+    notificationsAllowed: Boolean,
     onAppearance: (AppAppearance) -> Unit,
     onAccent: (AppAccent) -> Unit,
+    onDailyListReminders: (Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -112,6 +124,42 @@ fun AppearanceSettingsSheet(
                 }
             }
 
+            SettingsGroup("Erinnerungen", Icons.Default.NotificationsActive) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onDailyListReminders(!dailyListReminders) }
+                        .heightIn(min = MinTouchTarget),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Liste an Teamleiter senden", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            reminderTimesText(reminderHours),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = dailyListReminders, onCheckedChange = onDailyListReminders)
+                }
+
+                if (dailyListReminders && !notificationsAllowed) {
+                    Text(
+                        "Mitteilungen sind für Nachbesuch ausgeschaltet. Die Erinnerung erscheint erst, " +
+                            "wenn du sie in den Android-Einstellungen erlaubst.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                Text(
+                    "Gilt auch für „Später“: ein Haus mit gebuchter Uhrzeit meldet sich pünktlich.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             Text(
                 "Die Einstellung gilt sofort für Karte, Liste und Archiv.",
                 style = MaterialTheme.typography.bodySmall,
@@ -119,6 +167,13 @@ fun AppearanceSettingsSheet(
             )
         }
     }
+}
+
+/** "14:00, 16:00 und 18:00", built from the schedule rather than typed out. */
+private fun reminderTimesText(hours: List<Int>): String {
+    val times = hours.map { String.format(java.util.Locale.GERMAN, "%02d:00", it) }
+    if (times.size < 2) return times.joinToString()
+    return "${times.dropLast(1).joinToString(", ")} und ${times.last()}"
 }
 
 @Composable

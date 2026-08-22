@@ -6,6 +6,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
@@ -26,6 +27,9 @@ val VisitOutcome.tint: Color
         VisitOutcome.EARLY_NO -> Color(0xFFE8850C)
         VisitOutcome.LATE_NO -> Color(0xFF8A8A8E)
         VisitOutcome.JOINED -> Color(0xFFE0559A)
+        // Indigo, not blue: blue is already the "noch kein Status" tone, and a
+        // booked return time must not read as an unanswered door.
+        VisitOutcome.LATER -> Color(0xFF5E5CE6)
     }
 
 val VisitOutcome.icon: ImageVector
@@ -34,6 +38,7 @@ val VisitOutcome.icon: ImageVector
         VisitOutcome.EARLY_NO -> Icons.Default.Block
         VisitOutcome.LATE_NO -> Icons.Default.Close
         VisitOutcome.JOINED -> Icons.Default.Favorite
+        VisitOutcome.LATER -> Icons.Default.Schedule
     }
 
 /** The "no status yet" tone, matching the iOS `displayTint` fallback. */

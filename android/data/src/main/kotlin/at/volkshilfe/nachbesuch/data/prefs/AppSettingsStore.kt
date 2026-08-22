@@ -35,7 +35,12 @@ class AppSettingsStore(private val context: Context) {
          * relaunch silently reset it to whichever territory sorted first, which is
          * the bug the iOS `selectedGebietID` @AppStorage key exists to prevent.
          */
-        val selectedGebietID: String?
+        val selectedGebietID: String?,
+        /**
+         * The standing "send the list" reminder. Default on — the prompt is the
+         * reason the feature exists; a reminder nobody switched on reminds nobody.
+         */
+        val dailyListReminders: Boolean
     )
 
     private object Keys {
@@ -48,6 +53,7 @@ class AppSettingsStore(private val context: Context) {
         val appearance = stringPreferencesKey("appearance.mode")
         val accent = stringPreferencesKey("appearance.accent")
         val selectedGebietID = stringPreferencesKey("selectedGebietID")
+        val dailyListReminders = booleanPreferencesKey("reminders.dailyList")
     }
 
     suspend fun restore(): Values {
@@ -63,7 +69,8 @@ class AppSettingsStore(private val context: Context) {
             appearance = values[Keys.appearance] ?: "system",
             accent = values[Keys.accent] ?: "volkshilfe",
             // Empty string is how a cleared selection is stored; it is not a valid id.
-            selectedGebietID = values[Keys.selectedGebietID]?.takeIf { it.isNotBlank() }
+            selectedGebietID = values[Keys.selectedGebietID]?.takeIf { it.isNotBlank() },
+            dailyListReminders = values[Keys.dailyListReminders] ?: true
         )
     }
 
@@ -78,6 +85,14 @@ class AppSettingsStore(private val context: Context) {
             current[Keys.appearance] = values.appearance
             current[Keys.accent] = values.accent
             current[Keys.selectedGebietID] = values.selectedGebietID.orEmpty()
+            current[Keys.dailyListReminders] = values.dailyListReminders
+        }
+    }
+
+    /** Writes only the reminder toggle, for the same reason as [recordAppearance]. */
+    suspend fun recordDailyListReminders(enabled: Boolean) {
+        context.settingsPreferences.edit { current ->
+            current[Keys.dailyListReminders] = enabled
         }
     }
 

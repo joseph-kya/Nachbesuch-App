@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -96,6 +97,68 @@ fun OutcomeButton(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
+        )
+    }
+}
+
+/**
+ * The "Später" control — deliberately a single wide row under the 2×2 grid of
+ * results rather than a fifth tile in it.
+ *
+ * Two reasons, both shared with the iOS `LaterButton`. It is not a result: the
+ * door stays open, it is only moved to a later time, and grouping it with "Dabei"
+ * would say otherwise. And a five-tile grid leaves an odd gap that reads as a
+ * missing option.
+ */
+@Composable
+fun LaterButton(
+    isSelected: Boolean,
+    /** The time already booked, shown in place of the explanation. */
+    bookedAtText: String?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val outcome = VisitOutcome.LATER
+    val detail = if (isSelected && bookedAtText != null) "Gebucht für $bookedAtText" else outcome.explanation
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(RadiusControl))
+            .background(
+                if (isSelected) outcome.tint.copy(alpha = 0.18f)
+                else MaterialTheme.colorScheme.surfaceContainerHighest,
+                RoundedCornerShape(RadiusControl)
+            )
+            .border(
+                width = if (isSelected) 2.dp else 0.dp,
+                color = if (isSelected) outcome.tint else Color.Transparent,
+                shape = RoundedCornerShape(RadiusControl)
+            )
+            .clickable(onClick = onClick)
+            .heightIn(min = MinTouchTarget)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .clearAndSetSemantics {
+                contentDescription = outcome.germanTitle
+                stateDescription = detail
+                selected = isSelected
+            },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(outcome.emoji, style = MaterialTheme.typography.titleMedium)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(outcome.germanTitle, style = MaterialTheme.typography.labelLarge)
+            Text(
+                detail,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Icon(
+            Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp)
         )
     }
 }

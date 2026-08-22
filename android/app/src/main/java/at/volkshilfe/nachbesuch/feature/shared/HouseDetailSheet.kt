@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -53,6 +54,8 @@ import at.volkshilfe.nachbesuch.domain.model.DoorResult
 import at.volkshilfe.nachbesuch.domain.model.House
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
 import at.volkshilfe.nachbesuch.ui.components.MinTouchTarget
+import at.volkshilfe.nachbesuch.domain.revisit.RevisitPlanner
+import at.volkshilfe.nachbesuch.ui.components.LaterButton
 import at.volkshilfe.nachbesuch.ui.components.OutcomeButton
 import at.volkshilfe.nachbesuch.ui.theme.RadiusControl
 import at.volkshilfe.nachbesuch.ui.theme.RadiusSmall
@@ -87,8 +90,12 @@ fun HouseDetailSheet(
     isTwoDay: Boolean,
     onScopeChange: (DayScope) -> Unit,
     onOutcome: (String, VisitOutcome?) -> Unit,
+    /** Postpones one door to a booked time; the sheet asks for the time first. */
+    onLater: (String, Long) -> Unit,
     onRenameUnit: (String, String) -> Unit,
     onAllOpenNotHome: () -> Unit,
+    /** Books one time for every still-open door of a building. */
+    onAllOpenLater: (Long) -> Unit,
     onResize: (Int) -> Unit,
     onAddressChange: (String) -> Unit,
     onNoteChange: (String) -> Unit,
@@ -114,6 +121,8 @@ fun HouseDetailSheet(
     // rather than racing it.
     var pendingDismiss by remember(house.id) { mutableStateOf(0) }
     var confirmDelete by remember { mutableStateOf(false) }
+    // The door waiting for a return time, or the sentinel for "all open doors".
+    var revisitTarget by remember(house.id) { mutableStateOf<RevisitTarget?>(null) }
     var showUnitCount by remember { mutableStateOf(false) }
     var draftAddress by remember(house.id) { mutableStateOf(house.address) }
     var draftNote by remember(house.id) { mutableStateOf(house.note) }
@@ -253,13 +262,23 @@ fun HouseDetailSheet(
                         writeScope = writeScope,
                         isDisabled = house.isDamaged,
                         onSelect = { outcome -> onOutcome(door.id, outcome) },
+                        onLater = { revisitTarget = RevisitTarget.Door(door.id, door.label) },
                         onRename = { name -> onRenameUnit(door.id, name) }
                     )
                 }
                 item(key = "bulk") {
-                    TextButton(onClick = onAllOpenNotHome, enabled = !house.isDamaged) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Text("  Alle offenen Türen als „Niemand da“")
+                    Column {
+                        TextButton(onClick = onAllOpenNotHome, enabled = !house.isDamaged) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text("  Alle offenen Türen als „Niemand da“")
+                        }
+                        TextButton(
+                            onClick = { revisitTarget = RevisitTarget.AllOpen },
+                            enabled = !house.isDamaged
+                        ) {
+                            Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text("  Alle offenen Türen auf „Später“")
+                        }
                     }
                 }
             } else {
@@ -279,6 +298,13 @@ fun HouseDetailSheet(
                                     // still working here, so the sheet stays put.
                                     if (!wasCleared && !touchExplorationEnabled) pendingDismiss++
                                 }
+                            )
+                            LaterButton(
+                                isSelected = door.result(writeScope) == VisitOutcome.LATER,
+                                bookedAtText = door.revisitTime(writeScope)?.let(RevisitPlanner::clockText),
+                                // Tapping an already-postponed door edits its time;
+                                // the sheet's own "Zeit entfernen" clears the status.
+                                onClick = { if (!house.isDamaged) revisitTarget = RevisitTarget.Door(door.id, door.label) }
                             )
                             door.timestamp(scope)?.let { stamp ->
                                 Text(
@@ -367,6 +393,30 @@ fun HouseDetailSheet(
         )
     }
 
+    revisitTarget?.let { target ->
+        val door = (target as? RevisitTarget.Door)?.let { chosen ->
+            house.units.firstOrNull { it.id == chosen.id }
+        }
+        RevisitTimeSheet(
+            subject = when (target) {
+                is RevisitTarget.Door ->
+                    if (house.isApartmentBuilding) "${house.address} — ${target.label}" else house.address
+                RevisitTarget.AllOpen -> "${house.address} — alle offenen Türen"
+            },
+            existing = door?.revisitTime(writeScope),
+            onPick = { atMillis ->
+                when (target) {
+                    is RevisitTarget.Door -> onLater(target.id, atMillis)
+                    RevisitTarget.AllOpen -> onAllOpenLater(atMillis)
+                }
+            },
+            onClear = if (door?.result(writeScope) == VisitOutcome.LATER) {
+                { onOutcome(door.id, null) }
+            } else null,
+            onDismiss = { revisitTarget = null }
+        )
+    }
+
     if (showUnitCount) {
         UnitCountDialog(
             current = house.units.size,
@@ -376,10 +426,18 @@ fun HouseDetailSheet(
     }
 }
 
+/** Which door the return-time sheet was opened for. */
+private sealed interface RevisitTarget {
+    data class Door(val id: String, val label: String) : RevisitTarget
+    data object AllOpen : RevisitTarget
+}
+
 @Composable
 private fun OutcomeGrid(current: VisitOutcome?, isDisabled: Boolean, onSelect: (VisitOutcome?) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        VisitOutcome.entries.chunked(2).forEach { row ->
+        // The four results only. "Später" is a postponement, not a result, and it
+        // gets its own row — see [LaterButton].
+        VisitOutcome.primary.chunked(2).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { outcome ->
                     OutcomeButton(
@@ -401,6 +459,7 @@ private fun ApartmentDoorRow(
     writeScope: DayScope,
     isDisabled: Boolean,
     onSelect: (VisitOutcome?) -> Unit,
+    onLater: () -> Unit,
     onRename: (String) -> Unit
 ) {
     var renaming by remember(door.id) { mutableStateOf(false) }
@@ -433,6 +492,11 @@ private fun ApartmentDoorRow(
             }
         }
         OutcomeGrid(current = current, isDisabled = isDisabled, onSelect = onSelect)
+        LaterButton(
+            isSelected = current == VisitOutcome.LATER,
+            bookedAtText = door.revisitTime(writeScope)?.let(RevisitPlanner::clockText),
+            onClick = { if (!isDisabled) onLater() }
+        )
     }
 }
 

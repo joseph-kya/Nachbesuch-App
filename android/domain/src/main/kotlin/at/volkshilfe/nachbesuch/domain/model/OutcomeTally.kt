@@ -7,7 +7,12 @@ data class OutcomeTally(
     val earlyNo: Int = 0,
     val lateNo: Int = 0,
     val joined: Int = 0,
-    val notHome: Int = 0
+    val notHome: Int = 0,
+    /**
+     * Doors postponed to a concrete time. Counted separately from [notHome]
+     * because "come back at 18:00" and "come back some time" are different jobs.
+     */
+    val later: Int = 0
 ) {
     /** Compatibility alias for callers that only need the number of doors. */
     val total: Int get() = unitCount
@@ -18,7 +23,7 @@ data class OutcomeTally(
     operator fun plus(other: OutcomeTally) = OutcomeTally(
         unitCount + other.unitCount, completed + other.completed, open + other.open,
         earlyNo + other.earlyNo, lateNo + other.lateNo, joined + other.joined,
-        notHome + other.notHome
+        notHome + other.notHome, later + other.later
     )
 
     companion object {
@@ -36,7 +41,8 @@ data class OutcomeTally(
                     earlyNo = tally.earlyNo + if (outcome == VisitOutcome.EARLY_NO) 1 else 0,
                     lateNo = tally.lateNo + if (outcome == VisitOutcome.LATE_NO) 1 else 0,
                     joined = tally.joined + if (outcome == VisitOutcome.JOINED) 1 else 0,
-                    notHome = tally.notHome + if (outcome == VisitOutcome.NOT_HOME) 1 else 0
+                    notHome = tally.notHome + if (outcome == VisitOutcome.NOT_HOME) 1 else 0,
+                    later = tally.later + if (outcome == VisitOutcome.LATER) 1 else 0
                 )
             }
             return tally

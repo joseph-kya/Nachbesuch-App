@@ -23,14 +23,18 @@ data class PreparedMapSnapshot(val pinsByID: Map<String, MapPinSnapshot>) {
 
 object MapPinSnapshotBuilder {
     /**
-     * Pin priority identical to iOS OutcomeTally.markerOutcome:
-     * any visible "not home" wins, then a join, else the last displayed result.
-     * A pending day-2 revisit displays as nil in Tag-2 scope, so it deliberately
-     * does not force a red pin there.
+     * Pin priority identical to iOS OutcomeTally.markerOutcome: a booked return
+     * time wins, then any visible "not home", then a join, else the last displayed
+     * result. A pending day-2 revisit displays as nil in Tag-2 scope, so it
+     * deliberately does not force a red pin there.
+     *
+     * "Später" outranks "niemand da" because it is the more specific instruction,
+     * and the one with a deadline attached.
      */
     fun markerOutcome(units: List<DoorResult>, scope: DayScope): VisitOutcome? {
         val outcomes = units.mapNotNull { it.displayOutcome(scope) }
         return when {
+            VisitOutcome.LATER in outcomes -> VisitOutcome.LATER
             VisitOutcome.NOT_HOME in outcomes -> VisitOutcome.NOT_HOME
             VisitOutcome.JOINED in outcomes -> VisitOutcome.JOINED
             else -> outcomes.lastOrNull()
