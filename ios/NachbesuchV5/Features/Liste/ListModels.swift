@@ -23,6 +23,8 @@ nonisolated struct HouseRowModel: Identifiable, Equatable, Sendable {
     let longitude: Double
     /// When the most recent door of this house was recorded.
     let recordedAt: Date?
+    /// The earliest return time booked on this house, when any door is "Später".
+    let nextRevisitAt: Date?
     /// Metres from the user, when a position is known.
     var distance: Double?
 
@@ -38,14 +40,22 @@ nonisolated struct HouseRowModel: Identifiable, Equatable, Sendable {
         let base = isSingleDoor
             ? markerOutcome.displayTitleValue
             : "\(completedCount)/\(unitCount) Türen · \(openCount) offen"
+        // A booked return time replaces the "last recorded" stamp: on a row that
+        // says "Später", when you are due back is the only time that matters.
+        if let nextRevisitAt {
+            return "\(base) · zurück um \(RevisitPlanner.clockFormatter.string(from: nextRevisitAt))"
+        }
         guard let recordedAt else { return base }
         return "\(base) · \(recordedAt.formatted(date: .omitted, time: .shortened))"
     }
 
     /// What VoiceOver reads instead of an emoji.
     var accessibilityValue: String {
-        if isSingleDoor { return markerOutcome.displayTitleValue }
-        return "\(completedCount) von \(unitCount) Türen erledigt, \(openCount) offen"
+        let base = isSingleDoor
+            ? markerOutcome.displayTitleValue
+            : "\(completedCount) von \(unitCount) Türen erledigt, \(openCount) offen"
+        guard let nextRevisitAt else { return base }
+        return "\(base), zurück um \(RevisitPlanner.clockFormatter.string(from: nextRevisitAt))"
     }
 }
 
@@ -165,7 +175,8 @@ nonisolated enum HouseListBuilder {
                 searchText: SearchText.fold(searchable),
                 latitude: seed.latitude,
                 longitude: seed.longitude,
-                recordedAt: recordedAt
+                recordedAt: recordedAt,
+                nextRevisitAt: doors.compactMap { $0.displayRevisitAt(in: scope) }.min()
             )
         }
     }

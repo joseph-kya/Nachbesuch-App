@@ -515,7 +515,7 @@ struct DistanceSortTests {
             markerOutcome: nil, unitCount: 1, completedCount: 0,
             followUpCount: 0, joinedCount: 0, openCount: 1,
             createdAt: .now, searchText: "", latitude: latitude, longitude: longitude,
-            recordedAt: nil
+            recordedAt: nil, nextRevisitAt: nil
         )
     }
 

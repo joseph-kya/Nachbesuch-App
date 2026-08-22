@@ -35,6 +35,8 @@ struct ListScreen: View {
     @State private var selectedHouseID: UUID?
     @State private var showsLegend = false
     @State private var showsExport = false
+    /// The row waiting for a return time, once "Später" was swiped.
+    @State private var revisitTarget: HouseRowModel?
     @State private var undo: UndoEntry?
     @State private var undoTask: Task<Void, Never>?
     @State private var saveTask: Task<Void, Never>?
@@ -187,6 +189,16 @@ struct ListScreen: View {
                                             Label("Niemand da", systemImage: "arrow.clockwise")
                                         }
                                         .tint(.red)
+
+                                        Button {
+                                            revisitTarget = row
+                                        } label: {
+                                            Label(
+                                                VisitOutcome.later.title,
+                                                systemImage: VisitOutcome.later.symbolName
+                                            )
+                                        }
+                                        .tint(VisitOutcome.later.tint)
                                     }
                                     .accessibilityAction(named: "Fußroute öffnen") {
                                         MapNavigation.openWalkingRoute(
@@ -196,6 +208,9 @@ struct ListScreen: View {
                                     }
                                     .accessibilityAction(named: "Als „Niemand da“ markieren") {
                                         applyQuickStatus(.notHome, to: row)
+                                    }
+                                    .accessibilityAction(named: "Auf später verschieben") {
+                                        revisitTarget = row
                                     }
                                 }
                             }
@@ -305,6 +320,14 @@ struct ListScreen: View {
                 StatusLegendSheet()
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $revisitTarget) { row in
+                RevisitTimeSheet(
+                    subject: row.address,
+                    existing: row.nextRevisitAt
+                ) { date in
+                    applyQuickStatus(.later, to: row, revisitAt: date)
+                }
             }
         }
         .task {
@@ -472,16 +495,23 @@ struct ListScreen: View {
 
     // MARK: Status changes
 
-    private func applyQuickStatus(_ outcome: VisitOutcome, to row: HouseRowModel) {
+    private func applyQuickStatus(_ outcome: VisitOutcome, to row: HouseRowModel, revisitAt: Date? = nil) {
         guard let house = houses.first(where: { $0.id == row.id }),
               let previous = house.decodedUnits() else { return }
 
+        // The doors the write is about to touch, captured before it happens: after
+        // the write they are no longer "open" and cannot be found again.
+        let affected: [DoorResult]
         if house.isApartmentBuilding {
-            guard house.setOutcomeForOpenDoors(outcome, day: writeDay) > 0 else { return }
+            affected = previous.filter { $0.isOpen(in: writeDay == 2 ? .day2 : .day1) }
+            guard house.setOutcomeForOpenDoors(outcome, day: writeDay, revisitAt: revisitAt) > 0 else { return }
         } else {
             guard let door = previous.first else { return }
-            house.setOutcome(outcome, for: door.id, day: writeDay)
+            affected = [door]
+            house.setOutcome(outcome, for: door.id, day: writeDay, revisitAt: revisitAt)
         }
+
+        syncReminders(for: house, doors: affected, outcome: outcome, at: revisitAt)
 
         offerUndo(
             UndoEntry(
@@ -489,11 +519,38 @@ struct ListScreen: View {
                 previousUnits: previous,
                 // Concrete, so the user knows exactly what they are undoing after the
                 // list has re-sorted and the row has moved.
-                label: "\(row.address) → \(outcome.title)"
+                label: "\(row.address) → \(outcome.label(revisitAt: revisitAt))"
             )
         )
         scheduleSave()
         UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    /// Books or drops the reminders belonging to a quick status write.
+    private func syncReminders(
+        for house: House,
+        doors: [DoorResult],
+        outcome: VisitOutcome,
+        at date: Date?
+    ) {
+        let houseID = house.id
+        let address = house.address
+        let isApartment = house.isApartmentBuilding
+        let day = writeDay
+        let entries = doors.map { (id: $0.id, label: $0.label) }
+        Task {
+            for entry in entries {
+                if outcome == .later, let date {
+                    await ReminderService.scheduleRevisit(
+                        house: houseID, door: entry.id, day: day,
+                        address: address, doorLabel: entry.label,
+                        isApartmentBuilding: isApartment, at: date
+                    )
+                } else {
+                    await ReminderService.cancelRevisit(house: houseID, door: entry.id, day: day)
+                }
+            }
+        }
     }
 
     private func offerUndo(_ entry: UndoEntry) {
@@ -511,8 +568,32 @@ struct ListScreen: View {
         undo = nil
         guard let house = houses.first(where: { $0.id == entry.houseID }) else { return }
         house.restore(units: entry.previousUnits)
+        // Undoing a "Später" must take the reminder with it, and re-book any time
+        // the undone write had overwritten. Rebuilding the house's whole set is
+        // simpler and safer than reasoning about which direction the undo went.
+        rebuildReminders(for: house)
         scheduleSave()
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    /// Re-derives every reminder of one house from its stored doors.
+    private func rebuildReminders(for house: House) {
+        let houseID = house.id
+        let address = house.address
+        let isApartment = house.isApartmentBuilding
+        let day = writeDay
+        let doors = house.units
+        Task {
+            await ReminderService.cancelAllRevisits(house: houseID)
+            for door in doors {
+                guard door.result(on: day) == .later, let date = door.revisitTime(on: day) else { continue }
+                await ReminderService.scheduleRevisit(
+                    house: houseID, door: door.id, day: day,
+                    address: address, doorLabel: door.label,
+                    isApartmentBuilding: isApartment, at: date
+                )
+            }
+        }
     }
 
     private func scheduleSave() {

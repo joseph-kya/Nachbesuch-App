@@ -32,11 +32,18 @@ struct HouseDetailSheet: View {
     private enum DetailRoute: Identifiable {
         case convertToApartment
         case resizeUnits
+        /// Booking a return time for one door. Carries the door rather than a
+        /// binding so the sheet cannot outlive the door it was opened for.
+        case revisitTime(door: DoorResult)
+        /// Booking one return time for every still-open door of a building.
+        case revisitTimeForOpenDoors
 
         var id: String {
             switch self {
             case .convertToApartment: "convert"
             case .resizeUnits: "resize"
+            case let .revisitTime(door): "revisit-\(door.id)"
+            case .revisitTimeForOpenDoors: "revisit-open"
             }
         }
     }
@@ -154,6 +161,22 @@ struct HouseDetailSheet: View {
                         house.resizeUnits(to: count)
                         save()
                     }
+                case let .revisitTime(door):
+                    RevisitTimeSheet(
+                        subject: subjectText(for: door),
+                        existing: door.revisitTime(on: writeDay),
+                        onPick: { date in
+                            applyLater(to: door.id, at: date)
+                        },
+                        onClear: door.result(on: writeDay) == .later
+                            ? { clearOutcome(for: door.id) }
+                            : nil
+                    )
+                case .revisitTimeForOpenDoors:
+                    RevisitTimeSheet(
+                        subject: "\(house.address) — alle offenen Türen",
+                        onPick: { date in applyLaterToOpenDoors(at: date) }
+                    )
                 }
             }
             .confirmationDialog(
@@ -162,6 +185,8 @@ struct HouseDetailSheet: View {
                 titleVisibility: .visible
             ) {
                 Button("Haus löschen", role: .destructive) {
+                    let houseID = house.id
+                    Task { await ReminderService.cancelAllRevisits(house: houseID) }
                     modelContext.delete(house)
                     if modelContext.save(reporting: notices, context: "Haus konnte nicht gelöscht werden") {
                         dismiss()
@@ -207,11 +232,20 @@ struct HouseDetailSheet: View {
                 columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
                 spacing: 10
             ) {
-                ForEach(VisitOutcome.allCases) { outcome in
+                ForEach(VisitOutcome.primary) { outcome in
                     OutcomeButton(outcome: outcome, isSelected: current == outcome) {
                         apply(outcome, to: door, current: current)
                     }
                 }
+            }
+
+            LaterButton(
+                isSelected: current == .later,
+                bookedAt: door.revisitTime(on: writeDay)
+            ) {
+                // Tapping an already-postponed door edits its time; the sheet's
+                // own "Zeit entfernen" is the way back to no status.
+                sheetRoute = .revisitTime(door: door)
             }
 
             if let timestamp = door.timestamp(in: scope) {
@@ -234,6 +268,7 @@ struct HouseDetailSheet: View {
                     onSelect: { outcome in
                         apply(outcome, to: door, current: door.result(on: writeDay))
                     },
+                    onLater: { sheetRoute = .revisitTime(door: door) },
                     onRename: { name in
                         house.renameUnit(name, id: door.id)
                         save()
@@ -243,16 +278,27 @@ struct HouseDetailSheet: View {
         } header: {
             Text("Türen")
         } footer: {
-            Button {
-                guard house.setOutcomeForOpenDoors(.notHome, day: writeDay) > 0 else { return }
-                save()
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-            } label: {
-                Label("Alle offenen Türen als „Niemand da“", systemImage: "arrow.clockwise.circle")
-                    .font(.footnote.weight(.medium))
+            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    guard house.setOutcomeForOpenDoors(.notHome, day: writeDay) > 0 else { return }
+                    save()
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                } label: {
+                    Label("Alle offenen Türen als „Niemand da“", systemImage: "arrow.clockwise.circle")
+                        .font(.footnote.weight(.medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+
+                Button {
+                    sheetRoute = .revisitTimeForOpenDoors
+                } label: {
+                    Label("Alle offenen Türen auf „Später“", systemImage: VisitOutcome.later.symbolName)
+                        .font(.footnote.weight(.medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(VisitOutcome.later.tint)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.red)
             .padding(.top, 4)
             .disabled(house.isDamaged)
         }
@@ -263,6 +309,9 @@ struct HouseDetailSheet: View {
     private func apply(_ outcome: VisitOutcome, to door: DoorResult, current: VisitOutcome?) {
         house.setOutcome(current == outcome ? nil : outcome, for: door.id, day: writeDay)
         save()
+        // Any non-"Später" answer settles the door, so its pending reminder has to
+        // go — otherwise a phone buzzes at 18:00 for a household that joined at 17.
+        cancelReminder(for: door.id)
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
         guard !house.isApartmentBuilding, current != outcome else { return }
@@ -278,6 +327,60 @@ struct HouseDetailSheet: View {
             commitDrafts()
             dismiss()
         }
+    }
+
+    /// Postpones one door to `date` and books the reminder.
+    private func applyLater(to unitID: UUID, at date: Date) {
+        house.setOutcome(.later, for: unitID, day: writeDay, revisitAt: date)
+        save()
+        scheduleReminder(for: unitID, at: date)
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        notices.show("Später um \(RevisitPlanner.clockFormatter.string(from: date))")
+    }
+
+    /// The building-wide version, booking the same time for every open door.
+    private func applyLaterToOpenDoors(at date: Date) {
+        let openDoorIDs = house.units
+            .filter { $0.isOpen(in: writeDay == 2 ? .day2 : .day1) }
+            .map(\.id)
+        guard house.setOutcomeForOpenDoors(.later, day: writeDay, revisitAt: date) > 0 else { return }
+        save()
+        for unitID in openDoorIDs {
+            scheduleReminder(for: unitID, at: date)
+        }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        notices.show("\(openDoorIDs.count) Türen: später um \(RevisitPlanner.clockFormatter.string(from: date))")
+    }
+
+    private func clearOutcome(for unitID: UUID) {
+        house.setOutcome(nil, for: unitID, day: writeDay)
+        save()
+        cancelReminder(for: unitID)
+    }
+
+    private func subjectText(for door: DoorResult) -> String {
+        house.isApartmentBuilding ? "\(house.address) — \(door.label)" : house.address
+    }
+
+    private func scheduleReminder(for unitID: UUID, at date: Date) {
+        let houseID = house.id
+        let address = house.address
+        let isApartment = house.isApartmentBuilding
+        let label = house.units.first { $0.id == unitID }?.label ?? "Haushalt"
+        let day = writeDay
+        Task {
+            await ReminderService.scheduleRevisit(
+                house: houseID, door: unitID, day: day,
+                address: address, doorLabel: label,
+                isApartmentBuilding: isApartment, at: date
+            )
+        }
+    }
+
+    private func cancelReminder(for unitID: UUID) {
+        let houseID = house.id
+        let day = writeDay
+        Task { await ReminderService.cancelRevisit(house: houseID, door: unitID, day: day) }
     }
 
     /// Address and note are buffered while typing so there is no SwiftData write per
@@ -312,6 +415,7 @@ private struct ApartmentDoorRow: View {
     let writeDay: Int
     let isDisabled: Bool
     let onSelect: (VisitOutcome) -> Void
+    let onLater: () -> Void
     let onRename: (String) -> Void
 
     @State private var draftLabel: String
@@ -322,12 +426,14 @@ private struct ApartmentDoorRow: View {
         writeDay: Int,
         isDisabled: Bool,
         onSelect: @escaping (VisitOutcome) -> Void,
+        onLater: @escaping () -> Void,
         onRename: @escaping (String) -> Void
     ) {
         self.door = door
         self.writeDay = writeDay
         self.isDisabled = isDisabled
         self.onSelect = onSelect
+        self.onLater = onLater
         self.onRename = onRename
         _draftLabel = State(initialValue: door.label)
     }
@@ -343,7 +449,7 @@ private struct ApartmentDoorRow: View {
                     .onSubmit { commit() }
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text(current.displayTitle)
+                    Text(current?.label(revisitAt: door.revisitTime(on: writeDay)) ?? current.displayTitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     // When this door was recorded — the round is a sequence, and
@@ -358,28 +464,30 @@ private struct ApartmentDoorRow: View {
             }
 
             HStack(spacing: 6) {
-                ForEach(VisitOutcome.allCases) { outcome in
-                    Button {
-                        onSelect(outcome)
-                    } label: {
-                        Text(outcome.emoji)
-                            .font(.body)
-                            .frame(maxWidth: .infinity, minHeight: 38)
-                            .background {
-                                RoundedRectangle(cornerRadius: AppRadius.small, style: .continuous)
-                                    .fill(current == outcome
-                                          ? outcome.tint.opacity(0.2)
-                                          : Color(uiColor: .tertiarySystemFill))
-                            }
-                            .overlay {
-                                RoundedRectangle(cornerRadius: AppRadius.small, style: .continuous)
-                                    .strokeBorder(current == outcome ? outcome.tint : .clear, lineWidth: 1.5)
-                            }
-                    }
-                    .buttonStyle(.plain)
+                ForEach(VisitOutcome.primary) { outcome in
+                    OutcomeChip(
+                        emoji: outcome.emoji,
+                        tint: outcome.tint,
+                        isSelected: current == outcome,
+                        width: nil,
+                        action: { onSelect(outcome) }
+                    )
                     .accessibilityLabel(outcome.title)
                     .accessibilityAddTraits(current == outcome ? [.isButton, .isSelected] : .isButton)
                 }
+
+                // Narrower than the four results: "Später" postpones the door, it
+                // does not close it, so it does not get equal billing.
+                OutcomeChip(
+                    emoji: VisitOutcome.later.emoji,
+                    tint: VisitOutcome.later.tint,
+                    isSelected: current == .later,
+                    width: 46,
+                    action: onLater
+                )
+                .accessibilityLabel(VisitOutcome.later.title)
+                .accessibilityHint("Fragt nach einer Uhrzeit")
+                .accessibilityAddTraits(current == .later ? [.isButton, .isSelected] : .isButton)
             }
         }
         .padding(.vertical, 4)
@@ -391,7 +499,7 @@ private struct ApartmentDoorRow: View {
         .accessibilityLabel(door.label)
         .accessibilityValue(
             recordedAt.map {
-                "\(current.displayTitle), \($0.formatted(date: .omitted, time: .shortened))"
+                "\(current?.label(revisitAt: door.revisitTime(on: writeDay)) ?? current.displayTitle), \($0.formatted(date: .omitted, time: .shortened))"
             } ?? current.displayTitle
         )
     }
@@ -407,6 +515,38 @@ private struct ApartmentDoorRow: View {
             return
         }
         onRename(trimmed)
+    }
+}
+
+/// One emoji status chip in an apartment door row.
+///
+/// Extracted because the inline version of this — five chips, each with its own
+/// conditional fill and border — was past what the type checker would solve in one
+/// expression.
+private struct OutcomeChip: View {
+    let emoji: String
+    let tint: Color
+    let isSelected: Bool
+    /// `nil` means "share the row equally"; a value pins the chip narrower.
+    let width: CGFloat?
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(emoji)
+                .font(.body)
+                .frame(maxWidth: width == nil ? .infinity : nil)
+                .frame(width: width, height: 38)
+                .background {
+                    RoundedRectangle(cornerRadius: AppRadius.small, style: .continuous)
+                        .fill(isSelected ? tint.opacity(0.2) : Color(uiColor: .tertiarySystemFill))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: AppRadius.small, style: .continuous)
+                        .strokeBorder(isSelected ? tint : .clear, lineWidth: 1.5)
+                }
+        }
+        .buttonStyle(.plain)
     }
 }
 

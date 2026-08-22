@@ -76,7 +76,11 @@ struct AddHouseSheet: View {
                             columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
                             spacing: 10
                         ) {
-                            ForEach(VisitOutcome.allCases) { outcome in
+                            // Results only. "Später" would need a return time, and
+                            // a house that does not exist yet has nothing to book a
+                            // reminder against — it is one tap away in the detail
+                            // sheet once the pin is on the map.
+                            ForEach(VisitOutcome.primary) { outcome in
                                 OutcomeButton(outcome: outcome, isSelected: initialOutcome == outcome) {
                                     initialOutcome = initialOutcome == outcome ? nil : outcome
                                     UISelectionFeedbackGenerator().selectionChanged()

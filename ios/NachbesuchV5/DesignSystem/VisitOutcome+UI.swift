@@ -12,6 +12,9 @@ extension VisitOutcome {
         case .earlyNo: .orange
         case .lateNo: Color(uiColor: .systemGray)
         case .joined: .pink
+        // Indigo, not blue: blue is already the "noch kein Status" tone, and a
+        // booked return time must not read as an unanswered door.
+        case .later: .indigo
         }
     }
 

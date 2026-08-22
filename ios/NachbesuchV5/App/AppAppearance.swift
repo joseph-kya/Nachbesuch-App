@@ -58,6 +58,10 @@ struct AppearanceSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("appearance.mode") private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage("appearance.accent") private var accentRaw = AppAccent.volkshilfe.rawValue
+    @AppStorage(ReminderSettings.dailyListKey) private var dailyListRemindersEnabled = true
+    /// Whether the system will actually deliver anything. Checked on appear so a
+    /// toggle that is on but muted in iOS Settings cannot silently lie.
+    @State private var notificationsAllowed = true
 
     private var appearance: Binding<AppAppearance> {
         Binding(
@@ -121,6 +125,34 @@ struct AppearanceSettingsSheet: View {
                         .sensoryFeedback(.selection, trigger: accentRaw)
                     }
 
+                    settingsGroup("Erinnerungen", systemImage: "bell.badge.fill") {
+                        Toggle(isOn: $dailyListRemindersEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Liste an Teamleiter senden")
+                                    .font(.subheadline.weight(.medium))
+                                Text(reminderTimesText)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(minHeight: AppTouch.minimum)
+                        .sensoryFeedback(.selection, trigger: dailyListRemindersEnabled)
+
+                        if dailyListRemindersEnabled && !notificationsAllowed {
+                            Label(
+                                "Mitteilungen sind für Nachbesuch ausgeschaltet. Die Erinnerung erscheint erst, wenn du sie in den iOS-Einstellungen erlaubst.",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Text("Gilt auch für „Später“: ein Haus mit gebuchter Uhrzeit meldet sich pünktlich.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
                     Text("Die Einstellung gilt sofort für Karte, Liste und Archiv.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -131,12 +163,24 @@ struct AppearanceSettingsSheet: View {
             .background { AppBackdrop() }
             .navigationTitle("Einstellungen")
             .navigationBarTitleDisplayMode(.inline)
+            .task(id: dailyListRemindersEnabled) {
+                await ReminderService.applyDailyListReminders(enabled: dailyListRemindersEnabled)
+                notificationsAllowed = await ReminderService.ensureAuthorized()
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Fertig") { dismiss() }.fontWeight(.semibold)
                 }
             }
         }
+    }
+
+    /// "14:00, 16:00 und 18:00" — built from the schedule rather than typed out, so
+    /// the label cannot drift from the times actually booked.
+    private var reminderTimesText: String {
+        let times = ReminderService.dailyListHours.map { String(format: "%02d:00", $0) }
+        guard let last = times.last, times.count > 1 else { return times.joined() }
+        return "\(times.dropLast().joined(separator: ", ")) und \(last)"
     }
 
     private func settingsGroup<Content: View>(

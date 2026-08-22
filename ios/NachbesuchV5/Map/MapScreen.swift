@@ -1020,7 +1020,32 @@ struct MapScreen: View {
         let day = writeDay(for: house)
         let current = door.result(on: day)
         house.setOutcome(current == outcome ? nil : outcome, for: door.id, day: day)
+        // Answering a door settles it, so any reminder it still carries is stale.
+        let houseID = house.id
+        let doorID = door.id
+        Task { await ReminderService.cancelRevisit(house: houseID, door: doorID, day: day) }
         scheduleSave()
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    /// Books a return time for a single-door pin, from the long-press menu.
+    private func setRevisitTime(_ date: Date, for id: UUID) {
+        guard let house = housesByID[id], let door = house.units.first else { return }
+        let day = writeDay(for: house)
+        house.setOutcome(.later, for: door.id, day: day, revisitAt: date)
+        let houseID = house.id
+        let doorID = door.id
+        let address = house.address
+        let label = door.label
+        Task {
+            await ReminderService.scheduleRevisit(
+                house: houseID, door: doorID, day: day,
+                address: address, doorLabel: label,
+                isApartmentBuilding: false, at: date
+            )
+        }
+        scheduleSave()
+        notices.show("Später um \(RevisitPlanner.clockFormatter.string(from: date))")
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
@@ -1076,11 +1101,18 @@ struct MapScreen: View {
 
         let status: UIMenu
         if pin.unitCount == 1 {
-            status = UIMenu(options: .displayInline, children: VisitOutcome.allCases.map { outcome in
+            var actions = VisitOutcome.primary.map { outcome in
                 UIAction(title: "\(outcome.emoji)  \(outcome.title)") { _ in
                     setQuickOutcome(outcome, for: id)
                 }
+            }
+            // The ellipsis is the promise that a time is still to be chosen — this
+            // action opens the picker rather than writing a status straight away.
+            let later = VisitOutcome.later
+            actions.append(UIAction(title: "\(later.emoji)  \(later.title)…") { _ in
+                sheetRoute = .revisitTime(houseID: id, address: pin.address)
             })
+            status = UIMenu(options: .displayInline, children: actions)
         } else {
             status = UIMenu(options: .displayInline, children: [
                 UIAction(
@@ -1120,6 +1152,14 @@ struct MapScreen: View {
                 HouseDetailSheet(house: house, scope: scope, writeDay: writeDay(for: house))
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
+            }
+
+        case .revisitTime(let id, let address):
+            RevisitTimeSheet(
+                subject: address,
+                existing: housesByID[id]?.summary(for: scope).nextRevisitAt
+            ) { date in
+                setRevisitTime(date, for: id)
             }
 
         case .addHouse(let coordinate, let gebietID):
@@ -1229,6 +1269,8 @@ enum MapRoute: Identifiable {
     case importArea
     case exportSelection
     case stackedPins([UUID])
+    /// Booking a return time for a single-door pin, from its long-press menu.
+    case revisitTime(houseID: UUID, address: String)
 
     var id: String {
         switch self {
@@ -1238,6 +1280,7 @@ enum MapRoute: Identifiable {
         case .importArea: "import"
         case .exportSelection: "export"
         case .stackedPins(let ids): "stacked-\(ids.count)-\(ids.first?.uuidString ?? "")"
+        case .revisitTime(let id, _): "revisit-\(id)"
         }
     }
 }

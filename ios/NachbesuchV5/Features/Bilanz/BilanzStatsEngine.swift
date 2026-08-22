@@ -90,6 +90,7 @@ nonisolated extension OutcomeTally {
         case .earlyNo: earlyNo += 1
         case .lateNo: lateNo += 1
         case .joined: joined += 1
+        case .later: later += 1
         }
     }
 }
