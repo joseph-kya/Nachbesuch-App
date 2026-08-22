@@ -2,6 +2,7 @@ package at.volkshilfe.nachbesuch.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
@@ -121,10 +122,35 @@ val AppTypography = Typography().let { base ->
     )
 }
 
+/**
+ * Applies the chosen [AppAccent] over a finished neutral scheme.
+ *
+ * Only the accent-derived tokens are replaced. The neutral surface/outline ramp
+ * above stays exactly as authored, which is the whole point of defining it by
+ * hand: re-deriving a scheme from a seed colour would drag Material's tonal
+ * tinting back into every container and undo `e8a5c73`.
+ */
+private fun ColorScheme.withAccent(accent: AppAccent, dark: Boolean): ColorScheme = copy(
+    primary = if (dark) accent.dark else accent.light,
+    primaryContainer = if (dark) accent.darkContainer else accent.lightContainer,
+    // The container tones are chosen so the on-colour flips with the scheme.
+    onPrimary = if (dark) Color(0xFF3A0004) else Color.White,
+    onPrimaryContainer = if (dark) accent.lightContainer else Color(0xFF2A0004),
+)
+
 @Composable
-fun NachbesuchTheme(content: @Composable () -> Unit) {
+fun NachbesuchTheme(
+    appearance: AppAppearance = AppAppearance.SYSTEM,
+    accent: AppAccent = AppAccent.VOLKSHILFE,
+    content: @Composable () -> Unit
+) {
+    val dark = when (appearance) {
+        AppAppearance.SYSTEM -> isSystemInDarkTheme()
+        AppAppearance.LIGHT -> false
+        AppAppearance.DARK -> true
+    }
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors,
+        colorScheme = (if (dark) DarkColors else LightColors).withAccent(accent, dark),
         typography = AppTypography,
         shapes = AppShapes,
         content = content,
