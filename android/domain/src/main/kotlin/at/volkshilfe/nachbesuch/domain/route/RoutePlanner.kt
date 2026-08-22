@@ -52,18 +52,28 @@ object RoutePlanner {
         if (stops.isEmpty()) return PlannedRoute(start, emptyList(), emptyList(), true)
         // Large territories still get a useful order, but avoid an O(n²) matrix.
         if (stops.size > 150) return null
-        val startNode = graph.nearestNode(start) ?: return null
-        val stopNodes = stops.map { graph.nearestNode(it.coordinate) ?: return null }
+        // Snap every waypoint onto the nearest street *segment* so mid-block stops
+        // keep a street route instead of degrading the whole plan to straight lines.
+        var working = graph
+        val startSnap = working.snapped(start) ?: return null
+        working = startSnap.first
+        val startNode = startSnap.second
+        val stopNodes = ArrayList<Int>(stops.size)
+        for (stop in stops) {
+            val snap = working.snapped(stop.coordinate) ?: return null
+            working = snap.first
+            stopNodes += snap.second
+        }
         val allNodes = intArrayOf(startNode, *stopNodes.toIntArray())
         val pairDistances = Array(allNodes.size) { DoubleArray(allNodes.size) { Double.POSITIVE_INFINITY } }
         val nodeOffsets = allNodes.mapIndexed { index, node ->
             val target = if (index == 0) start else stops[index - 1].coordinate
-            graph.coordinate(node)?.let { metres(target, it) } ?: return null
+            working.coordinate(node)?.let { metres(target, it) } ?: return null
         }
         for (from in allNodes.indices) {
             pairDistances[from][from] = 0.0
             for (to in from + 1 until allNodes.size) {
-                val distance = graph.shortestDistance(allNodes[from], allNodes[to]) ?: return null
+                val distance = working.shortestDistance(allNodes[from], allNodes[to]) ?: return null
                 pairDistances[from][to] = nodeOffsets[from] + distance + nodeOffsets[to]
                 pairDistances[to][from] = nodeOffsets[to] + distance + nodeOffsets[from]
             }
@@ -82,9 +92,10 @@ object RoutePlanner {
         val legs = ArrayList<List<StoredCoordinate>>(orderedStops.size)
         var previousNode = startNode
         var previousCoordinate = start
-        for (stop in orderedStops) {
-            val stopNode = graph.nearestNode(stop.coordinate) ?: return null
-            val graphPath = graph.shortestPath(previousNode, stopNode) ?: return null
+        for (stopIndex in order) {
+            val stop = stops[stopIndex]
+            val stopNode = stopNodes[stopIndex]
+            val graphPath = working.shortestPath(previousNode, stopNode) ?: return null
             val leg = ArrayList<StoredCoordinate>(graphPath.size + 2)
             leg.add(previousCoordinate)
             graphPath.forEach { point -> if (leg.lastOrNull() != point) leg.add(point) }
@@ -117,9 +128,10 @@ object RoutePlanner {
 
     private fun refineTwoOpt(start: StoredCoordinate, route: MutableList<RouteStop>) {
         fun at(index: Int): StoredCoordinate = if (index < 0) start else route[index].coordinate
-        var improved = true
-        while (improved) {
-            improved = false
+        // A bounded pass count keeps large territories responsive; six passes
+        // remove practically every crossing artefact (matches the iOS planner).
+        repeat(MAX_TWO_OPT_PASSES) {
+            var improved = false
             for (i in 0 until route.size - 2) {
                 for (j in i + 1 until route.size - 1) {
                     val before = metres(at(i), at(i + 1)) + metres(at(j), at(j + 1))
@@ -130,6 +142,7 @@ object RoutePlanner {
                     }
                 }
             }
+            if (!improved) return
         }
     }
 
@@ -146,4 +159,6 @@ object RoutePlanner {
         val lon = (a.longitude - b.longitude) * lonScale
         return lat * lat + lon * lon
     }
+
+    private const val MAX_TWO_OPT_PASSES = 6
 }

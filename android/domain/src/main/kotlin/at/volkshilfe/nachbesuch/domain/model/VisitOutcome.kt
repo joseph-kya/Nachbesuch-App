@@ -24,4 +24,23 @@ enum class VisitOutcome {
         LATE_NO -> "Spätes Nein"
         JOINED -> "Dabei"
     }
+
+    /** Compact form for chips and tight rows. */
+    val shortTitle: String get() = when (this) {
+        NOT_HOME -> "Niemand"
+        EARLY_NO -> "Früh"
+        LATE_NO -> "Spät"
+        JOINED -> "Dabei"
+    }
+
+    /** The one-line "what does this mean" shown under the title in the picker. */
+    val explanation: String get() = when (this) {
+        NOT_HOME -> "Noch einmal hingehen"
+        EARLY_NO -> "Vor dem Formular abgelehnt"
+        LATE_NO -> "Beim Formular abgelehnt"
+        JOINED -> "Langfristig aufgenommen"
+    }
+
+    /** True when this door still needs another visit. */
+    val isOpenWork: Boolean get() = this == NOT_HOME
 }

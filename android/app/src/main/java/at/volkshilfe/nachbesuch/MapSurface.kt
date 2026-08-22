@@ -71,6 +71,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -83,6 +84,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
@@ -138,23 +140,33 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.cos
 import kotlin.math.floor
 
-private val Vienna = SavedCamera(48.2082, 16.3738, 14.5)
+/*
+ * The map screen.
+ *
+ * Split out of a single 1,273-line file: the chrome, the dialogs, the pin
+ * bitmap cache and the sensor plumbing now live beside this one, so what is
+ * left here is the state machine and the Google Map host.
+ */
+
+internal val Vienna = SavedCamera(48.2082, 16.3738, 14.5)
 // Same red as the rest of the app's chrome — this used to be a second,
 // slightly different constant living only on the map.
-private val Accent = VolkshilfeRed
-private val RouteBlue = Color(0xFF147EFB)
+internal val Accent = VolkshilfeRed
+internal val RouteBlue = Color(0xFF147EFB)
 
-private enum class MapMode { BROWSING, PLACING_HOUSE, DRAWING_AREA, SELECTING }
-private enum class PoiPreset(val title: String) { OFF("Aus"), ESSENTIAL("Wesentlich"), ALL("Alle") }
-private enum class RoutePhase { OFF, CHOOSING_START, PICKING_ON_MAP, RUNNING }
+internal enum class MapMode { BROWSING, PLACING_HOUSE, DRAWING_AREA, SELECTING }
+internal enum class PoiPreset(val title: String) { OFF("Aus"), ESSENTIAL("Wesentlich"), ALL("Alle") }
+internal enum class RoutePhase { OFF, CHOOSING_START, PICKING_ON_MAP, RUNNING }
 
-private data class RenderCluster(val key: String, val center: LatLng, val houses: List<House>)
-private data class SearchPlace(val title: String, val subtitle: String, val coordinate: StoredCoordinate)
+internal data class RenderCluster(val key: String, val center: LatLng, val houses: List<House>)
+internal data class SearchPlace(val title: String, val subtitle: String, val coordinate: StoredCoordinate)
 
 @Composable
 fun MapSurface(
@@ -168,6 +180,16 @@ fun MapSurface(
     onBoundaryChanged: (List<StoredCoordinate>) -> Unit = {},
     onDeleteHouses: (Set<String>) -> Unit = {},
     onImportHouses: (List<ImportedAreaAddress>) -> Unit = {},
+    /** The app-wide position feed; see [at.volkshilfe.nachbesuch.location.LocationService]. */
+    locationFlow: StateFlow<Location?> = MutableStateFlow(null),
+    /**
+     * Window insets plus the floating tab bar's height.
+     *
+     * The map tiles themselves stay full-bleed — they run under the status bar
+     * and behind the tab bar, as on iOS — so these are applied only to the
+     * chrome that must stay reachable.
+     */
+    contentPadding: PaddingValues = PaddingValues(0.dp),
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -196,7 +218,10 @@ fun MapSurface(
     var visibleBounds by remember { mutableStateOf<LatLngBounds?>(null) }
     var pinScale by remember { mutableStateOf(PinScale.FULL) }
     var clustered by remember { mutableStateOf(false) }
-    var location by remember { mutableStateOf<Location?>(null) }
+    // Position comes from the shared LocationService, not a private subscription:
+    // the list needs the same fix for "nearest first", and two subscriptions meant
+    // two GPS sessions for one screen's worth of information.
+    val location by locationFlow.collectAsState()
     var heading by remember { mutableStateOf<Float?>(null) }
     var following by remember { mutableStateOf(false) }
     var routePhase by rememberSaveable { mutableStateOf(RoutePhase.OFF) }
@@ -272,13 +297,10 @@ fun MapSurface(
     }
 
     DisposableEffect(Unit) {
-        val locationSubscription = LocationSubscription(context) { fix -> location = fix }
         val headingSubscription = HeadingSubscription(context) { value -> heading = value }
-        locationSubscription.start()
         headingSubscription.start()
         onDispose {
             routeJob?.cancel()
-            locationSubscription.stop()
             headingSubscription.stop()
         }
     }
@@ -327,7 +349,12 @@ fun MapSurface(
         if (!clustered) emptyList() else makeClusters(visibleHouses, visibleBounds?.visibleWidthMetres() ?: 3_200.0)
     }
 
-    val mapStyle = remember(poiPreset) { MapStyleOptions(poiStyle(poiPreset)) }
+    // Read from the applied scheme, not isSystemInDarkTheme(): the user can force
+    // Hell or Dunkel in the settings, and the map has to follow that choice rather
+    // than the system's — otherwise picking "Hell" on a dark phone gives a light
+    // app wrapped around a dark map.
+    val darkMap = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val mapStyle = remember(poiPreset, darkMap) { MapStyleOptions(mapStyleJson(poiPreset, darkMap)) }
     val properties = remember(satellite, mapStyle) {
         MapProperties(
             mapType = if (satellite) MapType.HYBRID else MapType.NORMAL,
@@ -495,7 +522,9 @@ fun MapSurface(
         }
 
         MapTopChrome(
-            modifier = Modifier.align(Alignment.TopCenter),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = contentPadding.calculateTopPadding()),
             gebiet = gebiet,
             houses = houses,
             scope = scope,
@@ -510,7 +539,10 @@ fun MapSurface(
         )
 
         Column(
-            modifier = Modifier.align(Alignment.BottomEnd).padding(horizontal = 14.dp, vertical = 12.dp),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(bottom = contentPadding.calculateBottomPadding())
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -710,564 +742,3 @@ fun MapSurface(
     }
 }
 
-@Composable
-private fun MapTopChrome(
-    modifier: Modifier,
-    gebiet: Gebiet?,
-    houses: List<House>,
-    scope: DayScope,
-    selectedCount: Int,
-    selecting: Boolean,
-    onScopeChanged: (DayScope) -> Unit,
-    onSearch: () -> Unit,
-    onStartSelection: () -> Unit,
-    onCancelSelection: () -> Unit,
-    onToggleAll: () -> Unit,
-    onDeleteSelection: () -> Unit
-) {
-    val tally = remember(houses, scope) { houses.map { it.tally(scope) } }
-    Surface(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
-        shape = RoundedCornerShape(28.dp),
-        tonalElevation = 4.dp
-    ) {
-        if (selecting) {
-            Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onCancelSelection) { Icon(Icons.Default.Close, "Auswahl beenden") }
-                Column(Modifier.weight(1f)) {
-                    Text("$selectedCount ausgewählt", style = MaterialTheme.typography.titleMedium)
-                    Text("von ${houses.size}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                TextButton(onClick = onToggleAll) { Text(if (selectedCount == houses.size) "Keine" else "Alle") }
-                IconButton(onClick = onDeleteSelection, enabled = selectedCount > 0) {
-                    Icon(Icons.Default.DeleteOutline, "Auswahl löschen", tint = MaterialTheme.colorScheme.error)
-                }
-            }
-        } else {
-            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(gebiet?.displayName ?: "Kein Gebiet", style = MaterialTheme.typography.titleLarge)
-                        Text(
-                            if (gebiet == null) "Lege im Archiv ein Gebiet an"
-                            else "${houses.size} Häuser · ${tally.sumOf { it.open }} offen · 🔥 ${tally.sumOf { it.joined }}",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    IconButton(onClick = onStartSelection, enabled = houses.isNotEmpty()) { Icon(Icons.Default.SelectAll, "Pins auswählen") }
-                    IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Ort auf der Karte suchen") }
-                }
-                if (gebiet?.isTwoDay == true) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(DayScope.COMBINED to "Gesamt", DayScope.DAY_1 to "Tag 1", DayScope.DAY_2 to "Tag 2").forEach { (value, label) ->
-                            FilterChip(selected = scope == value, onClick = { onScopeChanged(value) }, label = { Text(label) })
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MapActionBar(
-    canAdd: Boolean,
-    onAdd: () -> Unit,
-    menuExpanded: Boolean,
-    onMenuExpanded: (Boolean) -> Unit,
-    satellite: Boolean,
-    poiPreset: PoiPreset,
-    hasBoundary: Boolean,
-    canRoute: Boolean,
-    canImport: Boolean,
-    onBoundary: () -> Unit,
-    onRoute: () -> Unit,
-    onImport: () -> Unit,
-    onSatellite: () -> Unit,
-    onPoi: () -> Unit
-) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.95f), shape = RoundedCornerShape(30.dp), tonalElevation = 4.dp) {
-        Row(Modifier.padding(7.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box {
-                IconButton(onClick = { onMenuExpanded(true) }) { Icon(Icons.Default.MoreHoriz, "Kartenoptionen") }
-                DropdownMenu(expanded = menuExpanded, onDismissRequest = { onMenuExpanded(false) }) {
-                    DropdownMenuItem(
-                        text = { Text(if (hasBoundary) "Gebiet bearbeiten" else "Gebiet einzeichnen") },
-                        leadingIcon = { Icon(Icons.Default.EditLocationAlt, null) },
-                        onClick = onBoundary
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Empfohlene Route") },
-                        leadingIcon = { Icon(Icons.Default.Route, null) },
-                        enabled = canRoute,
-                        onClick = onRoute
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Häuser aus Kartendaten laden") },
-                        leadingIcon = { Icon(Icons.Default.Add, null) },
-                        enabled = canImport,
-                        onClick = onImport
-                    )
-                    DropdownMenuItem(
-                        text = { Text(if (satellite) "Kartenstil: Satellit" else "Kartenstil: Standard") },
-                        leadingIcon = { Icon(Icons.Default.Layers, null) },
-                        onClick = onSatellite
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Orte: ${poiPreset.title}") },
-                        leadingIcon = { Icon(Icons.Default.Visibility, null) },
-                        onClick = onPoi
-                    )
-                }
-            }
-            Button(onClick = onAdd, enabled = canAdd, shape = RoundedCornerShape(24.dp)) {
-                Icon(Icons.Default.Add, null)
-                Text(" Haus hinzufügen")
-            }
-        }
-    }
-}
-
-@Composable
-private fun MapConfirmCard(
-    title: String,
-    confirmLabel: String,
-    secondaryIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
-    onSecondary: () -> Unit = {},
-    onCancel: () -> Unit,
-    onConfirm: () -> Unit,
-    onPrimaryLongClick: () -> Unit = onConfirm
-) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f), shape = RoundedCornerShape(28.dp), tonalElevation = 5.dp) {
-        Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.End) {
-            Text(title, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onCancel) { Text("Abbrechen") }
-                secondaryIcon?.let { IconButton(onClick = onSecondary) { Icon(it, "Rückgängig") } }
-                Button(onClick = onConfirm, shape = RoundedCornerShape(22.dp)) {
-                    Icon(Icons.Default.Check, null)
-                    Text(" $confirmLabel")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RouteStartCard(canUseLocation: Boolean, onLocation: () -> Unit, onMap: () -> Unit, onCancel: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f), shape = RoundedCornerShape(28.dp), tonalElevation = 5.dp) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Startpunkt wählen", style = MaterialTheme.typography.titleMedium)
-                    Text("Kürzeste Reihenfolge durch alle offenen Häuser", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                IconButton(onClick = onCancel) { Icon(Icons.Default.Close, "Abbrechen") }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onLocation, enabled = canUseLocation) { Icon(Icons.Default.MyLocation, null); Text(" Mein Standort") }
-                TextButton(onClick = onMap) { Icon(Icons.Default.EditLocationAlt, null); Text(" Auf der Karte") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RouteCard(
-    nextAddress: String?,
-    remaining: Int,
-    status: String?,
-    visible: Boolean,
-    onFocus: () -> Unit,
-    onSkip: () -> Unit,
-    onToggle: () -> Unit,
-    onEnd: () -> Unit
-) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f), shape = RoundedCornerShape(28.dp), tonalElevation = 5.dp) {
-        Column(Modifier.padding(10.dp)) {
-            TextButton(onClick = onFocus, enabled = nextAddress != null) {
-                Column(horizontalAlignment = Alignment.Start) {
-                    Text(if (nextAddress == null) "Route abgeschlossen" else "Nächstes Haus · $remaining übrig", style = MaterialTheme.typography.labelLarge)
-                    Text(nextAddress ?: "Alle offenen Häuser erledigt", style = MaterialTheme.typography.titleMedium)
-                    status?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                }
-            }
-            Row {
-                IconButton(onClick = onSkip, enabled = remaining > 1) { Icon(Icons.Default.SkipNext, "Haus überspringen") }
-                IconButton(onClick = onToggle) { Icon(if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility, "Route ein-/ausblenden") }
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = onEnd) { Icon(Icons.Default.Close, "Route beenden") }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun MapSearchDialog(onDismiss: () -> Unit, onSelect: (SearchPlace) -> Unit) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var query by rememberSaveable { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
-    var results by remember { mutableStateOf(emptyList<SearchPlace>()) }
-    var error by remember { mutableStateOf<String?>(null) }
-    fun search() {
-        val term = query.trim()
-        if (term.length < 2) return
-        loading = true
-        error = null
-        scope.launch {
-            results = runCatching { geocode(context, term) }.getOrElse {
-                error = "Suche gerade nicht verfügbar"
-                emptyList()
-            }
-            loading = false
-        }
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Auf der Karte suchen") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    singleLine = true,
-                    label = { Text("Adresse, Ort oder Gebiet") },
-                    trailingIcon = { IconButton(onClick = ::search) { Icon(Icons.Default.Search, "Suchen") } },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (loading) Text("Wird gesucht …", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                LazyColumn(modifier = Modifier.height(260.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    items(results) { place ->
-                        TextButton(onClick = { onSelect(place) }, modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
-                                Text(place.title)
-                                if (place.subtitle.isNotBlank()) Text(place.subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = { Button(onClick = ::search, enabled = query.trim().length >= 2 && !loading) { Text("Suchen") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } }
-    )
-}
-
-@Composable
-private fun AreaImportDialog(
-    service: AreaHouseImportService,
-    boundary: List<StoredCoordinate>,
-    existingHouses: List<House>,
-    onDismiss: () -> Unit,
-    onImport: (List<ImportedAreaAddress>) -> Unit
-) {
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var addresses by remember { mutableStateOf(emptyList<ImportedAreaAddress>()) }
-    var skipped by remember { mutableIntStateOf(0) }
-    var reload by remember { mutableIntStateOf(0) }
-
-    LaunchedEffect(boundary, existingHouses, reload) {
-        loading = true
-        error = null
-        when (val result = service.fetch(boundary)) {
-            is AreaImportResult.Ready -> {
-                val selection = withContext(Dispatchers.Default) {
-                    service.excludingExisting(result.addresses, existingHouses)
-                }
-                addresses = selection.addresses
-                skipped = selection.skippedDuplicates
-            }
-            is AreaImportResult.Failed -> {
-                addresses = emptyList()
-                error = result.message
-            }
-        }
-        loading = false
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Häuser im Gebiet") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                when {
-                    loading -> Text("Häuser werden gesucht …")
-                    error != null -> {
-                        Text("Import nicht möglich", style = MaterialTheme.typography.titleMedium)
-                        Text(error.orEmpty(), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        TextButton(onClick = { reload++ }) { Text("Erneut versuchen") }
-                    }
-                    addresses.isEmpty() -> Text(
-                        if (skipped > 0) "Keine neuen Häuser · $skipped bereits vorhanden"
-                        else "In diesem Gebiet wurden keine adressierten Häuser gefunden."
-                    )
-                    else -> {
-                        Text(
-                            "${addresses.size} neue Häuser" + if (skipped > 0) " · $skipped Duplikate übersprungen" else "",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text(
-                            "Alle Einträge entstehen als Einzelhäuser. Quelle: © OpenStreetMap-Mitwirkende.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        LazyColumn(modifier = Modifier.height(280.dp)) {
-                            items(addresses.take(60), key = { it.id }) { candidate ->
-                                Text(candidate.address, modifier = Modifier.padding(vertical = 5.dp))
-                            }
-                            if (addresses.size > 60) item { Text("… und ${addresses.size - 60} weitere") }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(onClick = { onImport(addresses) }, enabled = addresses.isNotEmpty() && !loading) {
-                Text("${addresses.size} anlegen")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } }
-    )
-}
-
-@Suppress("DEPRECATION")
-private suspend fun geocode(context: Context, query: String): List<SearchPlace> = withContext(Dispatchers.IO) {
-    if (!Geocoder.isPresent()) return@withContext emptyList()
-    Geocoder(context, Locale.GERMANY).getFromLocationName(query, 8).orEmpty().mapNotNull { address ->
-        val coordinate = StoredCoordinate(address.latitude, address.longitude)
-        if (!coordinate.isPlausible) null else SearchPlace(
-            title = address.featureName ?: address.thoroughfare ?: query,
-            subtitle = listOfNotNull(address.postalCode, address.locality, address.countryName).distinct().joinToString(" · "),
-            coordinate = coordinate
-        )
-    }
-}
-
-private fun Set<String>.toggle(id: String): Set<String> = if (id in this) this - id else this + id
-
-private fun makeClusters(houses: List<House>, spanMeters: Double): List<RenderCluster> {
-    if (houses.isEmpty()) return emptyList()
-    val cellMeters = (spanMeters / 8.0).coerceIn(90.0, 280.0)
-    val latCell = cellMeters / 110_540.0
-    val referenceLatitude = houses.map { it.latitude }.average()
-    val lonCell = cellMeters / (111_320.0 * cos(Math.toRadians(referenceLatitude)).coerceAtLeast(0.2))
-    return houses.groupBy { "${floor(it.latitude / latCell).toInt()}:${floor(it.longitude / lonCell).toInt()}" }
-        .map { (key, members) ->
-            RenderCluster(key, LatLng(members.map { it.latitude }.average(), members.map { it.longitude }.average()), members)
-        }
-}
-
-private fun LatLngBounds.visibleWidthMetres(): Double = RoutePlanner.metres(
-    StoredCoordinate(southwest.latitude, southwest.longitude),
-    StoredCoordinate(northeast.latitude, northeast.longitude)
-)
-
-private fun LatLngBounds.containsPadded(latitude: Double, longitude: Double, fraction: Double): Boolean {
-    val latPad = (northeast.latitude - southwest.latitude) * fraction
-    val lonSpan = (northeast.longitude - southwest.longitude).let { if (it < 0) it + 360 else it }
-    val lonPad = lonSpan * fraction
-    return latitude in (southwest.latitude - latPad)..(northeast.latitude + latPad) &&
-        longitude in (southwest.longitude - lonPad)..(northeast.longitude + lonPad)
-}
-
-private fun poiStyle(preset: PoiPreset): String = when (preset) {
-    PoiPreset.OFF -> """[{"featureType":"poi","stylers":[{"visibility":"off"}]}]"""
-    PoiPreset.ESSENTIAL -> """[
-        {"featureType":"poi","stylers":[{"visibility":"off"}]},
-        {"featureType":"poi.business","elementType":"labels","stylers":[{"visibility":"on"},{"saturation":-75},{"lightness":18}]},
-        {"featureType":"transit","elementType":"labels","stylers":[{"visibility":"on"},{"saturation":-70}]}
-    ]"""
-    PoiPreset.ALL -> """[
-        {"featureType":"poi","elementType":"labels","stylers":[{"visibility":"on"},{"saturation":-70},{"lightness":12}]},
-        {"featureType":"transit","elementType":"labels","stylers":[{"visibility":"on"},{"saturation":-65}]}
-    ]"""
-}
-
-private fun googleMapsKeyIsMissing(context: Context): Boolean = runCatching {
-    val info = context.packageManager.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA)
-    info.metaData?.getString("com.google.android.geo.API_KEY").let { it.isNullOrBlank() || it == "DEFAULT_API_KEY" }
-}.getOrDefault(true)
-
-private fun animationsDisabled(context: Context): Boolean = runCatching {
-    Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
-}.getOrDefault(false)
-
-private class LocationSubscription(
-    private val context: Context,
-    private val onLocation: (Location) -> Unit
-) {
-    private val client: FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(context)
-    private val callback = object : LocationCallback() {
-        override fun onLocationResult(result: LocationResult) { result.lastLocation?.let(onLocation) }
-    }
-
-    @SuppressLint("MissingPermission")
-    fun start() {
-        val fine = ActivityCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION)
-        val coarse = ActivityCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION)
-        if (fine != PackageManager.PERMISSION_GRANTED && coarse != PackageManager.PERMISSION_GRANTED) return
-        client.lastLocation.addOnSuccessListener { it?.let(onLocation) }
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2_000L)
-            .setMinUpdateDistanceMeters(3f)
-            .setWaitForAccurateLocation(false)
-            .build()
-        client.requestLocationUpdates(request, callback, android.os.Looper.getMainLooper())
-    }
-
-    fun stop() { client.removeLocationUpdates(callback) }
-}
-
-private class HeadingSubscription(context: Context, private val onHeading: (Float?) -> Unit) : SensorEventListener {
-    private val manager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
-    private val sensor = manager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-    private val rotation = FloatArray(9)
-    private val orientation = FloatArray(3)
-    private var smoothed: Float? = null
-    private var lastSent = 0L
-
-    fun start() { sensor?.let { manager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) } }
-    fun stop() { manager?.unregisterListener(this) }
-
-    override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
-        SensorManager.getRotationMatrixFromVector(rotation, event.values)
-        SensorManager.getOrientation(rotation, orientation)
-        val raw = ((Math.toDegrees(orientation[0].toDouble()).toFloat() + 360f) % 360f)
-        val alpha = when (event.accuracy) {
-            SensorManager.SENSOR_STATUS_ACCURACY_HIGH -> 0.35f
-            SensorManager.SENSOR_STATUS_ACCURACY_MEDIUM -> 0.18f
-            else -> 0.08f
-        }
-        val previous = smoothed
-        smoothed = if (previous == null) raw else {
-            val delta = ((raw - previous + 540f) % 360f) - 180f
-            (previous + alpha * delta + 360f) % 360f
-        }
-        val now = SystemClock.uptimeMillis()
-        if (now - lastSent >= 80L) { lastSent = now; onHeading(smoothed) }
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        if (accuracy == SensorManager.SENSOR_STATUS_UNRELIABLE) { smoothed = null; onHeading(null) }
-    }
-}
-
-private class GooglePinBitmapCache(private val context: Context) {
-    private val cache = object : LruCache<String, BitmapDescriptor>(260) {}
-
-    fun house(house: House, scope: DayScope, scale: PinScale, selected: Boolean): BitmapDescriptor {
-        val tally = house.tally(scope)
-        val fullText = if (house.isApartmentBuilding) "${tally.completed}/${tally.unitCount}" else house.units.firstOrNull()?.displayOutcome(scope)?.emoji ?: "•"
-        val text = if (scale == PinScale.DOT) "" else fullText
-        val outcome = markerOutcome(house, scope)
-        val key = "house:$text:$outcome:$scale:$selected"
-        return cached(key) { pinBitmap(text, outcome, scale, selected) }
-    }
-
-    fun cluster(count: Int, hasOpen: Boolean): BitmapDescriptor = cached("cluster:$count:$hasOpen") {
-        val density = context.resources.displayMetrics.density
-        val size = (54 * density).toInt().coerceAtLeast(54)
-        Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { bitmap ->
-            val canvas = Canvas(bitmap)
-            val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if (hasOpen) 0xFFFF4545.toInt() else 0xFF3A3A3C.toInt() }
-            canvas.drawCircle(size / 2f, size / 2f, size * 0.39f, fill)
-            val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 3f * density }
-            canvas.drawCircle(size / 2f, size / 2f, size * 0.39f, ring)
-            drawCentered(canvas, if (count >= 1_000) "${count / 100 / 10.0}k" else count.toString(), size / 2f, size / 2f, 16f * density)
-        }
-    }
-
-    fun number(value: Int): BitmapDescriptor = cached("number:$value") {
-        val density = context.resources.displayMetrics.density
-        val size = (28 * density).toInt().coerceAtLeast(28)
-        Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { bitmap ->
-            val canvas = Canvas(bitmap)
-            val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFF3B45.toInt() }
-            canvas.drawCircle(size / 2f, size / 2f, size * 0.42f, fill)
-            drawCentered(canvas, value.toString(), size / 2f, size / 2f, 12f * density)
-        }
-    }
-
-    fun userPuck(): BitmapDescriptor = cached("user-puck") {
-        val density = context.resources.displayMetrics.density
-        val size = (40 * density).toInt().coerceAtLeast(40)
-        Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { bitmap ->
-            val canvas = Canvas(bitmap)
-            val center = size / 2f
-            val cone = android.graphics.Path().apply {
-                moveTo(center, size * 0.04f)
-                lineTo(size * 0.67f, size * 0.47f)
-                lineTo(size * 0.33f, size * 0.47f)
-                close()
-            }
-            canvas.drawPath(cone, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x55147EFB })
-            canvas.drawCircle(center, center, size * 0.19f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF147EFB.toInt() })
-            canvas.drawCircle(center, center, size * 0.19f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = android.graphics.Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 2.5f * density
-            })
-        }
-    }
-
-    private fun pinBitmap(text: String, outcome: VisitOutcome?, scale: PinScale, selected: Boolean): Bitmap {
-        val density = context.resources.displayMetrics.density
-        val head = when (scale) { PinScale.FULL -> 34f; PinScale.COMPACT -> 25f; PinScale.DOT -> 15f }
-        val padding = 5f
-        val tipHeight = head * 10f / 34f
-        val width = ((head + padding * 2) * density).toInt().coerceAtLeast(28)
-        val height = ((head + tipHeight + padding * 2) * density).toInt().coerceAtLeast(34)
-        return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
-            val canvas = Canvas(bitmap)
-            val centerX = width / 2f
-            val radius = head * density / 2f
-            val centerY = (padding + head / 2f) * density
-            val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = when (outcome) {
-                    VisitOutcome.JOINED -> 0xFFFF4569.toInt()
-                    VisitOutcome.LATE_NO -> 0xFFFF4848.toInt()
-                    VisitOutcome.EARLY_NO -> 0xFFF59126.toInt()
-                    VisitOutcome.NOT_HOME -> 0xFFFF4545.toInt()
-                    null -> 0xFF1E7AD2.toInt()
-                }
-                setShadowLayer(3f * density, 0f, 2f * density, 0x55000000)
-            }
-            canvas.drawCircle(centerX, centerY, radius, fill)
-            val tip = android.graphics.Path().apply {
-                moveTo(centerX - head * 6f / 34f * density, centerY + radius * 0.72f)
-                quadTo(centerX, height - padding * 0.35f * density, centerX + head * 6f / 34f * density, centerY + radius * 0.72f)
-                close()
-            }
-            canvas.drawPath(tip, fill)
-            val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = if (selected) 0xFF147EFB.toInt() else android.graphics.Color.WHITE
-                style = Paint.Style.STROKE
-                strokeWidth = (if (selected) 4f else 2.5f) * density
-            }
-            canvas.drawCircle(centerX, centerY, radius - ring.strokeWidth / 2f, ring)
-            if (text.isNotEmpty()) drawCentered(canvas, text, centerX, centerY, (if (text.length > 2) 9.5f else 16f) * density)
-        }
-    }
-
-    private fun markerOutcome(house: House, scope: DayScope): VisitOutcome? {
-        if (house.units.any { it.isOpen(scope) && (it.isPendingRevisit || it.displayOutcome(scope) == VisitOutcome.NOT_HOME) }) return VisitOutcome.NOT_HOME
-        val outcomes = house.units.mapNotNull { it.displayOutcome(scope) }
-        return outcomes.lastOrNull { it == VisitOutcome.JOINED } ?: outcomes.lastOrNull()
-    }
-
-    private fun cached(key: String, make: () -> Bitmap): BitmapDescriptor = synchronized(cache) {
-        cache.get(key) ?: BitmapDescriptorFactory.fromBitmap(make()).also { cache.put(key, it) }
-    }
-
-    private fun drawCentered(canvas: Canvas, text: String, x: Float, y: Float, size: Float) {
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = android.graphics.Color.WHITE
-            textSize = size
-            textAlign = Paint.Align.CENTER
-            typeface = Typeface.DEFAULT_BOLD
-        }
-        canvas.drawText(text, x, y - (paint.ascent() + paint.descent()) / 2f, paint)
-    }
-}

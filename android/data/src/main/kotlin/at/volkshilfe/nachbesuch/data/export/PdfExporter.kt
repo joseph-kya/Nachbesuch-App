@@ -1,30 +1,41 @@
 package at.volkshilfe.nachbesuch.data.export
 
 import android.graphics.Paint
+import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import at.volkshilfe.nachbesuch.domain.export.ExportDocument
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.ceil
 
-/** Small monochrome renderer matching the iOS export contract. */
+/**
+ * Monochrome A4 renderer matching the iOS export contract: measured pagination
+ * (no fixed lines-per-page estimate that can truncate content), a header block
+ * with a restrained summary, clear address hierarchy and "Seite x von y" footers.
+ */
 object PdfExporter {
     private const val WIDTH = 595
     private const val HEIGHT = 842
-    private const val LEFT = 48f
-    private const val RIGHT = 48f
+    private const val LEFT = 56f
+    private const val RIGHT = 56f
     private const val TOP = 56f
     private const val BOTTOM = 48f
-    private const val LINE = 18f
+    private const val BODY_LINE = 18f
+    private const val TITLE_LINE = 24f
+
+    private class Line(val text: String, val isTitle: Boolean) {
+        val height: Float get() = if (isTitle) TITLE_LINE else BODY_LINE
+    }
 
     fun write(document: ExportDocument, file: File) {
         file.parentFile?.mkdirs()
-        val pages = pageCount(document)
+        val pages = paginate(document)
         val pdf = PdfDocument()
         try {
-            for (pageNumber in 1..pages) {
+            pages.forEachIndexed { index, pageLines ->
+                val pageNumber = index + 1
                 val page = pdf.startPage(PdfDocument.PageInfo.Builder(WIDTH, HEIGHT, pageNumber).create())
-                drawPage(page.canvas, document, pageNumber, pages)
+                drawPage(page.canvas, document, pageLines, pageNumber, pages.size)
                 pdf.finishPage(page)
             }
             FileOutputStream(file).use(pdf::writeTo)
@@ -33,37 +44,139 @@ object PdfExporter {
         }
     }
 
-    private fun pageCount(document: ExportDocument): Int {
-        val lines = 3 + document.houses.sumOf { 2 + it.doors.size + if (it.note != null) 1 else 0 } +
-            if (document.summary.counts.isEmpty()) 0 else 2 + document.summary.counts.size
-        return ceil(lines / 38.0).toInt().coerceAtLeast(1)
+    /** Splits the measured line list so no line is ever dropped or clipped. */
+    private fun paginate(document: ExportDocument): List<List<Line>> {
+        val lines = buildLines(document)
+        if (lines.isEmpty()) return listOf(emptyList())
+        val maxBodyWidth = WIDTH - LEFT - RIGHT
+        val body = textPaint(size = 10.5f)
+        val title = textPaint(size = 13f, bold = true)
+        val wrapped = ArrayList<Line>(lines.size + 16)
+        lines.forEach { line ->
+            val paint = if (line.isTitle) title else body
+            measure(line.text, paint)?.takeIf { it > maxBodyWidth }?.let { width ->
+                wrap(line, paint, width, maxBodyWidth)
+            } ?: wrapped.add(line)
+        }
+        // Page one carries the header block; continuation pages start lower.
+        val pages = ArrayList<List<Line>>()
+        var current = ArrayList<Line>()
+        val firstPageTop = TOP + (if (document.subtitle.isNotBlank()) 50f else 36f)
+        var y = firstPageTop
+        wrapped.forEach { line ->
+            if (y + line.height > HEIGHT - BOTTOM) {
+                pages.add(current)
+                current = ArrayList()
+                y = TOP + 20f
+            }
+            current.add(line)
+            y += line.height
+        }
+        if (current.isNotEmpty() || pages.isEmpty()) pages.add(current)
+        return pages
     }
 
-    private fun drawPage(canvas: android.graphics.Canvas, document: ExportDocument, page: Int, pages: Int) {
-        val title = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 18f; typeface = android.graphics.Typeface.DEFAULT_BOLD; color = android.graphics.Color.BLACK }
-        val body = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 10.5f; color = android.graphics.Color.BLACK }
-        val muted = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 9f; color = android.graphics.Color.DKGRAY }
-        canvas.drawText(document.title, LEFT, TOP, title)
-        var y = TOP + 28f
-        val allLines = buildList {
-            document.houses.forEach { house ->
-                add(house.address to title)
-                house.doors.forEach { door -> add("  ${door.label}: ${door.outcome.germanTitle}" to body) }
-                house.note?.takeIf(String::isNotBlank)?.let { add("  Notiz: $it" to body) }
-                add("" to body)
-            }
-            if (document.summary.counts.isNotEmpty()) {
-                add("Zusammenfassung" to title)
-                document.summary.counts.forEach { (outcome, count) -> add("${outcome.germanTitle}: $count" to body) }
+    private fun wrap(line: Line, paint: Paint, textWidth: Float, maxWidth: Float): List<Line> {
+        val words = line.text.split(' ')
+        val result = ArrayList<Line>()
+        var currentLine = StringBuilder()
+        words.forEach { word ->
+            val candidate = if (currentLine.isEmpty()) word else "$currentLine $word"
+            val candidateWidth = measure(candidate, paint) ?: 0f
+            if (candidateWidth > maxWidth && currentLine.isNotEmpty()) {
+                result.add(Line(currentLine.toString(), line.isTitle))
+                currentLine = StringBuilder(word)
+            } else {
+                currentLine = StringBuilder(candidate)
             }
         }
-        val first = (page - 1) * 38
-        val last = minOf(first + 38, allLines.size)
-        for (index in first until last) {
-            val (line, paint) = allLines[index]
-            canvas.drawText(line.take(92), LEFT, y, paint)
-            y += if (paint === title) 22f else LINE
+        if (currentLine.isNotEmpty() || result.isEmpty()) {
+            result.add(Line(currentLine.toString(), line.isTitle))
         }
-        canvas.drawText("Seite $page von $pages", WIDTH - RIGHT - 72f, HEIGHT - BOTTOM, muted)
+        return result
     }
+
+    private fun measure(text: String, paint: Paint): Float? =
+        if (text.isBlank()) null else paint.measureText(text)
+
+    private fun buildLines(document: ExportDocument): List<Line> {
+        val lines = ArrayList<Line>()
+        if (document.houses.isEmpty()) {
+            lines += Line("Keine besuchten Häuser in diesem Zeitraum.", isTitle = false)
+            return lines
+        }
+        val doorCount = document.houses.sumOf { it.doors.size }
+        val summary = buildList {
+            add("${document.houses.size} Häuser")
+            add("$doorCount Haushalte")
+            document.summary.counts.forEach { (outcome, count) -> add("${outcome.germanTitle}: $count") }
+        }
+        lines += Line(summary.joinToString("  ·  "), isTitle = false)
+        lines += Line("", isTitle = false)
+
+        document.houses.forEach { house ->
+            lines += Line(house.address, isTitle = true)
+            if (house.totalDoors == 1) {
+                val result = house.doors.firstOrNull()?.outcome?.germanTitle ?: "Ohne Status"
+                lines += Line("  Ergebnis: $result", isTitle = false)
+            } else {
+                lines += Line("  ${house.doors.size} von ${house.totalDoors} Türen", isTitle = false)
+                house.doors.forEach { door ->
+                    lines += Line("    ${door.label}  ·  ${door.outcome.germanTitle}", isTitle = false)
+                }
+            }
+            house.note?.takeIf(String::isNotBlank)?.let { lines += Line("  Notiz: $it", isTitle = false) }
+        }
+        return lines
+    }
+
+    private fun drawPage(
+        canvas: android.graphics.Canvas,
+        document: ExportDocument,
+        lines: List<Line>,
+        page: Int,
+        pages: Int
+    ) {
+        val title = textPaint(18f, bold = true)
+        val muted = textPaint(9f, color = android.graphics.Color.DKGRAY)
+        var y: Float
+        if (page == 1) {
+            val eyebrow = textPaint(8f, bold = true, color = android.graphics.Color.DKGRAY)
+            canvas.drawText("NACHBESUCH · EINSATZBERICHT", LEFT, TOP - 20f, eyebrow)
+            canvas.drawText(document.title, LEFT, TOP, title)
+            var headerY = TOP + 16f
+            if (document.subtitle.isNotBlank()) {
+                canvas.drawText(document.subtitle, LEFT, headerY, muted)
+                headerY += 14f
+            }
+            canvas.drawText("${document.houses.size} von ${document.totalHouses} Adressen", LEFT, headerY, muted)
+            y = headerY + 20f
+        } else {
+            canvas.drawText("${document.title} (Fortsetzung)", LEFT, TOP, muted)
+            y = TOP + 20f
+        }
+        val body = textPaint(10.5f)
+        val heading = textPaint(13f, bold = true)
+        val rule = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.LTGRAY
+            strokeWidth = 0.6f
+        }
+        canvas.drawLine(LEFT, y - 8f, WIDTH - RIGHT, y - 8f, rule)
+        lines.forEach { line ->
+            val paint = if (line.isTitle) heading else body
+            canvas.drawText(line.text, LEFT, y, paint)
+            y += line.height
+        }
+        canvas.drawLine(LEFT, HEIGHT - BOTTOM - 14f, WIDTH - RIGHT, HEIGHT - BOTTOM - 14f, rule)
+        canvas.drawText("Nachbesuch", LEFT, HEIGHT - BOTTOM, muted)
+        val footer = "Seite $page von $pages"
+        canvas.drawText(footer, WIDTH - RIGHT - muted.measureText(footer), HEIGHT - BOTTOM, muted)
+    }
+
+    private fun textPaint(size: Float, bold: Boolean = false, color: Int = android.graphics.Color.BLACK): Paint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = size
+            this.color = color
+            typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+        }
 }
