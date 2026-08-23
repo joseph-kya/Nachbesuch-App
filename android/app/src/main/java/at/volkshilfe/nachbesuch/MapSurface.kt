@@ -99,7 +99,6 @@ import at.volkshilfe.nachbesuch.domain.model.House
 import at.volkshilfe.nachbesuch.domain.model.StoredCoordinate
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
 import at.volkshilfe.nachbesuch.ui.theme.ChromeIconButton
-import at.volkshilfe.nachbesuch.ui.theme.VolkshilfeRed
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
@@ -145,9 +144,6 @@ import kotlin.math.floor
  */
 
 internal val Vienna = SavedCamera(48.2082, 16.3738, 14.5)
-// Same red as the rest of the app's chrome — this used to be a second,
-// slightly different constant living only on the map.
-internal val Accent = VolkshilfeRed
 /// The system blue of the location puck's accuracy circle. It was called
 /// `RouteBlue` while the route line shared it; that line is gone and the name
 /// would now point at nothing.
@@ -192,6 +188,11 @@ fun MapSurface(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    // The accent the user picked, not the brand red. There used to be a top-level
+    // `Accent = VolkshilfeRed` here, so the boundary, the reticle and the
+    // follow-state button stayed red while every themed control beside them turned
+    // blue — the theme's `primary` already follows the choice (see `Theme.kt`).
+    val accent = MaterialTheme.colorScheme.primary
     val coroutineScope = rememberCoroutineScope()
     val cameraStore = remember { MapCameraStore(context) }
     val mapLoadGuard = remember { MapLoadGuard(context) }
@@ -361,8 +362,8 @@ fun MapSurface(
                     // faint tint on the light map turns the whole territory
                     // maroon against the dark one — the boundary should mark an
                     // area, not recolour the city inside it.
-                    fillColor = Accent.copy(alpha = if (darkMap) 0.055f else 0.10f),
-                    strokeColor = Accent,
+                    fillColor = accent.copy(alpha = if (darkMap) 0.055f else 0.10f),
+                    strokeColor = accent,
                     strokeWidth = 4f,
                     clickable = mode == MapMode.BROWSING,
                     zIndex = 2f,
@@ -372,7 +373,7 @@ fun MapSurface(
             if (mode == MapMode.DRAWING_AREA && draftBoundary.size >= 2) {
                 Polyline(
                     points = draftBoundary.map { LatLng(it.latitude, it.longitude) },
-                    color = Accent,
+                    color = accent,
                     width = 5f,
                     startCap = RoundCap(),
                     endCap = RoundCap(),
@@ -472,7 +473,7 @@ fun MapSurface(
             Icon(
                 imageVector = Icons.Default.EditLocationAlt,
                 contentDescription = null,
-                tint = Accent,
+                tint = accent,
                 modifier = Modifier.align(Alignment.Center)
             )
         }
@@ -518,7 +519,7 @@ fun MapSurface(
                                 moveTo(StoredCoordinate(fix.latitude, fix.longitude), 16f)
                             }
                         },
-                        tint = if (following) Accent else MaterialTheme.colorScheme.surfaceContainerHigh
+                        tint = if (following) accent else MaterialTheme.colorScheme.surfaceContainerHigh
                     ) {
                         Icon(
                             if (following) Icons.Default.LocationSearching else Icons.Default.MyLocation,
