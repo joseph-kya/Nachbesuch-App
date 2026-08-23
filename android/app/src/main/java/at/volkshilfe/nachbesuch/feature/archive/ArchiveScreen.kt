@@ -1,6 +1,5 @@
 package at.volkshilfe.nachbesuch.feature.archive
 
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -305,7 +304,10 @@ private fun TerritoryCard(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val tally = summary.bilanz.overall
-    val progress by animateFloatAsState(tally.completionFraction.toFloat(), label = "territory-progress")
+    // Territory selection replaces the complete balance above this card. Keeping
+    // the row progress atomic prevents an old territory's fraction from visibly
+    // travelling into the new territory while the rest of the card has snapped.
+    val progress = tally.completionFraction.toFloat()
     Column(
         Modifier
             .fillMaxWidth()

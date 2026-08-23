@@ -1,6 +1,5 @@
 package at.volkshilfe.nachbesuch.ui.components
 
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,7 +17,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -86,7 +84,10 @@ private fun EmptyBalance() {
 
 @Composable
 private fun ProgressCard(tally: OutcomeTally) {
-    val fraction by animateFloatAsState(tally.completionFraction.toFloat(), label = "completion")
+    // A new scope or active territory replaces every metric and chart bar at once.
+    // Animating only this fraction made the progress bar lag behind the numbers and
+    // produced a mixed old/new state during Gebiet switches.
+    val fraction = tally.completionFraction.toFloat()
     Column(
         Modifier
             .fillMaxWidth()

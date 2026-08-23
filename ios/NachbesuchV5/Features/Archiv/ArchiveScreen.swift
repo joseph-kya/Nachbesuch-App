@@ -278,9 +278,7 @@ struct ArchiveScreen: View {
             let entry = index.entry(for: gebiet.id)
             ZStack(alignment: .topTrailing) {
                 Button {
-                    withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
-                        selectedGebietID = gebiet.id
-                    }
+                    selectGebiet(gebiet.id)
                 } label: {
                     GebietRow(
                         model: GebietRowModel(
@@ -423,6 +421,20 @@ struct ArchiveScreen: View {
         withTransaction(transaction) {
             filter = value
             results = nextResults
+        }
+    }
+
+    /// Replacing the active territory swaps the complete balance subtree: chart,
+    /// counters, progress and (for two-day territories) the scope picker. Treating
+    /// that as one animated selection made unrelated shapes interpolate at once and
+    /// left compositor snapshots behind. The row still supplies normal press and
+    /// selection feedback; the data replacement itself is deliberately atomic.
+    private func selectGebiet(_ id: UUID) {
+        guard selectedGebietID != id else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            selectedGebietID = id
         }
     }
 

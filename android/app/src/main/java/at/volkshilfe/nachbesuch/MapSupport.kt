@@ -95,10 +95,8 @@ import at.volkshilfe.nachbesuch.data.importing.AreaImportResult
 import at.volkshilfe.nachbesuch.data.importing.ImportedAreaAddress
 import at.volkshilfe.nachbesuch.data.route.OverpassClient
 import at.volkshilfe.nachbesuch.data.route.WalkingNetworkResult
-import at.volkshilfe.nachbesuch.domain.map.ClusterGate
 import at.volkshilfe.nachbesuch.domain.map.PinScale
 import at.volkshilfe.nachbesuch.domain.map.PinStacking
-import at.volkshilfe.nachbesuch.domain.map.PinScalePolicy
 import at.volkshilfe.nachbesuch.domain.model.DayScope
 import at.volkshilfe.nachbesuch.domain.model.Gebiet
 import at.volkshilfe.nachbesuch.domain.model.House
@@ -143,11 +141,9 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
-import kotlin.math.cos
-import kotlin.math.floor
 
 /*
- * Map plumbing: clustering, bounds maths, POI styling, environment probes, the
+ * Map plumbing: bounds maths, POI styling, environment probes, the
  * compass-heading subscription and the cached pin bitmaps.
  *
  * The former private LocationSubscription is gone — position now comes from the
@@ -156,18 +152,6 @@ import kotlin.math.floor
  */
 
 internal fun Set<String>.toggle(id: String): Set<String> = if (id in this) this - id else this + id
-
-internal fun makeClusters(houses: List<House>, spanMeters: Double): List<RenderCluster> {
-    if (houses.isEmpty()) return emptyList()
-    val cellMeters = (spanMeters / 8.0).coerceIn(90.0, 280.0)
-    val latCell = cellMeters / 110_540.0
-    val referenceLatitude = houses.map { it.latitude }.average()
-    val lonCell = cellMeters / (111_320.0 * cos(Math.toRadians(referenceLatitude)).coerceAtLeast(0.2))
-    return houses.groupBy { "${floor(it.latitude / latCell).toInt()}:${floor(it.longitude / lonCell).toInt()}" }
-        .map { (key, members) ->
-            RenderCluster(key, LatLng(members.map { it.latitude }.average(), members.map { it.longitude }.average()), members)
-        }
-}
 
 internal fun LatLngBounds.visibleWidthMetres(): Double = RoutePlanner.metres(
     StoredCoordinate(southwest.latitude, southwest.longitude),
@@ -306,19 +290,6 @@ internal class GooglePinBitmapCache(private val context: Context) {
         val text = if (scale == PinScale.DOT) "" else fullText
         val key = "house:$text:$outcome:$scale:$selected"
         return cached(key) { pinBitmap(text, outcome, scale, selected) }
-    }
-
-    fun cluster(count: Int, hasOpen: Boolean): BitmapDescriptor = cached("cluster:$count:$hasOpen") {
-        val density = context.resources.displayMetrics.density
-        val size = (54 * density).toInt().coerceAtLeast(54)
-        Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { bitmap ->
-            val canvas = Canvas(bitmap)
-            val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if (hasOpen) 0xFFFF4545.toInt() else 0xFF3A3A3C.toInt() }
-            canvas.drawCircle(size / 2f, size / 2f, size * 0.39f, fill)
-            val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 3f * density }
-            canvas.drawCircle(size / 2f, size / 2f, size * 0.39f, ring)
-            drawCentered(canvas, if (count >= 1_000) "${count / 100 / 10.0}k" else count.toString(), size / 2f, size / 2f, 16f * density)
-        }
     }
 
     fun number(value: Int): BitmapDescriptor = cached("number:$value") {

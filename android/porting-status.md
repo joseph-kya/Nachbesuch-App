@@ -28,9 +28,9 @@
 - [x] M4 Google Maps Compose host, persisted camera, one-time first-fix centring,
   standard/hybrid map styles, POI presets, address/place search, long-press and
   reticle-based add, territory draw/edit/delete, framing and live location updates
-- [x] M5 cached bitmap pins, late clustering with hysteresis, three readable pin
-  scales, padded visible-window reduction above 1,200 houses, selection state and
-  off-main Room decoding
+- [x] M5 cached bitmap pins, one house per pin at every zoom, three deterministic
+  readable pin scales, padded visible-window reduction above 1,200 houses,
+  selection state and off-main Room decoding
 - [x] M6 house detail sheet, strict day scope recording, apartment resizing, damaged
   blob warning and delete action
 - [x] M7 street-grouped searchable list

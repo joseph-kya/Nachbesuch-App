@@ -90,7 +90,6 @@ import at.volkshilfe.nachbesuch.data.prefs.SavedCamera
 import at.volkshilfe.nachbesuch.data.importing.AreaHouseImportService
 import at.volkshilfe.nachbesuch.data.importing.AreaImportResult
 import at.volkshilfe.nachbesuch.data.importing.ImportedAreaAddress
-import at.volkshilfe.nachbesuch.domain.map.ClusterGate
 import at.volkshilfe.nachbesuch.domain.map.PinScale
 import at.volkshilfe.nachbesuch.domain.map.PinScalePolicy
 import at.volkshilfe.nachbesuch.domain.model.DayScope
@@ -152,7 +151,6 @@ internal val LocationBlue = Color(0xFF147EFB)
 internal enum class MapMode { BROWSING, PLACING_HOUSE, DRAWING_AREA, SELECTING }
 internal enum class PoiPreset(val title: String) { OFF("Aus"), ESSENTIAL("Wesentlich"), ALL("Alle") }
 
-internal data class RenderCluster(val key: String, val center: LatLng, val houses: List<House>)
 internal data class SearchPlace(val title: String, val subtitle: String, val coordinate: StoredCoordinate)
 
 @Composable
@@ -198,7 +196,6 @@ fun MapSurface(
     val mapLoadGuard = remember { MapLoadGuard(context) }
     val areaImportService = remember { AreaHouseImportService() }
     val bitmapCache = remember { GooglePinBitmapCache(context) }
-    val clusterGate = remember { ClusterGate() }
     val camera = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(LatLng(Vienna.latitude, Vienna.longitude), Vienna.zoom.toFloat())
     }
@@ -217,7 +214,6 @@ fun MapSurface(
     var visibleBounds by remember { mutableStateOf<LatLngBounds?>(null) }
     var pinScale by remember { mutableStateOf(PinScale.FULL) }
     val displayDensity = LocalDensity.current.density
-    var clustered by remember { mutableStateOf(false) }
     // Position comes from the shared LocationService, not a private subscription:
     // the list needs the same fix for "nearest first", and two subscriptions meant
     // two GPS sessions for one screen's worth of information.
@@ -283,12 +279,10 @@ fun MapSurface(
             val projection = camera.projection ?: return@collectLatest
             val bounds = projection.visibleRegion.latLngBounds
             val span = bounds.visibleWidthMetres()
-            val nextScale = PinScalePolicy.scaleFor(span, pinScale)
+            val nextScale = PinScalePolicy.scaleFor(span)
             if (nextScale != pinScale) pinScale = nextScale
             if (!moving) {
                 visibleBounds = bounds
-                val visibleCount = houses.count { bounds.containsPadded(it.latitude, it.longitude, 0.16) }
-                clustered = clusterGate.update(span, visibleCount)
                 cameraWriteSequence++
                 delay(350)
                 if (!camera.isMoving) {
@@ -300,13 +294,10 @@ fun MapSurface(
         }
     }
 
-    val visibleHouses = remember(houses, visibleBounds, clustered) {
+    val visibleHouses = remember(houses, visibleBounds) {
         val bounds = visibleBounds
         if (bounds == null || houses.size <= 1_200) houses
         else houses.filter { bounds.containsPadded(it.latitude, it.longitude, 0.16) }
-    }
-    val clusters = remember(visibleHouses, visibleBounds, clustered) {
-        if (!clustered) emptyList() else makeClusters(visibleHouses, visibleBounds?.visibleWidthMetres() ?: 3_200.0)
     }
 
     // Read from the applied scheme, not isSystemInDarkTheme(): the user can force
@@ -380,27 +371,7 @@ fun MapSurface(
                     zIndex = 3f
                 )
             }
-            if (clustered) {
-                clusters.forEach { cluster ->
-                  // Same identity rule as the house markers below.
-                  key(cluster.key) {
-                    Marker(
-                        state = rememberMarkerState(key = cluster.key, position = cluster.center),
-                        icon = bitmapCache.cluster(cluster.houses.size, cluster.houses.any { it.tally(scope).open > 0 }),
-                        anchor = Offset(0.5f, 0.5f),
-                        title = "${cluster.houses.size} Häuser",
-                        zIndex = 6f,
-                        onClick = {
-                            coroutineScope.launch {
-                                camera.animate(CameraUpdateFactory.newLatLngZoom(cluster.center, camera.position.zoom + 1.4f), 180)
-                            }
-                            true
-                        }
-                    )
-                  }
-                }
-            } else {
-                visibleHouses.forEach { house ->
+            visibleHouses.forEach { house ->
                   // `key` is load-bearing, not tidiness. A marker's icon comes from
                   // this parameter but its position lives in a MarkerState that
                   // `rememberMarkerState` creates once per composition *slot* — it
@@ -438,7 +409,6 @@ fun MapSurface(
                         }
                     )
                   }
-                }
             }
             draftBoundary.forEachIndexed { index, point ->
                 Marker(
@@ -667,4 +637,3 @@ fun MapSurface(
         )
     }
 }
-

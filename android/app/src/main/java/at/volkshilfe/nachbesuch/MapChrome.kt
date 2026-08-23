@@ -91,9 +91,6 @@ import at.volkshilfe.nachbesuch.data.importing.AreaImportResult
 import at.volkshilfe.nachbesuch.data.importing.ImportedAreaAddress
 import at.volkshilfe.nachbesuch.data.route.OverpassClient
 import at.volkshilfe.nachbesuch.data.route.WalkingNetworkResult
-import at.volkshilfe.nachbesuch.domain.map.ClusterGate
-import at.volkshilfe.nachbesuch.domain.map.PinScale
-import at.volkshilfe.nachbesuch.domain.map.PinScalePolicy
 import at.volkshilfe.nachbesuch.domain.model.DayScope
 import at.volkshilfe.nachbesuch.domain.model.Gebiet
 import at.volkshilfe.nachbesuch.domain.model.House
