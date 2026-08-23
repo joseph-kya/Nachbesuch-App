@@ -1,12 +1,38 @@
 # Status
 
-Last updated: 2026-08-22T23:30:00+02:00 · HEAD: 1c9951d · Tests: iOS 92 passing, 1 skipped; Android 61 domain + 9 data passing
+Last updated: 2026-08-23T20:00:00+02:00 · HEAD: 7d3a0b8 · Tests: iOS 60 passing;
+Android domain + data passing · Branches: `salvage/offene-arbeit`,
+`refactor/minimal-ui` (beide noch nicht auf `main`)
 
 ## In flight
-- `feature/spaeter-und-erinnerungen` — noch nicht auf `main`; die Oberfläche ist
-  auf beiden Plattformen nur kompiliert, nicht am Gerät durchgeklickt.
+- `refactor/minimal-ui` — Empfohlene Route aus der Oberfläche genommen,
+  Stilrichtlinie geschrieben, Entschlackungsdurchgang. Beide Plattformen
+  kompilieren und die Tests laufen; **am Gerät durchgeklickt ist nichts davon.**
+  Das ist der nächste Schritt.
+- `salvage/offene-arbeit` — die vier Features, die als uncommittete Änderungen
+  im Arbeitsbaum lagen, jetzt in eigenen Commits.
 
 ## Done
+- [x] Stilrichtlinie · `51e48d7` · `style.md` — Verfahren statt Geschmack:
+  Streichen → Verschieben → Gestalten. Quellen: Apples Material- und
+  Design-System-Vorgaben für iOS 26, Rams, NN/g.
+- [x] Empfohlene Route ohne Oberfläche · `6c72966`, `37e8698` · auf beiden
+  Plattformen aus der Karte genommen, Planer und Gehwegegraph bleiben
+  vollständig erhalten und getestet. Rückweg steht in `RouteSession.swift`
+  und im README.
+- [x] Entschlackung · `ce419ca`, `7d3a0b8` · kein fest verdrahtetes Rot mehr
+  als Akzent (iOS **und** Android — auf Android blieb die Kartenchrome rot,
+  wenn „Blau" gewählt war), Hintergrund von drei Verlaufsschichten auf eine,
+  doppelte Aktion aus der Hinweiskarte entfernt, Identitäts- und
+  Zustandsfarbe im Straßenkopf getrennt.
+- [x] Listen-Erinnerungen nur Mo–Fr · `d712f63` · beide Plattformen.
+- [x] Akzentfarbe konsistent durchgereicht (iOS) · `a679690` · `\.appAccent`
+  statt `Color.accentColor`, das auf den Asset-Catalog auflöste.
+- [x] „Später" als Chip und Filter in der Liste · `8e75c03`.
+- [x] Route straßenweise planen und Termine einplanen · `944d352` · liegt jetzt
+  ohne Oberfläche bereit.
+
+## Done — früher
 - [x] „Später" und Erinnerungen · `6d61029`, `1c9951d` · fünfter Status mit
   gebuchter Uhrzeit auf beiden Plattformen, plus lokale Mitteilungen: eine je
   gebuchter Tür und die stehende Erinnerung „Nachbesuchsliste an Teamleiter
