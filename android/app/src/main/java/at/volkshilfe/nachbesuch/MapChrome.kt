@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -48,13 +47,9 @@ import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocationSearching
 import androidx.compose.material.icons.filled.MoreHoriz
-import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -222,10 +217,8 @@ internal fun MapActionBar(
     satellite: Boolean,
     poiPreset: PoiPreset,
     hasBoundary: Boolean,
-    canRoute: Boolean,
     canImport: Boolean,
     onBoundary: () -> Unit,
-    onRoute: () -> Unit,
     onImport: () -> Unit,
     onSatellite: () -> Unit,
     onPoi: () -> Unit
@@ -239,12 +232,6 @@ internal fun MapActionBar(
                         text = { Text(if (hasBoundary) "Gebiet bearbeiten" else "Gebiet einzeichnen") },
                         leadingIcon = { Icon(Icons.Default.EditLocationAlt, null) },
                         onClick = onBoundary
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Empfohlene Route") },
-                        leadingIcon = { Icon(Icons.Default.Route, null) },
-                        enabled = canRoute,
-                        onClick = onRoute
                     )
                     DropdownMenuItem(
                         text = { Text("Häuser aus Kartendaten laden") },
@@ -296,53 +283,3 @@ internal fun MapConfirmCard(
         }
     }
 }
-
-@Composable
-internal fun RouteStartCard(canUseLocation: Boolean, onLocation: () -> Unit, onMap: () -> Unit, onCancel: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f), shape = RoundedCornerShape(28.dp), tonalElevation = 5.dp) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Startpunkt wählen", style = MaterialTheme.typography.titleMedium)
-                    Text("Kürzeste Reihenfolge durch alle offenen Häuser", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                IconButton(onClick = onCancel) { Icon(Icons.Default.Close, "Abbrechen") }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onLocation, enabled = canUseLocation) { Icon(Icons.Default.MyLocation, null); Text(" Mein Standort") }
-                TextButton(onClick = onMap) { Icon(Icons.Default.EditLocationAlt, null); Text(" Auf der Karte") }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun RouteCard(
-    nextAddress: String?,
-    remaining: Int,
-    status: String?,
-    visible: Boolean,
-    onFocus: () -> Unit,
-    onSkip: () -> Unit,
-    onToggle: () -> Unit,
-    onEnd: () -> Unit
-) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f), shape = RoundedCornerShape(28.dp), tonalElevation = 5.dp) {
-        Column(Modifier.padding(10.dp)) {
-            TextButton(onClick = onFocus, enabled = nextAddress != null) {
-                Column(horizontalAlignment = Alignment.Start) {
-                    Text(if (nextAddress == null) "Route abgeschlossen" else "Nächstes Haus · $remaining übrig", style = MaterialTheme.typography.labelLarge)
-                    Text(nextAddress ?: "Alle offenen Häuser erledigt", style = MaterialTheme.typography.titleMedium)
-                    status?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                }
-            }
-            Row {
-                IconButton(onClick = onSkip, enabled = remaining > 1) { Icon(Icons.Default.SkipNext, "Haus überspringen") }
-                IconButton(onClick = onToggle) { Icon(if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility, "Route ein-/ausblenden") }
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = onEnd) { Icon(Icons.Default.Close, "Route beenden") }
-            }
-        }
-    }
-}
-

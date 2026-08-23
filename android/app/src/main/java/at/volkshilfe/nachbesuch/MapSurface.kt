@@ -17,12 +17,6 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.LruCache
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,7 +37,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.EditLocationAlt
-import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocationSearching
 import androidx.compose.material.icons.filled.MoreHoriz
@@ -97,8 +90,6 @@ import at.volkshilfe.nachbesuch.data.prefs.SavedCamera
 import at.volkshilfe.nachbesuch.data.importing.AreaHouseImportService
 import at.volkshilfe.nachbesuch.data.importing.AreaImportResult
 import at.volkshilfe.nachbesuch.data.importing.ImportedAreaAddress
-import at.volkshilfe.nachbesuch.data.route.OverpassClient
-import at.volkshilfe.nachbesuch.data.route.WalkingNetworkResult
 import at.volkshilfe.nachbesuch.domain.map.ClusterGate
 import at.volkshilfe.nachbesuch.domain.map.PinScale
 import at.volkshilfe.nachbesuch.domain.map.PinScalePolicy
@@ -107,9 +98,6 @@ import at.volkshilfe.nachbesuch.domain.model.Gebiet
 import at.volkshilfe.nachbesuch.domain.model.House
 import at.volkshilfe.nachbesuch.domain.model.StoredCoordinate
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
-import at.volkshilfe.nachbesuch.domain.route.PlannedRoute
-import at.volkshilfe.nachbesuch.domain.route.RoutePlanner
-import at.volkshilfe.nachbesuch.domain.route.RouteStop
 import at.volkshilfe.nachbesuch.ui.theme.ChromeIconButton
 import at.volkshilfe.nachbesuch.ui.theme.VolkshilfeRed
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -138,7 +126,6 @@ import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -161,11 +148,13 @@ internal val Vienna = SavedCamera(48.2082, 16.3738, 14.5)
 // Same red as the rest of the app's chrome — this used to be a second,
 // slightly different constant living only on the map.
 internal val Accent = VolkshilfeRed
-internal val RouteBlue = Color(0xFF147EFB)
+/// The system blue of the location puck's accuracy circle. It was called
+/// `RouteBlue` while the route line shared it; that line is gone and the name
+/// would now point at nothing.
+internal val LocationBlue = Color(0xFF147EFB)
 
 internal enum class MapMode { BROWSING, PLACING_HOUSE, DRAWING_AREA, SELECTING }
 internal enum class PoiPreset(val title: String) { OFF("Aus"), ESSENTIAL("Wesentlich"), ALL("Alle") }
-internal enum class RoutePhase { OFF, CHOOSING_START, PICKING_ON_MAP, RUNNING }
 
 internal data class RenderCluster(val key: String, val center: LatLng, val houses: List<House>)
 internal data class SearchPlace(val title: String, val subtitle: String, val coordinate: StoredCoordinate)
@@ -206,7 +195,6 @@ fun MapSurface(
     val coroutineScope = rememberCoroutineScope()
     val cameraStore = remember { MapCameraStore(context) }
     val mapLoadGuard = remember { MapLoadGuard(context) }
-    val overpassClient = remember { OverpassClient(context) }
     val areaImportService = remember { AreaHouseImportService() }
     val bitmapCache = remember { GooglePinBitmapCache(context) }
     val clusterGate = remember { ClusterGate() }
@@ -235,21 +223,10 @@ fun MapSurface(
     val location by locationFlow.collectAsState()
     var heading by remember { mutableStateOf<Float?>(null) }
     var following by remember { mutableStateOf(false) }
-    var routePhase by rememberSaveable { mutableStateOf(RoutePhase.OFF) }
-    var route by remember { mutableStateOf<PlannedRoute?>(null) }
-    var routeOrder by remember { mutableStateOf(emptyList<String>()) }
-    var routeVisible by rememberSaveable { mutableStateOf(true) }
-    var routeStatus by remember { mutableStateOf<String?>(null) }
-    var routeJob by remember { mutableStateOf<Job?>(null) }
     var cameraWriteSequence by remember { mutableIntStateOf(0) }
     var mapPermit by remember { mutableStateOf<MapLoadPermit?>(null) }
 
     val apiKeyMissing = remember { googleMapsKeyIsMissing(context) }
-    val openHouses = remember(houses, scope) { houses.filter { it.tally(scope).open > 0 } }
-    val nextHouse = remember(routeOrder, houses, scope) {
-        routeOrder.asSequence().mapNotNull { id -> houses.firstOrNull { it.id == id } }
-            .firstOrNull { it.tally(scope).open > 0 }
-    }
 
     LaunchedEffect(apiKeyMissing) {
         mapPermit = if (apiKeyMissing) null else withContext(Dispatchers.IO) { mapLoadGuard.acquire() }
@@ -271,34 +248,6 @@ fun MapSurface(
         coroutineScope.launch { camera.animate(CameraUpdateFactory.newLatLngBounds(builder.build(), 84), 220) }
     }
 
-    fun planRoute(start: StoredCoordinate) {
-        val stops = openHouses.map { RouteStop(it.id, StoredCoordinate(it.latitude, it.longitude)) }
-        if (stops.isEmpty()) return
-        routeJob?.cancel()
-        route = RoutePlanner.plan(start, stops)
-        routeOrder = route!!.stops.map { it.id }
-        routeStatus = "Luftlinie · Gehwege werden gesucht …"
-        routePhase = RoutePhase.RUNNING
-        routeVisible = true
-        routeJob = coroutineScope.launch {
-            val network = withContext(Dispatchers.IO) { overpassClient.load(listOf(start) + stops.map { it.coordinate }) }
-            val graph = (network as? WalkingNetworkResult.Ready)?.graph
-            if (graph == null) {
-                routeStatus = when (network) {
-                    WalkingNetworkResult.AreaTooLarge -> "Luftlinie · Gebiet zu groß für Gehwege"
-                    else -> "Luftlinie · Gehwege offline nicht verfügbar"
-                }
-                return@launch
-            }
-            val upgraded = withContext(Dispatchers.Default) { RoutePlanner.plan(start, stops, graph) }
-            if (upgraded.followsStreets) {
-                route = upgraded
-                routeOrder = upgraded.stops.map { it.id }
-                routeStatus = "Gehwegroute"
-            }
-        }
-    }
-
     LaunchedEffect(mapLoaded) {
         if (!mapLoaded) return@LaunchedEffect
         val restored = withContext(Dispatchers.IO) { cameraStore.restore() } ?: Vienna
@@ -311,7 +260,6 @@ fun MapSurface(
         val headingSubscription = HeadingSubscription(context) { value -> heading = value }
         headingSubscription.start()
         onDispose {
-            routeJob?.cancel()
             headingSubscription.stop()
         }
     }
@@ -431,18 +379,6 @@ fun MapSurface(
                     zIndex = 3f
                 )
             }
-            if (routeVisible) {
-                route?.path?.takeIf { it.size >= 2 }?.let { path ->
-                    Polyline(
-                        points = path.map { LatLng(it.latitude, it.longitude) },
-                        color = RouteBlue.copy(alpha = 0.88f),
-                        width = 10f,
-                        startCap = RoundCap(),
-                        endCap = RoundCap(),
-                        zIndex = 1f
-                    )
-                }
-            }
             if (clustered) {
                 clusters.forEach { cluster ->
                   // Same identity rule as the house markers below.
@@ -485,9 +421,6 @@ fun MapSurface(
                         zIndex = if (selected) 12f else 5f,
                         onClick = {
                             when {
-                                // Picking a route start wants one house, not a menu.
-                                routePhase == RoutePhase.PICKING_ON_MAP ->
-                                    planRoute(StoredCoordinate(house.latitude, house.longitude))
                                 mode == MapMode.SELECTING -> selectedIDs = selectedIDs.toggle(house.id)
                                 else -> {
                                     val stacked = stackedHouseIDs(
@@ -518,8 +451,8 @@ fun MapSurface(
                 Circle(
                     center = LatLng(fix.latitude, fix.longitude),
                     radius = fix.accuracy.toDouble().coerceIn(4.0, 80.0),
-                    fillColor = RouteBlue.copy(alpha = 0.09f),
-                    strokeColor = RouteBlue.copy(alpha = 0.22f),
+                    fillColor = LocationBlue.copy(alpha = 0.09f),
+                    strokeColor = LocationBlue.copy(alpha = 0.22f),
                     strokeWidth = 2f,
                     zIndex = 7f
                 )
@@ -532,30 +465,12 @@ fun MapSurface(
                     zIndex = 30f
                 )
             }
-            nextHouse?.takeIf { routeVisible && routePhase == RoutePhase.RUNNING }?.let { next ->
-                val reduceMotion = remember { animationsDisabled(context) }
-                val radius = if (reduceMotion) 16f else rememberInfiniteTransition(label = "next-stop")
-                    .animateFloat(
-                        initialValue = 13f,
-                        targetValue = 20f,
-                        animationSpec = infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-                        label = "next-stop-radius"
-                    ).value
-                Circle(
-                    center = LatLng(next.latitude, next.longitude),
-                    radius = radius.toDouble(),
-                    fillColor = Color.Transparent,
-                    strokeColor = RouteBlue.copy(alpha = 0.78f),
-                    strokeWidth = 6f,
-                    zIndex = 25f
-                )
-            }
         }
         }
 
-        if (mode == MapMode.PLACING_HOUSE || mode == MapMode.DRAWING_AREA || routePhase == RoutePhase.PICKING_ON_MAP) {
+        if (mode == MapMode.PLACING_HOUSE || mode == MapMode.DRAWING_AREA) {
             Icon(
-                imageVector = if (routePhase == RoutePhase.PICKING_ON_MAP) Icons.Default.Flag else Icons.Default.EditLocationAlt,
+                imageVector = Icons.Default.EditLocationAlt,
                 contentDescription = null,
                 tint = Accent,
                 modifier = Modifier.align(Alignment.Center)
@@ -588,7 +503,7 @@ fun MapSurface(
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            AnimatedVisibility(mode == MapMode.BROWSING && routePhase == RoutePhase.OFF) {
+            AnimatedVisibility(mode == MapMode.BROWSING) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (boundary.isNotEmpty() || houses.isNotEmpty()) {
                         ChromeIconButton(onClick = ::frameTerritory) {
@@ -612,34 +527,6 @@ fun MapSurface(
                         )
                     }
                 }
-            }
-
-            when (routePhase) {
-                RoutePhase.CHOOSING_START -> RouteStartCard(
-                    canUseLocation = location != null,
-                    onLocation = { location?.let { planRoute(StoredCoordinate(it.latitude, it.longitude)) } },
-                    onMap = { routePhase = RoutePhase.PICKING_ON_MAP },
-                    onCancel = { routePhase = RoutePhase.OFF }
-                )
-                RoutePhase.PICKING_ON_MAP -> MapConfirmCard(
-                    title = "Karte auf den Startpunkt schieben",
-                    confirmLabel = "Hier starten",
-                    onCancel = { routePhase = RoutePhase.OFF },
-                    onConfirm = { planRoute(StoredCoordinate(camera.position.target.latitude, camera.position.target.longitude)) }
-                )
-                RoutePhase.RUNNING -> RouteCard(
-                    nextAddress = nextHouse?.address,
-                    remaining = routeOrder.count { id -> houses.firstOrNull { it.id == id }?.tally(scope)?.open ?: 0 > 0 },
-                    status = routeStatus,
-                    visible = routeVisible,
-                    onFocus = { nextHouse?.let { moveTo(StoredCoordinate(it.latitude, it.longitude), 17f) } },
-                    onSkip = {
-                        nextHouse?.id?.let { id -> routeOrder = routeOrder.filterNot { it == id } + id }
-                    },
-                    onToggle = { routeVisible = !routeVisible },
-                    onEnd = { routeJob?.cancel(); route = null; routeOrder = emptyList(); routePhase = RoutePhase.OFF }
-                )
-                RoutePhase.OFF -> Unit
             }
 
             when (mode) {
@@ -671,28 +558,24 @@ fun MapSurface(
                         mode = MapMode.BROWSING
                     }
                 )
-                MapMode.BROWSING -> if (routePhase == RoutePhase.OFF) {
-                    MapActionBar(
-                        canAdd = gebiet != null,
-                        onAdd = { mode = MapMode.PLACING_HOUSE },
-                        menuExpanded = menuExpanded,
-                        onMenuExpanded = { menuExpanded = it },
-                        satellite = satellite,
-                        poiPreset = poiPreset,
-                        hasBoundary = boundary.size >= 3,
-                        canRoute = openHouses.isNotEmpty(),
-                        canImport = boundary.size >= 3,
-                        onBoundary = {
-                            menuExpanded = false
-                            if (boundary.size >= 3) boundaryOptions = true
-                            else { draftBoundary = emptyList(); mode = MapMode.DRAWING_AREA }
-                        },
-                        onRoute = { menuExpanded = false; routePhase = RoutePhase.CHOOSING_START },
-                        onImport = { menuExpanded = false; areaImportVisible = true },
-                        onSatellite = { satellite = !satellite },
-                        onPoi = { poiPreset = PoiPreset.entries[(poiPreset.ordinal + 1) % PoiPreset.entries.size] }
-                    )
-                }
+                MapMode.BROWSING -> MapActionBar(
+                    canAdd = gebiet != null,
+                    onAdd = { mode = MapMode.PLACING_HOUSE },
+                    menuExpanded = menuExpanded,
+                    onMenuExpanded = { menuExpanded = it },
+                    satellite = satellite,
+                    poiPreset = poiPreset,
+                    hasBoundary = boundary.size >= 3,
+                    canImport = boundary.size >= 3,
+                    onBoundary = {
+                        menuExpanded = false
+                        if (boundary.size >= 3) boundaryOptions = true
+                        else { draftBoundary = emptyList(); mode = MapMode.DRAWING_AREA }
+                    },
+                    onImport = { menuExpanded = false; areaImportVisible = true },
+                    onSatellite = { satellite = !satellite },
+                    onPoi = { poiPreset = PoiPreset.entries[(poiPreset.ordinal + 1) % PoiPreset.entries.size] }
+                )
                 MapMode.SELECTING -> Unit
             }
         }
