@@ -10,6 +10,7 @@ import android.os.Build
 import at.volkshilfe.nachbesuch.domain.model.DayScope
 import at.volkshilfe.nachbesuch.domain.model.House
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
+import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
@@ -23,7 +24,7 @@ import java.time.ZoneId
  *  * **Nachbesuch-Erinnerungen** — a door marked "Später" books a return time and
  *    the reminder fires once at that time.
  *  * **Listen-Erinnerungen** — the standing 14:00 / 16:00 / 18:00 prompt to send
- *    the Nachbesuchsliste to the Teamleiter.
+ *    the Nachbesuchsliste to the Teamleiter, Monday to Friday only.
  *
  * The iOS twin is `ReminderService`. It gets `UNUserNotificationCenter`, which owns
  * the schedule for it; here the schedule is ours to keep, so alarm request codes
@@ -51,6 +52,19 @@ class ReminderScheduler(private val context: Context) {
 
         /** The times the standing list reminder fires. */
         val DAILY_LIST_HOURS = listOf(14, 16, 18)
+
+        /**
+         * The days it fires on. Nobody sends the Nachbesuchsliste to the Teamleiter
+         * at the weekend, so a Saturday notification is only something to swipe
+         * away.
+         */
+        val DAILY_LIST_DAYS = setOf(
+            DayOfWeek.MONDAY,
+            DayOfWeek.TUESDAY,
+            DayOfWeek.WEDNESDAY,
+            DayOfWeek.THURSDAY,
+            DayOfWeek.FRIDAY
+        )
 
         const val DAILY_LIST_TITLE = "Nachbesuchsliste"
         const val DAILY_LIST_BODY = "Nachbesuchsliste an Teamleiter senden!"
@@ -90,7 +104,7 @@ class ReminderScheduler(private val context: Context) {
                 "Liste an Teamleiter",
                 NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
-                description = "Erinnert um 14:00, 16:00 und 18:00 daran, die Liste zu senden."
+                description = "Erinnert montags bis freitags um 14:00, 16:00 und 18:00 daran, die Liste zu senden."
             }
         )
     }
@@ -166,7 +180,7 @@ class ReminderScheduler(private val context: Context) {
     // MARK: Daily list reminder
 
     /**
-     * Applies the standing 14:00 / 16:00 / 18:00 reminder.
+     * Applies the standing 14:00 / 16:00 / 18:00 reminder, Monday to Friday.
      *
      * Idempotent — it cancels the three alarms first, so calling it on every launch
      * cannot accumulate duplicates. Each alarm is a one-shot that the receiver
@@ -194,11 +208,21 @@ class ReminderScheduler(private val context: Context) {
         setAlarm(dailyRequestCode(hour), intent, nextOccurrence(hour, now))
     }
 
-    /** Today's slot while it is still ahead, otherwise tomorrow's. */
+    /**
+     * The next weekday slot: today while it is still ahead, otherwise the next
+     * Monday-to-Friday day at the same hour.
+     *
+     * The weekend is skipped here rather than in the receiver, so the alarm simply
+     * never exists on a Saturday — a receiver that had to decide whether to post
+     * would still wake the device twice a weekend for nothing.
+     */
     fun nextOccurrence(hour: Int, now: Long, zone: ZoneId = ZoneId.systemDefault()): Long {
         val today = Instant.ofEpochMilli(now).atZone(zone)
             .with(LocalTime.of(hour, 0)).withSecond(0).withNano(0)
-        val target = if (today.toInstant().toEpochMilli() > now) today else today.plusDays(1)
+        var target = if (today.toInstant().toEpochMilli() > now) today else today.plusDays(1)
+        while (target.dayOfWeek !in DAILY_LIST_DAYS) {
+            target = target.plusDays(1)
+        }
         return target.toInstant().toEpochMilli()
     }
 

@@ -9,7 +9,7 @@ import UserNotifications
 /// * **Nachbesuch-Erinnerungen** — a door marked "Später" books a return time, and
 ///   the reminder fires once at that time.
 /// * **Listen-Erinnerungen** — the standing 14:00 / 16:00 / 18:00 prompt to send the
-///   Nachbesuchsliste to the Teamleiter.
+///   Nachbesuchsliste to the Teamleiter, Monday to Friday only.
 ///
 /// Identifiers are derived, never random, so re-recording a door replaces its
 /// pending reminder instead of stacking a second one on top.
@@ -29,6 +29,11 @@ nonisolated enum ReminderService {
     /// The times the standing list reminder fires.
     nonisolated static let dailyListHours = [14, 16, 18]
 
+    /// The days it fires on, in `Calendar` numbering (1 = Sunday). Monday to
+    /// Friday: nobody sends the Nachbesuchsliste to the Teamleiter at the weekend,
+    /// and a Saturday banner is just a notification to swipe away.
+    nonisolated static let dailyListWeekdays = [2, 3, 4, 5, 6]
+
     nonisolated static let dailyListTitle = "Nachbesuchsliste"
     nonisolated static let dailyListBody = "Nachbesuchsliste an Teamleiter senden!"
 
@@ -36,7 +41,20 @@ nonisolated enum ReminderService {
         "\(revisitPrefix).\(house.uuidString).\(door.uuidString).\(day)"
     }
 
-    private static func dailyIdentifier(hour: Int) -> String { "\(dailyPrefix).\(hour)" }
+    private static func dailyIdentifier(hour: Int, weekday: Int) -> String {
+        "\(dailyPrefix).\(hour).\(weekday)"
+    }
+
+    /// Identifiers of every list reminder this app has ever scheduled, including
+    /// the pre-weekday `dailyList.14` form. A build that upgrades over the old one
+    /// would otherwise keep firing the daily requests on Saturday forever — nothing
+    /// else ever removes them.
+    private static var allDailyIdentifiers: [String] {
+        dailyListHours.map { "\(dailyPrefix).\($0)" }
+            + dailyListHours.flatMap { hour in
+                dailyListWeekdays.map { dailyIdentifier(hour: hour, weekday: $0) }
+            }
+    }
 
     // MARK: Authorization
 
@@ -117,31 +135,38 @@ nonisolated enum ReminderService {
 
     // MARK: Daily list reminder
 
-    /// Applies the standing 14:00 / 16:00 / 18:00 reminder.
+    /// Applies the standing 14:00 / 16:00 / 18:00 reminder, Monday to Friday.
     ///
-    /// Idempotent — it always removes the three requests first, so calling it on
+    /// One repeating request per hour *and weekday* — fifteen in total. A single
+    /// request with only `hour` set repeats every day, and `UNCalendarNotificationTrigger`
+    /// has no way to exclude the weekend, so the weekday has to be part of the
+    /// match components.
+    ///
+    /// Idempotent — it always removes every known request first, so calling it on
     /// every launch cannot accumulate duplicates.
     nonisolated static func applyDailyListReminders(enabled: Bool) async {
-        let identifiers = dailyListHours.map(dailyIdentifier(hour:))
-        await cancel(identifiers: identifiers)
+        await cancel(identifiers: allDailyIdentifiers)
         guard enabled, await ensureAuthorized() else { return }
 
         let center = UNUserNotificationCenter.current()
         for hour in dailyListHours {
-            let content = UNMutableNotificationContent()
-            content.title = dailyListTitle
-            content.body = dailyListBody
-            content.sound = .default
+            for weekday in dailyListWeekdays {
+                let content = UNMutableNotificationContent()
+                content.title = dailyListTitle
+                content.body = dailyListBody
+                content.sound = .default
 
-            var components = DateComponents()
-            components.hour = hour
-            components.minute = 0
-            let request = UNNotificationRequest(
-                identifier: dailyIdentifier(hour: hour),
-                content: content,
-                trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
-            )
-            try? await center.add(request)
+                var components = DateComponents()
+                components.weekday = weekday
+                components.hour = hour
+                components.minute = 0
+                let request = UNNotificationRequest(
+                    identifier: dailyIdentifier(hour: hour, weekday: weekday),
+                    content: content,
+                    trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
+                )
+                try? await center.add(request)
+            }
         }
     }
 

@@ -172,8 +172,12 @@ fun AppearanceSettingsSheet(
 /** "14:00, 16:00 und 18:00", built from the schedule rather than typed out. */
 private fun reminderTimesText(hours: List<Int>): String {
     val times = hours.map { String.format(java.util.Locale.GERMAN, "%02d:00", it) }
-    if (times.size < 2) return times.joinToString()
-    return "${times.dropLast(1).joinToString(", ")} und ${times.last()}"
+    val joined = if (times.size < 2) {
+        times.joinToString()
+    } else {
+        "${times.dropLast(1).joinToString(", ")} und ${times.last()}"
+    }
+    return "Mo–Fr · $joined"
 }
 
 @Composable
