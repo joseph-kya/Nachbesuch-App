@@ -187,14 +187,14 @@ struct ListScreen: View {
                                         } label: {
                                             Label("Dabei", systemImage: "heart.fill")
                                         }
-                                        .tint(.pink)
+                                        .tint(VisitOutcome.joined.tint)
 
                                         Button {
                                             applyQuickStatus(.notHome, to: row)
                                         } label: {
                                             Label("Niemand da", systemImage: "arrow.clockwise")
                                         }
-                                        .tint(.red)
+                                        .tint(VisitOutcome.notHome.tint)
 
                                         Button {
                                             revisitTarget = row
@@ -794,7 +794,17 @@ private struct StreetHeader: View {
         section.unitCount > 0 && section.completedCount >= section.unitCount && section.openCount == 0
     }
 
-    private var tint: Color { isDone ? .green : accent }
+    /// **Identity, not state.** The street icon is the row's mark — it says "this is
+    /// a street", and it says it in the colour the user chose for the app. It must
+    /// not also carry progress: an icon that changes colour when the last door is
+    /// recorded is a second, quieter version of the answer the counter and the bar
+    /// already give loudly, and it made the accent look like it meant something.
+    private var identityTint: Color { accent }
+
+    /// **State.** Red while there is something to come back to, green when there is
+    /// not — the same red the "Offen" filter chip and the per-row open badge use, so
+    /// "offen" is one colour throughout the screen rather than three.
+    private var stateTint: Color { isDone ? .green : .red }
 
     private var barWidth: CGFloat { dynamicTypeSize.isAccessibilitySize ? 44 : 64 }
 
@@ -820,7 +830,7 @@ private struct StreetHeader: View {
         RoundedRectangle(cornerRadius: 11, style: .continuous)
             .fill(
                 LinearGradient(
-                    colors: [tint.opacity(0.26), tint.opacity(0.12)],
+                    colors: [identityTint.opacity(0.26), identityTint.opacity(0.12)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -829,13 +839,12 @@ private struct StreetHeader: View {
             .overlay {
                 Image(systemName: "road.lanes")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(tint)
+                    .foregroundStyle(identityTint)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .strokeBorder(tint.opacity(0.22), lineWidth: 0.5)
+                    .strokeBorder(identityTint.opacity(0.22), lineWidth: 0.5)
             }
-            .animation(.appSettle(reduceMotion: reduceMotion), value: isDone)
     }
 
     private var title: some View {
@@ -862,7 +871,7 @@ private struct StreetHeader: View {
                 Text("·").foregroundStyle(.tertiary)
                 Text("\(section.openCount) offen")
                     .monospacedDigit()
-                    .foregroundStyle(tint)
+                    .foregroundStyle(stateTint)
             }
         }
         .font(.caption2)
@@ -887,7 +896,7 @@ private struct StreetHeader: View {
                 .fill(.quaternary)
             if section.progress > 0 {
                 Capsule(style: .continuous)
-                    .fill(tint)
+                    .fill(stateTint)
                     .frame(width: max(5, width * min(section.progress, 1)))
             }
         }

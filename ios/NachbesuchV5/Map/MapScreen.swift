@@ -276,7 +276,6 @@ struct MapScreen: View {
                     MapGuideCard(
                         namespace: glass,
                         onAddHouse: { setMode(.placingHouse) },
-                        onDrawArea: beginDrawingArea,
                         onDismiss: { hasSeenGuide = true }
                     )
                     // Standalone: `map.guide` has no partner to morph into, so the

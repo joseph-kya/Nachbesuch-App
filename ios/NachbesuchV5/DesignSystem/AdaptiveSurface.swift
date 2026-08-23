@@ -146,9 +146,16 @@ extension View {
 /// The tinted ground these screens put their glass on.
 ///
 /// Glass has nothing to refract over a flat system background, which is why the
-/// cards used to read as plain white rectangles. The gradient is faint enough to
-/// stay out of the way of text and strong enough to give the material something to
-/// pick up at the card edges.
+/// cards used to read as plain white rectangles. That refraction is the backdrop's
+/// entire job — it is not a design surface.
+///
+/// So: **one** gradient, in the accent alone. It used to be three layers — a linear
+/// wash that ran accent→clear→*blue*, plus a radial glow in the corner. The blue was
+/// a second colour nobody had chosen and the app never used elsewhere; the radial
+/// was a highlight over a scroll view whose content slides straight through it. Two
+/// of the three answered no question at all, and the cards look the same without
+/// them. Deliberately faint: the first attempt at 0.16 turned the whole screen pink,
+/// because an opacity that reads as subtle on a neutral accent does not on red.
 struct AppBackdrop: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appAccent) private var accent
@@ -156,21 +163,10 @@ struct AppBackdrop: View {
     var body: some View {
         ZStack {
             Color(uiColor: .systemGroupedBackground)
-            // Deliberately faint. The first attempt at 0.16 turned the whole screen
-            // pink — the accent here is red, and a tint that reads as "subtle" on a
-            // neutral accent does not on this one.
             LinearGradient(
-                colors: colorScheme == .dark
-                    ? [accent.opacity(0.10), .clear, Color.blue.opacity(0.07)]
-                    : [accent.opacity(0.055), .clear, Color.blue.opacity(0.045)],
+                colors: [accent.opacity(colorScheme == .dark ? 0.10 : 0.055), .clear],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
-            )
-            RadialGradient(
-                colors: [accent.opacity(colorScheme == .dark ? 0.07 : 0.035), .clear],
-                center: .topTrailing,
-                startRadius: 0,
-                endRadius: 380
             )
         }
         .ignoresSafeArea()

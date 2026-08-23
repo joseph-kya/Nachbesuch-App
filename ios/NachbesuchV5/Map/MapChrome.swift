@@ -151,6 +151,7 @@ struct DayScopePicker: View {
 /// into each other as they appear and disappear.
 struct MapActionBar<Menu: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAccent) private var accent
     let isPlacing: Bool
     let canAddHouse: Bool
     let namespace: Namespace.ID
@@ -196,7 +197,7 @@ struct MapActionBar<Menu: View>: View {
             }
             .buttonStyle(.glassProminent)
             .controlSize(.large)
-            .tint(.red)
+            .tint(accent)
             .disabled(!canAddHouse)
             .glassEffectID("map.primary", in: namespace)
         }
@@ -212,6 +213,7 @@ struct MapActionBar<Menu: View>: View {
 /// position is the one map action needed mid-stride, one-handed.
 struct LocateButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAccent) private var accent
     let isFollowing: Bool
     let isBusy: Bool
     let isDenied: Bool
@@ -231,7 +233,7 @@ struct LocateButton: View {
         .buttonStyle(.glass)
         .controlSize(.large)
         .buttonBorderShape(.circle)
-        .tint(isFollowing ? .red : nil)
+        .tint(isFollowing ? accent : nil)
         .glassEffectID("map.locate", in: namespace)
         .accessibilityLabel(isFollowing ? "Standortverfolgung beenden" : "Zu meinem Standort")
         .accessibilityAddTraits(isFollowing ? [.isSelected] : [])
@@ -317,6 +319,7 @@ struct MapSelectionBar: View {
 
 struct BoundaryDrawingBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAccent) private var accent
     let pointCount: Int
     let namespace: Namespace.ID
     let onCancel: () -> Void
@@ -363,7 +366,7 @@ struct BoundaryDrawingBar: View {
                 }
                 .buttonStyle(.glassProminent)
                 .controlSize(.large)
-                .tint(.red)
+                .tint(accent)
                 .glassEffectID("map.drawAdd", in: namespace)
 
                 Button(action: onSave) {
@@ -444,10 +447,18 @@ private struct Triangle: Shape {
 
 // MARK: - Guide card
 
+/// Shown once, on an empty map, and never again after it is dismissed.
+///
+/// It offers **one** action. It used to offer two — "Haus hinzufügen" and "Gebiet" —
+/// but the action bar directly beneath it already carries "Haus hinzufügen", and
+/// "Gebiet einzeichnen" is the first item of the menu next to it. A card whose job is
+/// to orient someone on their first launch should not be the third place the same two
+/// commands appear; it should say where they are. So it says that, and keeps the one
+/// button worth pressing first.
 struct MapGuideCard: View {
+    @Environment(\.appAccent) private var accent
     let namespace: Namespace.ID
     let onAddHouse: () -> Void
-    let onDrawArea: () -> Void
     let onDismiss: () -> Void
 
     var body: some View {
@@ -456,7 +467,7 @@ struct MapGuideCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Dein Gebiet")
                         .font(.headline)
-                    Text("Karte bewegen, Gebiet markieren oder direkt dein erstes Haus erfassen.")
+                    Text("Karte auf deine Straße schieben und das erste Haus erfassen. Das Gebiet einzeichnen kannst du im Menü daneben.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -472,23 +483,14 @@ struct MapGuideCard: View {
                 .accessibilityLabel("Hinweis schließen")
             }
 
-            HStack(spacing: AppSpacing.tight) {
-                Button(action: onAddHouse) {
-                    Label("Haus hinzufügen", systemImage: "plus")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity, minHeight: AppTouch.minimum)
-                }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-
-                Button(action: onDrawArea) {
-                    Label("Gebiet", systemImage: "pentagon")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(minWidth: 88, minHeight: AppTouch.minimum)
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
+            Button(action: onAddHouse) {
+                Label("Haus hinzufügen", systemImage: "plus")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: AppTouch.minimum)
             }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .tint(accent)
         }
         .padding(AppSpacing.regular)
         .mapChrome()
