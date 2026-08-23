@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 /// territory grouped by campaign day.
 struct ArchiveScreen: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAccent) private var accent
     @Environment(\.modelContext) private var modelContext
     @Environment(AppNoticeCenter.self) private var notices
 
@@ -220,7 +221,7 @@ struct ArchiveScreen: View {
                 id: value.rawValue,
                 title: value.title,
                 systemImage: value.systemImage,
-                tint: value == .all ? .accentColor : .red,
+                tint: value == .all ? accent : .red,
                 count: value == .all ? gebiete.count : openCount,
                 isSelected: filter == value
             )
@@ -303,7 +304,7 @@ struct ArchiveScreen: View {
                     .overlay {
                         if gebiet.id == activeGebiet?.id {
                             RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
-                                .fill(Color.accentColor.opacity(0.08))
+                                .fill(accent.opacity(0.08))
                                 .allowsHitTesting(false)
                         }
                     }
@@ -629,6 +630,7 @@ struct GebietRowModel: Identifiable, Equatable {
 /// which meant every row re-rendered on every keystroke.
 struct GebietRow: View, Equatable {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAccent) private var accent
     let model: GebietRowModel
 
     static func == (lhs: GebietRow, rhs: GebietRow) -> Bool { lhs.model == rhs.model }
@@ -636,7 +638,7 @@ struct GebietRow: View, Equatable {
     var body: some View {
         HStack(spacing: AppSpacing.snug) {
             RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(model.isActive ? Color.accentColor : .clear)
+                .fill(model.isActive ? accent : .clear)
                 .frame(width: 4)
 
             VStack(alignment: .leading, spacing: 7) {

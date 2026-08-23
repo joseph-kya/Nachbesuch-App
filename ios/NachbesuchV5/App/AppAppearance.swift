@@ -54,6 +54,29 @@ enum AppAccent: String, CaseIterable, Identifiable {
     }
 }
 
+/// The chosen accent, as a value views can do colour maths on.
+///
+/// `Color.accentColor` cannot do this job: it resolves to the **asset catalog**
+/// `AccentColor` — the deep Volkshilfe red — and ignores both the `.tint()` applied
+/// to the tab view and the accent the user picked in the settings sheet. Every
+/// surface built from `Color.accentColor.opacity(…)` therefore drew a *different,
+/// darker red* than the tinted controls beside it, which is exactly the mismatch
+/// you saw walking from the map into the list. It also meant picking "Blau" left
+/// the backdrops and street icons stubbornly red.
+///
+/// `ShapeStyle.tint` fixes the plain fills but not the ones that need `.opacity`,
+/// so the accent travels as an explicit environment value instead.
+private struct AppAccentKey: EnvironmentKey {
+    static let defaultValue: Color = AppAccent.volkshilfe.color
+}
+
+extension EnvironmentValues {
+    var appAccent: Color {
+        get { self[AppAccentKey.self] }
+        set { self[AppAccentKey.self] = newValue }
+    }
+}
+
 struct AppearanceSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("appearance.mode") private var appearanceRaw = AppAppearance.system.rawValue
@@ -175,12 +198,17 @@ struct AppearanceSettingsSheet: View {
         }
     }
 
-    /// "14:00, 16:00 und 18:00" — built from the schedule rather than typed out, so
-    /// the label cannot drift from the times actually booked.
+    /// "Mo–Fr · 14:00, 16:00 und 18:00" — built from the schedule rather than typed
+    /// out, so the label cannot drift from the times actually booked.
     private var reminderTimesText: String {
         let times = ReminderService.dailyListHours.map { String(format: "%02d:00", $0) }
-        guard let last = times.last, times.count > 1 else { return times.joined() }
-        return "\(times.dropLast().joined(separator: ", ")) und \(last)"
+        let joined: String
+        if let last = times.last, times.count > 1 {
+            joined = "\(times.dropLast().joined(separator: ", ")) und \(last)"
+        } else {
+            joined = times.joined()
+        }
+        return "Mo–Fr · \(joined)"
     }
 
     private func settingsGroup<Content: View>(

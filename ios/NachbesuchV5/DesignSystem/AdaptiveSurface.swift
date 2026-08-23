@@ -151,6 +151,7 @@ extension View {
 /// pick up at the card edges.
 struct AppBackdrop: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.appAccent) private var accent
 
     var body: some View {
         ZStack {
@@ -160,13 +161,13 @@ struct AppBackdrop: View {
             // neutral accent does not on this one.
             LinearGradient(
                 colors: colorScheme == .dark
-                    ? [Color.accentColor.opacity(0.10), .clear, Color.blue.opacity(0.07)]
-                    : [Color.accentColor.opacity(0.055), .clear, Color.blue.opacity(0.045)],
+                    ? [accent.opacity(0.10), .clear, Color.blue.opacity(0.07)]
+                    : [accent.opacity(0.055), .clear, Color.blue.opacity(0.045)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             RadialGradient(
-                colors: [Color.accentColor.opacity(colorScheme == .dark ? 0.07 : 0.035), .clear],
+                colors: [accent.opacity(colorScheme == .dark ? 0.07 : 0.035), .clear],
                 center: .topTrailing,
                 startRadius: 0,
                 endRadius: 380

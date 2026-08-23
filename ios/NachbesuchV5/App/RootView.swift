@@ -50,6 +50,10 @@ struct RootView: View {
         #endif
     }()
 
+    private var accentColor: Color {
+        (AppAccent(rawValue: accentRaw) ?? .volkshilfe).color
+    }
+
     private var selectedGebiet: Gebiet? {
         gebiete.first { $0.id == selectedGebietID } ?? gebiete.first
     }
@@ -85,7 +89,11 @@ struct RootView: View {
             }
         }
         .environment(location)
-        .tint((AppAccent(rawValue: accentRaw) ?? .volkshilfe).color)
+        // Both, always together: `.tint` drives the controls SwiftUI colours for us,
+        // `appAccent` drives everything we tint by hand. Setting only one is what let
+        // the two reds drift apart.
+        .tint(accentColor)
+        .environment(\.appAccent, accentColor)
         .preferredColorScheme(
             (AppAppearance(rawValue: appearanceRaw) ?? .system).colorScheme
         )
