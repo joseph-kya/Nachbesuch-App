@@ -176,7 +176,9 @@ struct ArchiveScreen: View {
                     }
                 }
                 .padding(.top, AppSpacing.tight)
-                .padding(.bottom, AppSpacing.loose)
+                // `.loose` alone left the last territory card under the floating
+                // tab bar with no way to scroll it clear.
+                .padding(.bottom, AppSpacing.loose + AppChrome.tabBarClearance)
             }
         }
         .scrollDismissesKeyboard(.interactively)

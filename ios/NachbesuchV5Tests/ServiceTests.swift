@@ -246,7 +246,26 @@ struct MapPinTests {
         #expect(snapshot.stats.houseCount == 3)
         #expect(snapshot.stats.followUpCount == 1)
         #expect(snapshot.stats.joinedCount == 2)
-        #expect(snapshot.stats.openCount == 1)
+        // Zwei: die unerfasste Tür des dritten Hauses **und** das „Niemand da" des
+        // ersten. Hier stand 1, weil die Karte „offen" als `unitCount - completed`
+        // gerechnet hat — also nur die noch gar nicht angefassten Türen. Eine Tür
+        // mit „Niemand da" ist erfasst und trotzdem offen; genau deshalb meldete die
+        // Karte 12, wo die Liste fürs selbe Gebiet 40 meldete.
+        #expect(snapshot.stats.openCount == 2)
+    }
+
+    /// Ein Haus, dessen einzige ausstehende Tür eine gebuchte Uhrzeit hat, galt als
+    /// erledigt: die Tür *ist* erfasst, also `completedCount == unitCount`, und sie
+    /// ist nicht `notHome`, also war `followUpCount` 0. Ein Haus, an dem man um
+    /// 18:00 zugesagt hat, fiel damit aus jeder Zählung offener Arbeit heraus.
+    @Test("Ein Haus mit gebuchtem „Später“ hat offene Arbeit")
+    func laterDoorCountsAsOpen() {
+        let pin = MapPinSnapshotBuilder.pin(
+            for: raw([DoorResult(label: "1", outcome: .later, revisitAt: .now.addingTimeInterval(3600))]),
+            scope: .combined
+        )
+        #expect(pin.openCount == 1)
+        #expect(pin.hasOpenWork)
     }
 
     @Test("Marker-Text folgt dem Tagesbereich")

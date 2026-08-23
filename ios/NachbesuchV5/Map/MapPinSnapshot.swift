@@ -16,6 +16,15 @@ nonisolated struct MapPinSnapshot: Identifiable, Sendable, Equatable {
     let joinedCount: Int
     let earlyNoCount: Int
     let lateNoCount: Int
+    /// Doors still needing a visit — straight from `OutcomeTally.open`, the one
+    /// implementation of that question.
+    ///
+    /// It used to be derived here as `unitCount - completedCount`, which is a
+    /// *different* number: that counts doors nobody has written on yet, while
+    /// "offen" also includes the recorded ones that say come back — "Niemand da"
+    /// and "Später". The map summary therefore reported 12 open where the list
+    /// reported 40, for the same territory.
+    let openCount: Int
     /// The earliest booked return time on this house, when a door is "Später".
     /// Carried on the pin because the route planner schedules around it.
     var nextRevisitAt: Date?
@@ -30,7 +39,14 @@ nonisolated struct MapPinSnapshot: Identifiable, Sendable, Equatable {
         unitCount == 1 ? markerOutcome.displayEmojiRaw : "\(completedCount)/\(unitCount)"
     }
 
-    var hasOpenWork: Bool { followUpCount > 0 || completedCount < unitCount }
+    /// Same source as everything else that says "offen".
+    ///
+    /// The old spelling, `followUpCount > 0 || completedCount < unitCount`, silently
+    /// excluded a house whose only outstanding door was a booked "Später": that door
+    /// is recorded, so `completedCount == unitCount`, and it is not `notHome`, so
+    /// `followUpCount` is 0. A house you had promised to return to at 18:00 counted
+    /// as finished.
+    var hasOpenWork: Bool { openCount > 0 }
 }
 
 /// Presentation helper for the map layer, which deliberately does not import
@@ -169,7 +185,7 @@ nonisolated enum MapPinSnapshotBuilder {
             pins[house.id] = snapshot
             followUps += snapshot.followUpCount
             joined += snapshot.joinedCount
-            open += snapshot.unitCount - snapshot.completedCount
+            open += snapshot.openCount
             earlyNo += snapshot.earlyNoCount
             lateNo += snapshot.lateNoCount
         }
@@ -213,9 +229,7 @@ nonisolated enum MapPinSnapshotBuilder {
             joined += updated.joinedCount - (previous?.joinedCount ?? 0)
             earlyNo += updated.earlyNoCount - (previous?.earlyNoCount ?? 0)
             lateNo += updated.lateNoCount - (previous?.lateNoCount ?? 0)
-            let updatedOpen = updated.unitCount - updated.completedCount
-            let previousOpen = previous.map { $0.unitCount - $0.completedCount } ?? 0
-            open += updatedOpen - previousOpen
+            open += updated.openCount - (previous?.openCount ?? 0)
         }
 
         return PreparedMapSnapshot(
@@ -256,6 +270,7 @@ nonisolated enum MapPinSnapshotBuilder {
             joinedCount: tally.joined,
             earlyNoCount: tally.earlyNo,
             lateNoCount: tally.lateNo,
+            openCount: tally.open,
             nextRevisitAt: doors.compactMap { $0.displayRevisitAt(in: scope) }.min()
         )
     }

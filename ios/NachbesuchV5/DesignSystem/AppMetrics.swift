@@ -25,6 +25,21 @@ enum AppSpacing {
     static let loose: CGFloat = 24
 }
 
+/// Room a scrolling screen has to leave under itself for the **floating** tab bar.
+///
+/// The iOS 26 tab bar is a pill that hovers over the content rather than sitting in
+/// a reserved strip, and `tabBarMinimizeBehavior(.onScrollDown)` means it is *meant*
+/// to be scrolled under. What it is not meant to do is swallow the last row: at the
+/// bottom of the list the final address sat half-behind the glass with no way to
+/// bring it out. The system safe area does not cover this on its own here — both
+/// scroll views sit inside a `GlassEffectContainer`, which does not forward it.
+///
+/// Measured on an iPhone 17 Pro: the pill clears the home indicator by roughly
+/// 45 pt, plus a gap so the last card does not touch it.
+enum AppChrome {
+    static let tabBarClearance: CGFloat = 58
+}
+
 /// The minimum comfortable hit target. Applied via `.tappable()` so a control can
 /// stay visually small while remaining reliably hittable — the old chrome had ten
 /// controls between 20 and 36 pt using `.buttonStyle(.plain)`, which does not

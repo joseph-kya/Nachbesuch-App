@@ -135,8 +135,9 @@ struct ListScreen: View {
                             .buttonStyle(PressableRowStyle())
                             .accessibilityLabel("Straße \(section.title)")
                             .accessibilityValue(
-                                "\(section.houseCount) Adressen, \(section.completedCount) von \(section.unitCount) Türen erledigt"
-                                + (section.openCount > 0 ? ", \(section.openCount) offen" : "")
+                                section.openCount > 0
+                                    ? "\(section.houseCount) Adressen, \(section.openCount) von \(section.unitCount) Türen offen"
+                                    : "\(section.houseCount) Adressen, fertig"
                             )
                             .accessibilityHint(
                                 collapsedSections.contains(section.id)
@@ -225,7 +226,12 @@ struct ListScreen: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
-                .contentMargins(.bottom, AppSpacing.loose, for: .scrollContent)
+                // `.loose` alone left the last address under the floating tab bar.
+                .contentMargins(
+                    .bottom,
+                    AppSpacing.loose + AppChrome.tabBarClearance,
+                    for: .scrollContent
+                )
             }
             .background { AppBackdrop() }
             .scrollDismissesKeyboard(.interactively)
@@ -787,12 +793,7 @@ private struct StreetHeader: View {
 
     /// A street is finished only when every door is recorded *and* nothing is left
     /// open. The old card could show a green-worthy "9/9" next to a red bar, because
-    /// the count and the colour answer different questions — "erledigt" counts a
-    /// door as recorded, while "offen" still wants a second visit. The subtitle now
-    /// says how many are open, so the colour has a visible reason.
-    private var isDone: Bool {
-        section.unitCount > 0 && section.completedCount >= section.unitCount && section.openCount == 0
-    }
+    private var isDone: Bool { section.isDone }
 
     /// **Identity, not state.** The street icon is the row's mark — it says "this is
     /// a street", and it says it in the colour the user chose for the app. It must
@@ -806,7 +807,7 @@ private struct StreetHeader: View {
     /// "offen" is one colour throughout the screen rather than three.
     private var stateTint: Color { isDone ? .green : .red }
 
-    private var barWidth: CGFloat { dynamicTypeSize.isAccessibilitySize ? 44 : 64 }
+    private var barWidth: CGFloat { dynamicTypeSize.isAccessibilitySize ? 44 : 56 }
 
     var body: some View {
         // Both candidates used to be `HStack`s. When neither fits, `ViewThatFits`
@@ -859,31 +860,38 @@ private struct StreetHeader: View {
             .foregroundStyle(Color.primary)
     }
 
-    /// "9 Adressen" alone never explained the red bar. The open count does, and it
-    /// disappears the moment there is nothing left to come back to.
-    @ViewBuilder
+    /// How many addresses. What is *there* — the state belongs to the counter.
     private var subtitle: some View {
-        let addresses = "\(section.houseCount) \(section.houseCount == 1 ? "Adresse" : "Adressen")"
-        HStack(spacing: 5) {
-            Text(addresses)
-                .foregroundStyle(.secondary)
-            if section.openCount > 0 {
-                Text("·").foregroundStyle(.tertiary)
-                Text("\(section.openCount) offen")
-                    .monospacedDigit()
-                    .foregroundStyle(stateTint)
-            }
-        }
-        .font(.caption2)
-        .lineLimit(1)
+        Text("\(section.houseCount) \(section.houseCount == 1 ? "Adresse" : "Adressen")")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
     }
 
+    /// **One** number, and it agrees with the bar beside it.
+    ///
+    /// This slot used to read "68/80" — doors *recorded* — above a bar drawn from
+    /// the same fraction, while the subtitle said "40 offen". Both were true and
+    /// together they were a riddle: a street can be 85 % recorded and half unfinished,
+    /// because "Niemand da" and "Später" are recorded outcomes that mean come back.
+    /// Now the number and the bar both count doors with nothing left to do on them,
+    /// and the label says which of the two things it means.
+    @ViewBuilder
     private var counter: some View {
-        Text("\(section.completedCount)/\(section.unitCount)")
-            .font(.caption.weight(.semibold))
-            .monospacedDigit()
-            .foregroundStyle(isDone ? Color.green : .secondary)
-            .contentTransition(.numericText(value: Double(section.completedCount)))
+        if isDone {
+            Label("fertig", systemImage: "checkmark")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.green)
+                .labelStyle(.titleAndIcon)
+                .lineLimit(1)
+        } else {
+            Text("\(section.openCount) offen")
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(stateTint)
+                .contentTransition(.numericText(value: Double(section.openCount)))
+                .lineLimit(1)
+        }
     }
 
     /// A hand-drawn capsule rather than `ProgressView`: the system bar draws its

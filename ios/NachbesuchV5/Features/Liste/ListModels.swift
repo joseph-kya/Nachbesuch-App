@@ -39,10 +39,17 @@ nonisolated struct HouseRowModel: Identifiable, Equatable, Sendable {
         return String(format: "%.1f km", distance / 1000)
     }
 
+    /// What is *there*, never what is left — the trailing badge is the one place
+    /// the open count belongs, and it was written here too.
+    ///
+    /// The pair it replaces read "5/6 Türen · 3 offen", which is two different
+    /// definitions of finished in one line: 5 of 6 doors are *recorded*, and 3 of
+    /// them still want a second visit. Six doors, five recorded, three open is a
+    /// true sentence and an unreadable one at a doorstep.
     var subtitle: String {
         let base = isSingleDoor
             ? markerOutcome.displayTitleValue
-            : "\(completedCount)/\(unitCount) Türen · \(openCount) offen"
+            : "\(unitCount) Türen"
         // The booked return time used to be appended here as "· zurück um 18:30",
         // buried in grey caption text between two other facts. It is now a tinted
         // chip of its own — `RevisitGlance` — so the subtitle is back to the plain
@@ -54,9 +61,10 @@ nonisolated struct HouseRowModel: Identifiable, Equatable, Sendable {
     /// What VoiceOver reads instead of an emoji. The return time is spoken by the
     /// chip's own label, so it is deliberately absent here.
     var accessibilityValue: String {
-        isSingleDoor
-            ? markerOutcome.displayTitleValue
-            : "\(completedCount) von \(unitCount) Türen erledigt, \(openCount) offen"
+        if isSingleDoor { return markerOutcome.displayTitleValue }
+        return openCount > 0
+            ? "\(unitCount) Türen, \(openCount) offen"
+            : "\(unitCount) Türen, fertig"
     }
 }
 
@@ -140,8 +148,20 @@ nonisolated struct StreetSection: Identifiable, Equatable, Sendable {
     let completedCount: Int
     let openCount: Int
 
+    /// Doors with nothing left to do on them.
+    ///
+    /// **Not** `completedCount`. A door counts as *completed* the moment an outcome
+    /// is written on it, and two of those outcomes — "Niemand da" and "Später" —
+    /// mean come back. So a street could read a green-looking 68/80 while 40 of its
+    /// 80 doors were still work, and the bar beside it showed 85 %. This is the
+    /// figure that answers the only question the list is asked: how much of this
+    /// street is left?
+    var settledCount: Int { max(unitCount - openCount, 0) }
+
+    var isDone: Bool { unitCount > 0 && openCount == 0 }
+
     var progress: Double {
-        unitCount > 0 ? Double(completedCount) / Double(unitCount) : 0
+        unitCount > 0 ? Double(settledCount) / Double(unitCount) : 0
     }
 }
 

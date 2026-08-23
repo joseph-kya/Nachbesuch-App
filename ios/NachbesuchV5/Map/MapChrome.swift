@@ -66,40 +66,44 @@ struct MapSummaryCard: View {
     }
 }
 
-/// The territory's numbers at a glance.
+/// What is left in this territory, floating over the map.
 ///
-/// Every outcome is represented, not just the encouraging ones: knowing how many
-/// doors said no is as much a part of a round as knowing how many joined. Each
-/// figure carries a real VoiceOver label rather than an emoji the screen reader
-/// would pronounce as "large red circle".
+/// **Two figures, both labelled.** This was five unlabelled counters —
+/// `48 · 28 · 12 · 12 · 16` — one per outcome, over a map whose entire point is the
+/// map. Two things were wrong with that. It was a reading exercise: five bare
+/// numbers behind five small glyphs, and the only way to learn which was which was
+/// to open the legend. And it was the *second* copy — the Archive's Bilanz already
+/// draws exactly this breakdown, with words next to the numbers and a bar chart
+/// underneath, on a screen you go to in order to read it.
+///
+/// So the map keeps the one question you ask while standing in the street — how much
+/// is still open here — plus the size of the territory, and the breakdown stays where
+/// there is room to explain it.
 struct StatStrip: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let stats: MapDayStats
     var isStacked = false
 
-    private var items: [(symbol: String, value: Int, label: String, tint: Color)] {
-        [
-            ("house.fill", stats.houseCount, "Häuser", .secondary),
-            (VisitOutcome.notHome.symbolName, stats.followUpCount, "offene Nachbesuche", VisitOutcome.notHome.tint),
-            (VisitOutcome.earlyNo.symbolName, stats.earlyNoCount, VisitOutcome.earlyNo.title, VisitOutcome.earlyNo.tint),
-            (VisitOutcome.lateNo.symbolName, stats.lateNoCount, VisitOutcome.lateNo.title, VisitOutcome.lateNo.tint),
-            (VisitOutcome.joined.symbolName, stats.joinedCount, "Beitritte", VisitOutcome.joined.tint)
-        ]
-    }
-
     var body: some View {
-        // At accessibility sizes the figures **wrap** rather than stacking into a
-        // single column. Five rows of one statistic each pushed the summary card to
-        // roughly 40 % of the screen on a map whose entire point is the map; wrapping
-        // fits the same five figures into two or three rows.
+        // At accessibility sizes the figures wrap rather than stacking into a
+        // column: two rows of one figure each pushed the card down the screen.
         let layout = isStacked
             ? AnyLayout(FlowLayout(spacing: AppSpacing.snug))
             : AnyLayout(HStackLayout(spacing: AppSpacing.snug))
 
         layout {
-            ForEach(items, id: \.label) { item in
-                statItem(systemImage: item.symbol, value: item.value, label: item.label, tint: item.tint)
-            }
+            statItem(
+                value: stats.openCount,
+                unit: "offen",
+                label: "offene Türen",
+                tint: stats.openCount > 0 ? VisitOutcome.notHome.tint : .green
+            )
+            statItem(
+                value: stats.houseCount,
+                unit: stats.houseCount == 1 ? "Haus" : "Häuser",
+                label: "Häuser",
+                tint: .secondary
+            )
             if !isStacked { Spacer(minLength: 0) }
         }
         // Without this the wrapped block sized to its content and the card centred
@@ -108,15 +112,17 @@ struct StatStrip: View {
         .font(.caption.weight(.medium))
     }
 
-    private func statItem(systemImage: String, value: Int, label: String, tint: Color) -> some View {
-        HStack(spacing: 3) {
-            Image(systemName: systemImage)
-                .foregroundStyle(tint)
-                .imageScale(.small)
+    private func statItem(value: Int, unit: String, label: String, tint: Color) -> some View {
+        HStack(spacing: 4) {
             Text("\(value)")
                 .monospacedDigit()
+                .fontWeight(.semibold)
+                .foregroundStyle(tint)
                 .contentTransition(.numericText(value: Double(value)))
+            Text(unit)
+                .foregroundStyle(.secondary)
         }
+        .lineLimit(1)
         // `contentTransition` only animates inside an animated transaction; without
         // this the modifier is decorative.
         .animation(.appFeedback(reduceMotion: reduceMotion), value: value)
