@@ -69,9 +69,13 @@ struct MapHost: UIViewRepresentable {
     let boundary: [CLLocationCoordinate2D]
     let draftPoints: [CLLocationCoordinate2D]
     /// The planned walking order, already trimmed to what is still open.
-    let routeCoordinates: [CLLocationCoordinate2D]
+    ///
+    /// Dormant: the recommended route has no user interface at the moment, so
+    /// nothing passes these. The drawing path is kept intact rather than deleted,
+    /// because the planner it renders is still here and still tested.
+    var routeCoordinates: [CLLocationCoordinate2D] = []
     /// The house the route says to walk to next, ringed on the map.
-    let nextStopCoordinate: CLLocationCoordinate2D?
+    var nextStopCoordinate: CLLocationCoordinate2D?
     let selectedHouseIDs: Set<UUID>?
     let isSatellite: Bool
     let poiPreset: POIPreset
@@ -91,7 +95,8 @@ struct MapHost: UIViewRepresentable {
     ///
     /// Passed as a value and re-applied on every update, so the coordinator always
     /// acts on the current mode rather than on state captured in a stale closure.
-    let picksRouteStart: Bool
+    /// Dormant along with `routeCoordinates`.
+    var picksRouteStart = false
 
     var onTapHouse: (UUID) -> Void = { _ in }
     var onStackedPins: ([UUID]) -> Void = { _ in }

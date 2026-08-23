@@ -4,6 +4,15 @@ import Observation
 
 /// The live state of a recommended route.
 ///
+/// **Currently without a user interface.** The feature was not good enough in the
+/// field, so its chrome was taken out of the map — see the commit that removed
+/// `RoutePanel`, `RouteStartPrompt` and `RouteStartPicker` from `MapChrome.swift`;
+/// restoring it means restoring those three views and the `RoutePhase` state that
+/// drove them. Everything below the interface is deliberately still here, still
+/// compiled and still tested: `RoutePlanner`, `RouteOrdering`, `RouteSchedule`,
+/// `WalkingNetwork` and this session. So is the drawing path in `MapHost` /
+/// `MapCoordinator`, whose route arguments simply default to empty now.
+///
 /// Keeps the planned order and works out what is still ahead of you. The order
 /// itself never changes as you work — re-planning after every door would move the
 /// route under your feet — but visited houses drop out of the remaining path.

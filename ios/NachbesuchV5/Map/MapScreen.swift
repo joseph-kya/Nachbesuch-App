@@ -67,27 +67,6 @@ struct MapScreen: View {
     /// another instead of cross-fading.
     @Namespace private var glass
 
-    // Recommended route
-    @State private var route = RouteSession()
-    /// The in-flight planning task, so ending or re-planning actually stops it.
-    @State private var planTask: Task<Void, Never>?
-    @State private var routePhase: RoutePhase = .off
-    /// Ticks while a route is running, so the panel's appointment chips count down
-    /// instead of freezing at whatever they said when the route was planned.
-    @State private var clock = Date.now
-    /// Whether the route drawing is on the map. Persisted: the choice belongs to
-    /// the user, not to the app launch.
-    @AppStorage("route.overlayVisible") private var showsRouteOverlay = true
-
-    private enum RoutePhase: Equatable {
-        case off
-        /// Asking where to start from.
-        case choosingStart
-        /// Waiting for a house to be tapped as the start.
-        case pickingOnMap
-        case running
-    }
-
     init(gebiet: Gebiet?, scope: Binding<DayScope>, isActive: Bool) {
         self.gebiet = gebiet
         _scope = scope
@@ -115,199 +94,6 @@ struct MapScreen: View {
 
     private var isSelecting: Bool { selectedHouseIDs != nil }
 
-    // MARK: - Recommended route
-
-    /// Houses that still need a visit — the set a route is planned over, and the
-    /// set that shrinks as you work.
-    private var openHouseIDs: Set<UUID> {
-        Set(prepared.pinsByID.values.filter(\.hasOpenWork).map(\.id))
-    }
-
-    /// The remaining path — the planned street line, trimmed to what is still
-    /// ahead of you.
-    private var routeCoordinates: [CLLocationCoordinate2D] {
-        guard showsRouteOverlay, routePhase == .running, route.isActive else { return [] }
-        return route.remainingPath(
-            queue: route.remaining(openHouseIDs: openHouseIDs),
-            currentLocation: location.location?.coordinate
-        )
-    }
-
-    /// The coordinate to ring on the map — nil while the overlay is switched off.
-    private var nextStopMarker: CLLocationCoordinate2D? {
-        guard showsRouteOverlay else { return nil }
-        return nextStopPin?.coordinate
-    }
-
-    private var nextStopPin: MapPinSnapshot? {
-        guard routePhase == .running,
-              let next = route.nextStop(openHouseIDs: openHouseIDs) else { return nil }
-        return prepared.pinsByID[next]
-    }
-
-    private func beginRoute() {
-        guard gebiet != nil, !openHouseIDs.isEmpty else { return }
-        routePhase = .choosingStart
-    }
-
-    private func planRoute(from start: CLLocationCoordinate2D) {
-        guard let gebiet else { return }
-        let stops = prepared.pinsByID.values
-            .filter(\.hasOpenWork)
-            .map {
-                RouteStop(
-                    houseID: $0.id,
-                    latitude: $0.latitude,
-                    longitude: $0.longitude,
-                    // The two facts that turn a cloud of points into a walk: which
-                    // street a house is on, and whether it is expecting you at a
-                    // particular hour.
-                    street: StreetNameParser.street(from: $0.address),
-                    dueAt: $0.nextRevisitAt
-                )
-            }
-        guard !stops.isEmpty else { return }
-        routePhase = .running
-        let plannedFor = gebiet.id
-        planTask?.cancel()
-        planTask = Task {
-            let succeeded = await route.plan(start: start, stops: stops, for: plannedFor)
-            // A territory switch cancels this task (`resetForNewTerritory`), so a
-            // result for the old territory can never land on the new one's map.
-            guard succeeded, !Task.isCancelled, routePhase == .running else { return }
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-            // Frame the whole route so you can see what you are in for.
-            if let bounds = MapBounds.around(route.path.isEmpty
-                ? [start] + stops.map(\.coordinate)
-                : route.path) {
-                cameraCommand = .region(bounds.region, animated: !reduceMotion)
-            }
-        }
-    }
-
-    /// Re-plans over the houses still open, starting from where you are standing.
-    ///
-    /// A plan decays: doors get skipped, houses get added, and after an hour the
-    /// original order is no longer the shortest way through what is left.
-    private func replanFromHere() {
-        guard let coordinate = location.location?.coordinate else {
-            notices.show("Ohne Standort lässt sich die Route nicht neu planen.")
-            return
-        }
-        planRoute(from: coordinate)
-    }
-
-    /// The houses still to walk, in order, with everything the panel shows.
-    private var remainingStops: [RouteStopPresentation] {
-        route.remaining(openHouseIDs: openHouseIDs).compactMap { id in
-            guard let pin = prepared.pinsByID[id] else { return nil }
-            return RouteStopPresentation(id: id, address: pin.address, dueAt: pin.nextRevisitAt)
-        }
-    }
-
-    /// Centres the map on one house of the route, so "where do I go now" is one tap
-    /// away even when you have panned somewhere else entirely.
-    private func focus(on houseID: UUID) {
-        guard let pin = prepared.pinsByID[houseID] else { return }
-        if !showsRouteOverlay {
-            showsRouteOverlay = true
-        }
-        cameraCommand = .region(
-            center: pin.coordinate,
-            span: MKCoordinateSpan(latitudeDelta: 0.0025, longitudeDelta: 0.0025),
-            animated: !reduceMotion
-        )
-    }
-
-    private func focusNextStop() {
-        guard let next = route.nextStop(openHouseIDs: openHouseIDs) else { return }
-        focus(on: next)
-    }
-
-    /// Leaves the current house for later and moves on to the next one.
-    private func skipNextStop() {
-        guard let gebiet else { return }
-        let moved = route.skipNextStop(openHouseIDs: openHouseIDs, for: gebiet.id)
-        guard moved else { return }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        if let pin = nextStopPin, showsRouteOverlay {
-            cameraCommand = .region(
-                center: pin.coordinate,
-                span: camera.region.span,
-                animated: !reduceMotion
-            )
-        }
-    }
-
-    /// Keeps a running route honest against the houses that actually exist.
-    ///
-    /// Only ever runs once the pin pipeline has produced a snapshot — on the first
-    /// frames after launch every house looks closed, and a route would end itself
-    /// before it was ever shown.
-    private func auditRoute() {
-        guard let gebiet, routePhase == .running, lastPipelineKey != nil,
-              !prepared.pinsByID.isEmpty else { return }
-        route.prune(livingHouseIDs: Set(prepared.pinsByID.keys), for: gebiet.id)
-        if route.requiresReplan, !route.isPlanning {
-            // Routes from builds that predate per-stop legs cannot advance their
-            // line correctly. Repair them automatically rather than showing a
-            // plausible-looking but stale route after relaunch.
-            planRoute(from: location.location?.coordinate ?? route.start ?? camera.region.center)
-            return
-        }
-        let unplannedOpen = openHouseIDs.subtracting(route.plannedOrder)
-        if !unplannedOpen.isEmpty, !route.isPlanning {
-            // Houses added after planning must never be silently omitted. Rebuild
-            // from the live position when possible. During launch the first GPS fix
-            // often arrives after the pins; the saved start is a safer fallback
-            // than ending an otherwise valid route just because of that race.
-            planRoute(from: location.location?.coordinate ?? route.start ?? camera.region.center)
-            return
-        }
-        guard !route.plannedOrder.isEmpty else {
-            endRoute()
-            return
-        }
-        guard route.remaining(openHouseIDs: openHouseIDs).isEmpty else { return }
-        finishRoute()
-    }
-
-    /// Every house on the route is done. Ends it and says so, rather than leaving a
-    /// bar that reads "Route abgeschlossen" until someone taps the cross.
-    private func finishRoute() {
-        let houses = route.plannedOrder.count
-        let metres = route.plannedDistance
-        endRoute()
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        let walked = metres >= 950
-            ? String(format: "%.1f km", metres / 1000)
-            : "\(Int((metres / 10).rounded() * 10)) m"
-        notices.show("Route geschafft: \(houses) Häuser, rund \(walked) Weg.")
-    }
-
-    private func endRoute() {
-        guard let gebiet else { return }
-        planTask?.cancel()
-        planTask = nil
-        route.end(for: gebiet.id)
-        routePhase = .off
-    }
-
-    /// Distance to the next stop, but only when it is a plausible walking figure.
-    ///
-    /// Without a usable fix the raw number is nonsense — a stale or absent position
-    /// produced readings like "12258 km", which is worse than showing nothing.
-    private var distanceToNextStop: Double? {
-        guard let pin = nextStopPin,
-              let fix = location.location,
-              fix.horizontalAccuracy >= 0, fix.horizontalAccuracy < 200
-        else { return nil }
-        let metres = RoutePlanner.metres(fix.coordinate, pin.coordinate)
-        return metres < 20_000 ? metres : nil
-    }
-
-
-
     var body: some View {
         ZStack {
             MapHost(
@@ -318,8 +104,6 @@ struct MapScreen: View {
                 changedHouseIDs: changedHouseIDs,
                 boundary: boundary,
                 draftPoints: mode == .drawingArea ? draftBoundary : [],
-                routeCoordinates: routeCoordinates,
-                nextStopCoordinate: nextStopMarker,
                 selectedHouseIDs: selectedHouseIDs,
                 isSatellite: isSatellite,
                 poiPreset: poiPreset,
@@ -338,7 +122,6 @@ struct MapScreen: View {
                     isFollowingUser = following
                     location.setFollowing(following)
                 },
-                picksRouteStart: routePhase == .pickingOnMap,
                 onTapHouse: openHouse,
                 onStackedPins: { ids in
                     sheetRoute = .stackedPins(ids)
@@ -351,7 +134,7 @@ struct MapScreen: View {
             )
             .ignoresSafeArea()
 
-            if mode != .browsing || routePhase == .pickingOnMap {
+            if mode != .browsing {
                 PlacementReticle(kind: mode == .placingHouse ? .house : .boundaryPoint)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
@@ -361,52 +144,6 @@ struct MapScreen: View {
         .overlay(alignment: .bottom) { bottomChrome }
         .sheet(item: $sheetRoute, content: sheet(for:))
         .alert(item: $confirmation, content: alert(for:))
-        .task(id: gebiet?.id) {
-            guard let gebiet else { return }
-            route.restore(for: gebiet.id)
-            routePhase = route.isActive ? .running : .off
-        }
-        // A restored route can outlive the houses in it. Pruning here — after the
-        // pin pipeline has actually loaded — keeps the counter honest and lets a
-        // finished round end itself instead of hanging around forever.
-        .onChange(of: contentVersion) { _, _ in auditRoute() }
-        .onChange(of: structuralVersion) { _, _ in auditRoute() }
-        #if DEBUG
-        // Test harness. `NACHBESUCH_ROUTE=pick` stops at the start-point step so the
-        // crosshair and its bar can be captured; `NACHBESUCH_ROUTE=tap` runs the exact
-        // branch a tap on a house takes — the one that silently did nothing because an
-        // edit to `openHouse` never landed.
-        .task(id: prepared.pinsByID.count) {
-            let mode = ProcessInfo.processInfo.environment["NACHBESUCH_ROUTE"]
-            guard let mode, routePhase == .off, gebiet != nil,
-                  let first = prepared.pinsByID.values.min(by: { $0.latitude < $1.latitude })
-            else { return }
-            switch mode {
-            case "pick":
-                routePhase = .choosingStart
-                try? await Task.sleep(for: .milliseconds(300))
-                routePhase = .pickingOnMap
-            case "tap":
-                routePhase = .pickingOnMap
-                try? await Task.sleep(for: .milliseconds(300))
-                openHouse(first.id)
-            case "skip":
-                // Plans, then defers the first two houses, so the redrawn line and
-                // the moved ring can be captured — the paths a tap would take.
-                planRoute(from: first.coordinate)
-                try? await Task.sleep(for: .seconds(20))
-                skipNextStop()
-                try? await Task.sleep(for: .milliseconds(700))
-                skipNextStop()
-            case "hidden":
-                planRoute(from: first.coordinate)
-                try? await Task.sleep(for: .seconds(20))
-                showsRouteOverlay = false
-            default:
-                planRoute(from: first.coordinate)
-            }
-        }
-        #endif
         .task(id: isActive) {
             if isActive {
                 location.beginUsing()
@@ -415,15 +152,6 @@ struct MapScreen: View {
                 camera.flush()
                 // A queued command must not replay against a later coordinator.
                 cameraCommand = nil
-            }
-        }
-        // Only while a route is running: nothing else on this screen is time-based,
-        // and a map that wakes up every half minute for no reason costs battery on
-        // exactly the device that is out in the field all day.
-        .task(id: routePhase == .running && isActive) {
-            while routePhase == .running, isActive, !Task.isCancelled {
-                clock = .now
-                try? await Task.sleep(for: .seconds(30))
             }
         }
         .task(id: pipelineKey) {
@@ -439,7 +167,6 @@ struct MapScreen: View {
             camera.flush()
             saveTask?.cancel()
             namingTask?.cancel()
-            planTask?.cancel()
         }
     }
 
@@ -463,13 +190,12 @@ struct MapScreen: View {
     }
 
     /// The same for the bottom chrome — and this is where the bug actually bit:
-    /// neither of the old keys named `routePhase` or `isAwayFromTerritory`, so the
-    /// route cards and the territory button were silently stripped of animation
-    /// despite both the call site and the view being written as if they animated.
+    /// the old key did not name `isAwayFromTerritory`, so the territory button was
+    /// silently stripped of animation despite both the call site and the view being
+    /// written as if it animated.
     private struct BottomChromeLayout: Equatable {
         let mode: MapMode
         let isSelecting: Bool
-        let routePhase: RoutePhase
         let showsTerritoryButton: Bool
     }
 
@@ -477,7 +203,6 @@ struct MapScreen: View {
         BottomChromeLayout(
             mode: mode,
             isSelecting: isSelecting,
-            routePhase: routePhase,
             showsTerritoryButton: showsTerritoryButton
         )
     }
@@ -499,25 +224,17 @@ struct MapScreen: View {
     /// sits on the right and must not push the left-aligned Apple attribution up by
     /// its full height. MapKit adds the tab bar's safe-area clearance on top of the
     /// margin, so a 96 pt lane places the attribution directly above the full-width
-    /// action bar. Route panels really do span that space, so only
-    /// those modes use the measured height. At accessibility sizes the summary card is
-    /// several times taller and the action bar wraps, so MapKit went on positioning
-    /// the attribution as though the chrome were 132 pt tall and the "Rechtl.
-    /// Informationen" link ended up underneath the floating buttons — the exact
-    /// rejection this comment warns about. The fallbacks below are the old constants,
-    /// used only for the frames before the chrome has been measured.
+    /// action bar. At accessibility sizes the summary card is several times taller
+    /// and the action bar wraps, so MapKit went on positioning the attribution as
+    /// though the chrome were 132 pt tall and the "Rechtl. Informationen" link ended
+    /// up underneath the floating buttons — the exact rejection this comment warns
+    /// about. The fallbacks are the old constants, used only for the frames before
+    /// the chrome has been measured.
     private var chromeInsets: UIEdgeInsets {
-        let attributionBottomInset: CGFloat
-        switch routePhase {
-        case .off:
-            attributionBottomInset = 96
-        case .choosingStart, .pickingOnMap, .running:
-            attributionBottomInset = max(bottomChromeHeight, 96)
-        }
-        return UIEdgeInsets(
+        UIEdgeInsets(
             top: max(topChromeHeight, 132),
             left: 7,
-            bottom: attributionBottomInset,
+            bottom: max(bottomChromeHeight, 96),
             right: 7
         )
     }
@@ -599,44 +316,6 @@ struct MapScreen: View {
                     .standaloneGlassTransition(reduceMotion: reduceMotion)
                 }
 
-                switch routePhase {
-                case .choosingStart:
-                    RouteStartPrompt(
-                        canUseLocation: location.location != nil && !location.isDenied,
-                        onUseLocation: {
-                            guard let coordinate = location.location?.coordinate else { return }
-                            planRoute(from: coordinate)
-                        },
-                        onPickOnMap: { routePhase = .pickingOnMap },
-                        onCancel: { routePhase = .off }
-                    )
-                    .transition(.appChrome(reduceMotion: reduceMotion))
-                case .pickingOnMap:
-                    RouteStartPicker(
-                        onConfirm: { planRoute(from: camera.region.center) },
-                        onCancel: { routePhase = .off }
-                    )
-                    .transition(.appChrome(reduceMotion: reduceMotion))
-                case .running:
-                    RoutePanel(
-                        stops: remainingStops,
-                        totalCount: max(route.plannedOrder.count, 1),
-                        distanceToNext: distanceToNextStop,
-                        isStraightLine: route.fellBackToStraightLines,
-                        isPlanning: route.isPlanning,
-                        showsOverlay: showsRouteOverlay,
-                        now: clock,
-                        onFocus: focus(on:),
-                        onSkip: skipNextStop,
-                        onToggleOverlay: { showsRouteOverlay.toggle() },
-                        onReplan: replanFromHere,
-                        onEnd: endRoute
-                    )
-                    .transition(.appChrome(reduceMotion: reduceMotion))
-                case .off:
-                    EmptyView()
-                }
-
                 switch mode {
                 case .drawingArea:
                     BoundaryDrawingBar(
@@ -700,14 +379,6 @@ struct MapScreen: View {
                 Label("Häuser aus Kartendaten laden", systemImage: "square.and.arrow.down")
             }
             .disabled((gebiet?.boundaryCoordinates.count ?? 0) < 3)
-
-            Button {
-                beginRoute()
-            } label: {
-                Label("Empfohlene Route", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-            }
-            .disabled(gebiet == nil || openHouseIDs.isEmpty || routePhase != .off)
-
         }
 
         Section {
@@ -840,9 +511,6 @@ struct MapScreen: View {
     }
 
     private func resetForNewTerritory() {
-        planTask?.cancel()
-        planTask = nil
-        routePhase = .off
         isAwayFromTerritory = false
         mode = .browsing
         draftBoundary = []
@@ -1014,12 +682,6 @@ struct MapScreen: View {
     // MARK: - House interaction
 
     private func openHouse(_ id: UUID) {
-        // Picking a route start wins over everything: while that prompt is up, a tap
-        // on a house means "start here", not "show me this house".
-        if routePhase == .pickingOnMap, let pin = prepared.pinsByID[id] {
-            planRoute(from: pin.coordinate)
-            return
-        }
         if isSelecting {
             toggleSelection(id)
             return

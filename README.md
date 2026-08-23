@@ -281,78 +281,28 @@ Türen in der Reihenfolge, in der du sie abgearbeitet hast. Die Uhrzeit selbst w
 Gruppierung nach Straßen im PDF entfallen; der Bericht liest sich jetzt als Ablauf
 der Runde statt als Verzeichnis.
 
-### Empfohlene Route
-Für den Anfang einer Runde: Menü → **Empfohlene Route**, dann einen Startpunkt
-wählen — den eigenen Standort, ein angetipptes Haus oder einen frei auf der Karte
-gewählten Punkt. Von dort wird eine kurze Reihenfolge durch **alle offenen Häuser**
-berechnet und als Linienzug auf der Karte gezeichnet.
+### Empfohlene Route — derzeit ohne Oberfläche
 
-**Welches Haus als Nächstes dran ist, ist nicht mehr zu übersehen:** um seinen Pin
-liegt ein pulsierender blauer Ring, darüber schwebt ein Pfeil, der darauf zeigt. Der
-Marker wird über den Pins gezeichnet und ist in seiner Größe an die Pin-Größe
-gekoppelt, damit er in einer dichten Häuserzeile gewinnt statt dahinter zu
-verschwinden — und er bleibt sichtbar, wenn die Pins auf Punktgröße schrumpfen.
+**Das Feature ist aus der Karte genommen.** Im Feld hat es nicht überzeugt, und ein
+Vorschlag, dem man nicht folgt, ist schlechter als keiner: er kostet einen Blick,
+jedes Mal. Der Menüpunkt „Empfohlene Route", das Startpunkt-Blatt und das Panel mit
+der laufenden Route existieren nicht mehr.
 
-Die Leiste darunter zeigt das nächste Haus, den Fortschritt (`7/22`) und die
-Entfernung. Sie ist selbst ein Knopf: ein Tipp darauf springt auf der Karte zum
-nächsten Haus. Daneben drei Knöpfe:
+Was **bleibt**, weil es funktioniert und getestet ist: der Planer selbst
+(`RoutePlanner`, `RouteOrdering`, `RouteSchedule`), der Fußwege-Graph aus der
+Overpass-API (`WalkingNetwork`), der laufende Zustand (`RouteSession`, `RouteStore`)
+und der Zeichenpfad in `MapHost` / `MapCoordinator`, dessen Routen-Argumente jetzt
+schlicht leer vorbelegt sind. Die Reihenfolge wird straßenweise gebaut — eine Straße
+wird fertig gegangen, bevor die nächste beginnt — und gebuchte „Später"-Termine
+werden zu ihrer Uhrzeit eingeplant, statt um 15:00 am 18:00-Haus vorbeizulaufen.
 
-- **Überspringen** — das Haus ist gerade nicht machbar (niemand da, Baustelle, Hund).
-  Es fällt nicht heraus, sondern rutscht ans Ende der Route und kommt später wieder.
-- **Ein-/Ausblenden** — das Overlay lässt sich abschalten, wenn die Karte frei sein
-  soll, ohne die Route zu beenden. Die Entscheidung wird gemerkt.
-- **Beenden.**
+Wer die Oberfläche zurückholt, holt drei Ansichten aus der Historie zurück
+(`RoutePanel`, `RouteStartPrompt`, `RouteStartPicker` in `MapChrome.swift`) plus den
+`RoutePhase`-Zustand in `MapScreen`. Der Kommentar oben in `RouteSession.swift` sagt
+dasselbe noch einmal an der Stelle, an der man danach sucht.
 
-Über das Menü lässt sich die Route jederzeit **neu planen** — vom aktuellen Standort
-aus über alle noch offenen Häuser. Ein Plan altert: es wird übersprungen, es kommen
-Häuser dazu, und nach zwei Stunden ist die ursprüngliche Reihenfolge nicht mehr die
-kürzeste durch das, was übrig ist. Ist die Runde fertig, beendet sich die Route
-selbst und meldet Häuser und gegangene Strecke. Der frühere
-Knopf „In Apple Maps öffnen" ist ersatzlos entfallen: entweder die App kann die Route
-selbst, oder der Knopf hat dort nichts verloren. Sie kann es jetzt selbst.
-
-**Die Route folgt Straßen, nicht der Luftlinie.** Für das Gebiet wird einmalig ein
-Fußwege-Graph von der **Overpass-API** (OpenStreetMap) geladen: Gehwege, Wohn- und
-Nebenstraßen, Treppen, Fußgängerzonen — ohne alles, was `foot=no` oder `access=private`
-ist. Knoten mit gleicher Koordinate werden zusammengelegt, damit Kreuzungen wirklich
-verbunden sind. Auf diesem Graphen läuft **Dijkstra** (mit binärem Min-Heap): einmal je
-Haltepunkt für die Kostenmatrix, danach je aufeinanderfolgendem Paar erneut, um die
-tatsächlich gezeichneten Teilstücke zu holen. Das hält den Speicher bei O(Knoten)
-statt alle Vorgängerlisten gleichzeitig zu halten.
-
-Der Overpass-Payload wird pro Gebiet **auf der Platte behalten** (Caches, 30 Tage).
-Ein Gebiet wird über Tage bearbeitet, und im Stiegenhaus ist oft kein Netz — der
-zweite Plan ist damit sofort da statt nach 40 Sekunden Wartezeit, die still auf
-Luftlinie zurückfällt. Der Abruf hat außerdem eine harte Gesamtfrist von 40 Sekunden
-über alle Spiegel und bricht sauber ab, wenn die Planung verworfen wird.
-
-Fällt Overpass aus, ist das Gebiet zu groß oder liegt kein Weg in Reichweite, wird
-sauber auf die Luftlinie zurückgefallen und die Leiste sagt das offen dazu
-(„Luftlinie") — statt eine Genauigkeit vorzutäuschen, die nicht da ist.
-
-Wie die Reihenfolge entsteht: das ist das Travelling-Salesman-Problem, für das es bei dieser Größe
-keine exakte Antwort gibt. Verwendet wird das übliche Paar aus **Nearest Neighbour**
-für einen ersten Weg und **2-opt**, um die Überkreuzungen wieder herauszuziehen, die
-ein gieriges Verfahren immer hinterlässt — auf echten Daten typischerweise 15–25 %
-kürzer als der reine Greedy-Weg — gerechnet auf den **Gehdistanzen** aus dem Graphen,
-nicht auf Luftlinien. Ab 400 Häusern wird die Verfeinerung übersprungen und ab 150
-Haltepunkten die Matrix gar nicht erst gebaut, damit die App nicht steht.
-
-Gezeichnet wird **nicht** die zurechtgeschnittene Originallinie, sondern die Route
-Teilstück für Teilstück in der aktuellen Reihenfolge. Der frühere Zuschnitt auf den
-nächstgelegenen Punkt lief nach einem Übersprung rückwärts durch bereits erledigte
-Türen; weicht die Reihenfolge vom Plan ab, wird das betroffene Stück ehrlich als
-gerade Verbindung gezeichnet statt einen Umweg zu erfinden.
-
-Zwei Dinge, die es im Feld brauchbar machen:
-- Die **Reihenfolge bleibt stehen**, während du arbeitest. Erledigte Häuser fallen
-  aus dem verbleibenden Weg heraus, aber es wird nicht nach jeder Tür neu geplant —
-  eine Route, die sich unter den Füßen verschiebt, ist keine Route.
-- Die Route wird **gespeichert**. Eine Runde dauert Stunden; nach jeder Unterbrechung
-  neu planen zu müssen, würde das Feature wertlos machen.
-
-Entfernungen werden nur angezeigt, wenn der Standort brauchbar ist — ohne Fix stand
-dort sonst so etwas wie „12258 km".
+Weiterhin da und davon unberührt: **„Fußroute öffnen"** im Kontextmenü eines Pins,
+das für *ein* Haus die Gehstrecke in Apple Maps öffnet.
 
 ### „Nächste zuerst"
 Die Liste kann nach **Entfernung** sortieren und zeigt dann pro Zeile, wie weit das
