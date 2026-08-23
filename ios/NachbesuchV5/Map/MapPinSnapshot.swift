@@ -16,6 +16,9 @@ nonisolated struct MapPinSnapshot: Identifiable, Sendable, Equatable {
     let joinedCount: Int
     let earlyNoCount: Int
     let lateNoCount: Int
+    /// The earliest booked return time on this house, when a door is "Später".
+    /// Carried on the pin because the route planner schedules around it.
+    var nextRevisitAt: Date?
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
@@ -252,7 +255,8 @@ nonisolated enum MapPinSnapshotBuilder {
             followUpCount: tally.notHome,
             joinedCount: tally.joined,
             earlyNoCount: tally.earlyNo,
-            lateNoCount: tally.lateNo
+            lateNoCount: tally.lateNo,
+            nextRevisitAt: doors.compactMap { $0.displayRevisitAt(in: scope) }.min()
         )
     }
 }

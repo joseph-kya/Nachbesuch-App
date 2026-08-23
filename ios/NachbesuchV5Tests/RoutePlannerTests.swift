@@ -407,3 +407,107 @@ struct RoutePlannerTests {
         #expect(path[1].latitude == coordinates[ids[1]]?.latitude)
     }
 }
+
+// MARK: - Straßenweise Planung
+
+@Suite("Empfohlene Route — Straßenzüge")
+struct RouteOrderingTests {
+
+    private let originLatitude = 48.2100
+    private let originLongitude = 16.3100
+
+    private func stop(
+        _ street: String,
+        east: Double,
+        north: Double,
+        dueAt: Date? = nil
+    ) -> RouteStop {
+        RouteStop(
+            houseID: UUID(),
+            latitude: originLatitude + north / 110_540,
+            longitude: originLongitude + east / (111_320 * cos(originLatitude * .pi / 180)),
+            street: street,
+            dueAt: dueAt
+        )
+    }
+
+    private var origin: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: originLatitude, longitude: originLongitude)
+    }
+
+    private func streets(of route: PlannedRoute, in stops: [RouteStop]) -> [String] {
+        let byID = Dictionary(uniqueKeysWithValues: stops.map { ($0.houseID, $0.street) })
+        return route.houseIDs.compactMap { byID[$0] }
+    }
+
+    /// The complaint the street runs exist for: two streets close enough together
+    /// that a point-by-point planner hops between them the whole way down.
+    @Test("Eine Straße wird fertig gegangen, bevor die nächste beginnt")
+    func finishesOneStreetBeforeTheNext() {
+        var stops: [RouteStop] = []
+        for index in 0..<5 {
+            stops.append(stop("Ahornweg", east: Double(index) * 80, north: 0))
+            stops.append(stop("Birkenweg", east: Double(index) * 80, north: 30))
+        }
+        let route = RoutePlanner.plan(start: origin, stops: stops)
+        let walked = streets(of: route, in: stops)
+
+        // Zwei Blöcke, kein Hin und Her: die Namensfolge wechselt genau einmal.
+        let changes = zip(walked, walked.dropFirst()).filter { $0 != $1 }.count
+        #expect(changes == 1, "Gegangen wurde: \(walked)")
+    }
+
+    @Test("Innerhalb einer Straße geht es in eine Richtung")
+    func walksOneStreetInOneDirection() {
+        let houses = (0..<6).map { stop("Ahornweg", east: Double($0) * 40, north: 0) }
+        let route = RoutePlanner.plan(start: origin, stops: houses.shuffled())
+        let order = route.houseIDs
+
+        let positions = houses.map { house in order.firstIndex(of: house.houseID) ?? -1 }
+        let ascending = positions == positions.sorted()
+        let descending = positions == positions.sorted().reversed()
+        #expect(ascending || descending, "Reihenfolge: \(positions)")
+    }
+
+    /// Two neighbourhoods can share a street name, and one long street can be cut in
+    /// half by a park. Neither is a single stretch to walk.
+    @Test("Weit auseinanderliegende Häuser derselben Straße werden getrennt")
+    func splitsAStreetAcrossAGap() {
+        let near = (0..<3).map { stop("Ahornweg", east: Double($0) * 40, north: 0) }
+        let far = (0..<3).map { stop("Ahornweg", east: 2000 + Double($0) * 40, north: 0) }
+        let runs = RouteOrdering.runs(from: near + far)
+        #expect(runs.count == 2)
+        #expect(runs.allSatisfy { $0.stops.count == 3 })
+    }
+
+    // MARK: Termine
+
+    @Test("Ein überfälliger Termin wird zuerst angegangen")
+    func overdueAppointmentComesFirst() {
+        let now = Date()
+        // Absichtlich das entfernteste Haus: ohne Terminlogik wäre es das letzte.
+        let due = stop("Ahornweg", east: 400, north: 0, dueAt: now.addingTimeInterval(-15 * 60))
+        let others = (0..<4).map { stop("Ahornweg", east: Double($0) * 40, north: 0) }
+        let route = RoutePlanner.plan(start: origin, stops: others + [due], now: now)
+        #expect(route.houseIDs.first == due.houseID)
+    }
+
+    /// The expensive mistake the old planner made: walking past the 18:00 house at
+    /// 15:00, then coming back across the whole territory for it.
+    @Test("Ein später Termin wird nicht nebenbei mitgenommen")
+    func lateAppointmentIsNotTakenOnTheWay() {
+        let now = Date()
+        let due = stop("Ahornweg", east: 40, north: 0, dueAt: now.addingTimeInterval(3 * 3600))
+        let others = (1..<6).map { stop("Ahornweg", east: Double($0) * 80, north: 0) }
+        let route = RoutePlanner.plan(start: origin, stops: others + [due], now: now)
+        #expect(route.houseIDs.last == due.houseID)
+    }
+
+    @Test("Ohne Termine bleibt die Reihenfolge rein geografisch")
+    func routeWithoutAppointmentsIsUnchanged() {
+        let houses = (0..<6).map { stop("Ahornweg", east: Double($0) * 40, north: 0) }
+        let planned = RoutePlanner.plan(start: origin, stops: houses)
+        let again = RoutePlanner.plan(start: origin, stops: houses, now: Date().addingTimeInterval(9 * 3600))
+        #expect(planned.houseIDs == again.houseIDs)
+    }
+}

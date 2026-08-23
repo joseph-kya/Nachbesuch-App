@@ -72,6 +72,9 @@ struct MapScreen: View {
     /// The in-flight planning task, so ending or re-planning actually stops it.
     @State private var planTask: Task<Void, Never>?
     @State private var routePhase: RoutePhase = .off
+    /// Ticks while a route is running, so the panel's appointment chips count down
+    /// instead of freezing at whatever they said when the route was planned.
+    @State private var clock = Date.now
     /// Whether the route drawing is on the map. Persisted: the choice belongs to
     /// the user, not to the app launch.
     @AppStorage("route.overlayVisible") private var showsRouteOverlay = true
@@ -151,7 +154,18 @@ struct MapScreen: View {
         guard let gebiet else { return }
         let stops = prepared.pinsByID.values
             .filter(\.hasOpenWork)
-            .map { RouteStop(houseID: $0.id, latitude: $0.latitude, longitude: $0.longitude) }
+            .map {
+                RouteStop(
+                    houseID: $0.id,
+                    latitude: $0.latitude,
+                    longitude: $0.longitude,
+                    // The two facts that turn a cloud of points into a walk: which
+                    // street a house is on, and whether it is expecting you at a
+                    // particular hour.
+                    street: StreetNameParser.street(from: $0.address),
+                    dueAt: $0.nextRevisitAt
+                )
+            }
         guard !stops.isEmpty else { return }
         routePhase = .running
         let plannedFor = gebiet.id
@@ -183,10 +197,18 @@ struct MapScreen: View {
         planRoute(from: coordinate)
     }
 
-    /// Centres the map on the next house, so "where do I go now" is one tap away
-    /// even when you have panned somewhere else entirely.
-    private func focusNextStop() {
-        guard let pin = nextStopPin else { return }
+    /// The houses still to walk, in order, with everything the panel shows.
+    private var remainingStops: [RouteStopPresentation] {
+        route.remaining(openHouseIDs: openHouseIDs).compactMap { id in
+            guard let pin = prepared.pinsByID[id] else { return nil }
+            return RouteStopPresentation(id: id, address: pin.address, dueAt: pin.nextRevisitAt)
+        }
+    }
+
+    /// Centres the map on one house of the route, so "where do I go now" is one tap
+    /// away even when you have panned somewhere else entirely.
+    private func focus(on houseID: UUID) {
+        guard let pin = prepared.pinsByID[houseID] else { return }
         if !showsRouteOverlay {
             showsRouteOverlay = true
         }
@@ -195,6 +217,11 @@ struct MapScreen: View {
             span: MKCoordinateSpan(latitudeDelta: 0.0025, longitudeDelta: 0.0025),
             animated: !reduceMotion
         )
+    }
+
+    private func focusNextStop() {
+        guard let next = route.nextStop(openHouseIDs: openHouseIDs) else { return }
+        focus(on: next)
     }
 
     /// Leaves the current house for later and moves on to the next one.
@@ -390,6 +417,15 @@ struct MapScreen: View {
                 cameraCommand = nil
             }
         }
+        // Only while a route is running: nothing else on this screen is time-based,
+        // and a map that wakes up every half minute for no reason costs battery on
+        // exactly the device that is out in the field all day.
+        .task(id: routePhase == .running && isActive) {
+            while routePhase == .running, isActive, !Task.isCancelled {
+                clock = .now
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
         .task(id: pipelineKey) {
             await refreshPins()
         }
@@ -582,19 +618,18 @@ struct MapScreen: View {
                     )
                     .transition(.appChrome(reduceMotion: reduceMotion))
                 case .running:
-                    let remaining = route.remaining(openHouseIDs: openHouseIDs)
-                    RouteBar(
-                        remainingCount: remaining.count,
+                    RoutePanel(
+                        stops: remainingStops,
                         totalCount: max(route.plannedOrder.count, 1),
-                        nextAddress: nextStopPin?.address,
                         distanceToNext: distanceToNextStop,
                         isStraightLine: route.fellBackToStraightLines,
                         isPlanning: route.isPlanning,
                         showsOverlay: showsRouteOverlay,
-                        onToggleOverlay: { showsRouteOverlay.toggle() },
-                        onFocusNext: focusNextStop,
-                        canSkip: remaining.count > 1,
+                        now: clock,
+                        onFocus: focus(on:),
                         onSkip: skipNextStop,
+                        onToggleOverlay: { showsRouteOverlay.toggle() },
+                        onReplan: replanFromHere,
                         onEnd: endRoute
                     )
                     .transition(.appChrome(reduceMotion: reduceMotion))
@@ -673,14 +708,6 @@ struct MapScreen: View {
             }
             .disabled(gebiet == nil || openHouseIDs.isEmpty || routePhase != .off)
 
-            if routePhase == .running {
-                Button {
-                    replanFromHere()
-                } label: {
-                    Label("Route neu planen", systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
-                }
-                .disabled(route.isPlanning || openHouseIDs.isEmpty)
-            }
         }
 
         Section {

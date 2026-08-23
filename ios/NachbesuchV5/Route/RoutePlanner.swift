@@ -6,6 +6,12 @@ nonisolated struct RouteStop: Sendable, Hashable {
     let houseID: UUID
     let latitude: Double
     let longitude: Double
+    /// The street this house is on. What lets the planner keep one street together
+    /// instead of treating the territory as a cloud of unrelated points.
+    var street: String = ""
+    /// A booked "Später" time, when the house has one. The planner arranges the
+    /// route *around* these rather than stumbling onto them at the wrong hour.
+    var dueAt: Date?
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
@@ -55,16 +61,19 @@ nonisolated enum RoutePlanner {
     // MARK: Entry points
 
     /// Straight-line planning. Used when no street network could be loaded.
-    static func plan(start: CLLocationCoordinate2D, stops: [RouteStop]) -> PlannedRoute {
+    static func plan(
+        start: CLLocationCoordinate2D,
+        stops: [RouteStop],
+        now: Date = .now
+    ) -> PlannedRoute {
         guard !stops.isEmpty else {
             return PlannedRoute(
                 start: start, stops: [], distance: 0, path: [], legs: [], followsStreets: false
             )
         }
-        let ordered = order(
-            stops: stops,
-            cost: { a, b in Geo.metres(coordinate(a, start: start, stops: stops), coordinate(b, start: start, stops: stops)) }
-        )
+        let ordered = RouteOrdering.order(stops: stops, now: now) { a, b in
+            Geo.metres(a?.coordinate ?? start, b?.coordinate ?? start)
+        }
         let distance = length(start: start, stops: ordered)
         return PlannedRoute(
             start: start,
@@ -80,14 +89,15 @@ nonisolated enum RoutePlanner {
     static func plan(
         start: CLLocationCoordinate2D,
         stops: [RouteStop],
-        graph: WalkingGraph
+        graph: WalkingGraph,
+        now: Date = .now
     ) -> PlannedRoute {
         guard !stops.isEmpty else {
             return PlannedRoute(
                 start: start, stops: [], distance: 0, path: [], legs: [], followsStreets: false
             )
         }
-        guard !graph.isEmpty else { return plan(start: start, stops: stops) }
+        guard !graph.isEmpty else { return plan(start: start, stops: stops, now: now) }
 
         // Snap everything onto the network. A house sits beside the street, so this
         // step is what connects the data to the graph at all.
@@ -96,7 +106,7 @@ nonisolated enum RoutePlanner {
         let routingGraph = snappedResult.graph
         let snapped = snappedResult.nodeIndices
         guard snapped[0] != nil, snapped.dropFirst().contains(where: { $0 != nil }) else {
-            return plan(start: start, stops: stops)
+            return plan(start: start, stops: stops, now: now)
         }
 
         let ordered: [RouteStop]
@@ -105,17 +115,14 @@ nonisolated enum RoutePlanner {
             // Index 0 is the start; stop `i` is matrix index `i + 1`.
             var indexByStop: [UUID: Int] = [:]
             for (offset, stop) in stops.enumerated() { indexByStop[stop.houseID] = offset + 1 }
-            ordered = order(stops: stops) { a, b in
+            ordered = RouteOrdering.order(stops: stops, now: now) { a, b in
                 let i = a.map { indexByStop[$0.houseID] ?? 0 } ?? 0
                 let j = b.map { indexByStop[$0.houseID] ?? 0 } ?? 0
                 return matrix[i][j]
             }
         } else {
-            ordered = order(stops: stops) { a, b in
-                Geo.metres(
-                    a?.coordinate ?? start,
-                    b?.coordinate ?? start
-                )
+            ordered = RouteOrdering.order(stops: stops, now: now) { a, b in
+                Geo.metres(a?.coordinate ?? start, b?.coordinate ?? start)
             }
         }
 
@@ -222,9 +229,14 @@ nonisolated enum RoutePlanner {
 
     // MARK: Ordering
 
-    /// `nil` means "the start". Keeps nearest-neighbour and 2-opt working the same
-    /// way whether the cost comes from a matrix or from coordinates.
-    private static func order(
+    // MARK: Ordering
+
+    /// Kept as the reference implementation of the flat ordering the planner used
+    /// before `RouteOrdering`: nearest-neighbour plus 2-opt over individual houses.
+    /// It is what the street-run arrangement is measured against in the tests — a
+    /// route that groups streets must not end up meaningfully longer than one that
+    /// ignores them.
+    static func flatOrder(
         stops: [RouteStop],
         cost: (RouteStop?, RouteStop?) -> Double
     ) -> [RouteStop] {
@@ -297,11 +309,4 @@ nonisolated enum RoutePlanner {
         Geo.metres(a, b)
     }
 
-    private static func coordinate(
-        _ stop: RouteStop?,
-        start: CLLocationCoordinate2D,
-        stops: [RouteStop]
-    ) -> CLLocationCoordinate2D {
-        stop?.coordinate ?? start
-    }
 }

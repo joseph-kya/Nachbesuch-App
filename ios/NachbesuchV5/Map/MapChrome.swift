@@ -643,7 +643,7 @@ struct RouteStartPrompt: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Startpunkt wählen")
                         .font(.headline)
-                    Text("Von dort aus wird die kürzeste Reihenfolge durch alle offenen Häuser berechnet.")
+                    Text("Von dort aus wird straßenweise durch alle offenen Häuser geplant. Gebuchte „Später\u{201C}-Termine werden zu ihrer Uhrzeit eingeplant.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -667,7 +667,6 @@ struct RouteStartPrompt: View {
                 }
                 .buttonStyle(.glassProminent)
                 .controlSize(.large)
-                .tint(.red)
                 .disabled(!canUseLocation)
 
                 Button(action: onPickOnMap) {
@@ -684,15 +683,32 @@ struct RouteStartPrompt: View {
     }
 }
 
-/// The running route: where you are in it and what comes next.
+/// One upcoming stop, as the route panel needs it.
+nonisolated struct RouteStopPresentation: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let address: String
+    let dueAt: Date?
+}
+
+/// The running route: where you are in it, what comes next, and what comes after.
+///
+/// This replaced a single-line bar whose entire vocabulary was "3/12", a street
+/// name, and three unlabelled circular icons — skip, eye, cross — that had to be
+/// learned by trial. Two things were wrong with it. It never showed the *plan*, only
+/// the next address, so the route was a black box you had to trust; and its most
+/// useful action, re-planning from where you are actually standing, was not in it at
+/// all but buried three taps deep in the map menu.
+///
+/// So: progress you can read, the next house with its booked time, a peek at what
+/// follows, and named actions.
 ///
 /// No hand-off to Apple Maps: the route itself is drawn on this map, along the
 /// streets, so leaving the app to be told the same thing would only lose your place.
-struct RouteBar: View {
+struct RoutePanel: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let remainingCount: Int
+    /// Everything still to walk, in order. The first element is the next house.
+    let stops: [RouteStopPresentation]
     let totalCount: Int
-    let nextAddress: String?
     let distanceToNext: Double?
     /// True when the street network could not be loaded and the drawn line is
     /// crow-flight — worth saying rather than quietly showing a wrong path.
@@ -701,12 +717,25 @@ struct RouteBar: View {
     let isPlanning: Bool
     /// Whether the line and the ring are currently drawn on the map.
     let showsOverlay: Bool
-    let onToggleOverlay: () -> Void
-    let onFocusNext: () -> Void
-    /// False when the current house is the last one — nothing to skip to.
-    let canSkip: Bool
+    /// Drives the "in 25 Min" half of the appointment chips.
+    let now: Date
+    let onFocus: (UUID) -> Void
     let onSkip: () -> Void
+    let onToggleOverlay: () -> Void
+    let onReplan: () -> Void
     let onEnd: () -> Void
+
+    @State private var isExpanded = false
+
+    /// How many upcoming stops the expanded list shows. Enough to see the shape of
+    /// the next stretch, few enough that the panel never becomes the whole screen.
+    private static let previewLimit = 5
+
+    private var next: RouteStopPresentation? { stops.first }
+    private var doneCount: Int { max(totalCount - stops.count, 0) }
+    private var progress: Double {
+        totalCount > 0 ? Double(doneCount) / Double(totalCount) : 0
+    }
 
     private var formattedDistance: String? {
         guard let distanceToNext else { return nil }
@@ -714,139 +743,245 @@ struct RouteBar: View {
         return String(format: "%.1f km", distanceToNext / 1000)
     }
 
-    /// Clamped: houses deleted under a running route used to push this past the
-    /// total and read "13/12".
-    /// Everything that changes what the bar *says*, in one key.
+    /// Everything that changes what the panel *says*, in one key.
     ///
     /// Chrome layout lives in `MapScreen`'s container key; this is the other half of
     /// the same rule. `showsOverlay` in particular used to be toggled inside a
     /// `withAnimation` at the call site, which the container's `.animation(_:value:)`
     /// stripped before it ever reached the symbol.
     private struct ContentKey: Equatable {
-        let remainingCount: Int
-        let nextAddress: String?
+        let remaining: Int
+        let nextID: UUID?
         let showsOverlay: Bool
         let isPlanning: Bool
         let isStraightLine: Bool
+        let isExpanded: Bool
     }
 
     private var contentKey: ContentKey {
         ContentKey(
-            remainingCount: remainingCount,
-            nextAddress: nextAddress,
+            remaining: stops.count,
+            nextID: next?.id,
             showsOverlay: showsOverlay,
             isPlanning: isPlanning,
-            isStraightLine: isStraightLine
+            isStraightLine: isStraightLine,
+            isExpanded: isExpanded
         )
     }
 
-    private var position: String {
-        let index = min(max(totalCount - remainingCount + 1, 1), totalCount)
-        return "\(index)/\(totalCount)"
-    }
-
     var body: some View {
-        HStack(spacing: 8) {
-            // The label itself is the "show me" button: tapping it flies to the next
-            // house, which is the question this bar exists to answer.
-            Button(action: onFocusNext) {
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 5) {
-                        Text("Nächstes Haus")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(position)
-                            .font(.caption.weight(.semibold))
-                            .monospacedDigit()
-                            .contentTransition(.numericText(value: Double(remainingCount)))
-                    }
-                    .lineLimit(1)
-
-                    Text(isPlanning ? "Route wird berechnet …" : (nextAddress ?? "Route abgeschlossen"))
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-
-                    HStack(spacing: 6) {
-                        if isPlanning {
-                            ProgressView().controlSize(.mini)
-                        }
-                        if let formattedDistance {
-                            Text(formattedDistance).monospacedDigit()
-                        }
-                        if !showsOverlay {
-                            Label("ausgeblendet", systemImage: "eye.slash")
-                        }
-                        if isStraightLine {
-                            Label("Luftlinie", systemImage: "exclamationmark.triangle")
-                        }
-                    }
-                    .labelStyle(.titleAndIcon)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.primary)
-            .disabled(nextAddress == nil)
-            .accessibilityLabel("Nächstes Haus \(nextAddress ?? ""), \(position)")
-            .accessibilityHint("Springt auf der Karte zum nächsten Haus")
-
-            // Compact circular controls. Large ones squeezed the street name down to
-            // three characters on a narrow phone.
-            RouteBarButton(
-                systemImage: "forward.end.fill",
-                label: "Haus überspringen",
-                hint: "Verschiebt dieses Haus ans Ende der Route",
-                action: onSkip
-            )
-            .disabled(!canSkip)
-
-            RouteBarButton(
-                systemImage: showsOverlay ? "eye.fill" : "eye.slash.fill",
-                label: showsOverlay ? "Route ausblenden" : "Route einblenden",
-                action: onToggleOverlay
-            )
-
-            RouteBarButton(
-                systemImage: "xmark",
-                label: "Route beenden",
-                tint: .red,
-                action: onEnd
-            )
+        VStack(alignment: .leading, spacing: AppSpacing.snug) {
+            header
+            nextStop
+            if isExpanded { upcoming }
+            actions
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 8)
-        .padding(.vertical, 8)
+        .padding(AppSpacing.regular)
         .mapChrome()
         .animation(.appFeedback(reduceMotion: reduceMotion), value: contentKey)
         .accessibilityElement(children: .contain)
     }
-}
 
-/// One small circular glass control in the route bar.
-private struct RouteBarButton: View {
-    let systemImage: String
-    let label: String
-    var hint: String?
-    var tint: Color = .accentColor
-    let action: () -> Void
+    // MARK: Pieces
 
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.footnote.weight(.bold))
-                .frame(width: 34, height: 34)
-                .contentTransition(.symbolEffect(.replace))
+    /// Progress as a sentence and a bar, instead of the old bare "3/12" that never
+    /// said what either number counted.
+    private var header: some View {
+        HStack(spacing: AppSpacing.snug) {
+            Text("Haus \(min(doneCount + 1, max(totalCount, 1))) von \(totalCount)")
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+                .contentTransition(.numericText(value: Double(doneCount)))
+                .foregroundStyle(.secondary)
+
+            ZStack(alignment: .leading) {
+                Capsule().fill(.quaternary)
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: max(progress > 0 ? 6 : 0, 74 * progress))
+            }
+            .frame(width: 74, height: 5)
+
+            Spacer(minLength: 0)
+
+            if isStraightLine {
+                Label("Luftlinie", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .labelStyle(.titleAndIcon)
+            }
         }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
-        .tint(tint)
-        .accessibilityLabel(label)
-        .accessibilityHint(hint ?? "")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(doneCount) von \(totalCount) Häusern erledigt")
+    }
+
+    /// The next house: the one question this panel exists to answer, so it is the
+    /// biggest thing in it and the whole block is the button that flies to it.
+    @ViewBuilder
+    private var nextStop: some View {
+        Button {
+            if let next { onFocus(next.id) }
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: AppSpacing.snug) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(isPlanning
+                         ? "Route wird berechnet …"
+                         : (next?.address ?? "Route abgeschlossen"))
+                        .font(.headline)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+
+                    HStack(spacing: 6) {
+                        if isPlanning { ProgressView().controlSize(.mini) }
+                        if let formattedDistance {
+                            Label(formattedDistance, systemImage: "figure.walk")
+                                .monospacedDigit()
+                        }
+                        if !showsOverlay {
+                            Label("Linie aus", systemImage: "eye.slash")
+                        }
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                    if let glance = next.flatMap({
+                        RevisitGlance.make(at: $0.dueAt, laterDoors: 1, now: now)
+                    }) {
+                        appointmentChip(glance)
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "scope")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+        .disabled(next == nil)
+        .accessibilityLabel("Nächstes Haus: \(next?.address ?? "keines")")
+        .accessibilityHint("Springt auf der Karte dorthin")
+    }
+
+    /// What comes after next. A route you cannot see ahead of is a route you cannot
+    /// sanity-check — and this is where a bad order becomes obvious at a glance.
+    private var upcoming: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider().padding(.vertical, 2)
+            ForEach(Array(stops.dropFirst().prefix(Self.previewLimit).enumerated()), id: \.element.id) { offset, stop in
+                Button {
+                    onFocus(stop.id)
+                } label: {
+                    HStack(spacing: AppSpacing.snug) {
+                        Text("\(doneCount + offset + 2)")
+                            .font(.caption2.weight(.bold))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(minWidth: 18, alignment: .trailing)
+                        Text(stop.address)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        if let glance = RevisitGlance.make(at: stop.dueAt, laterDoors: 1, now: now) {
+                            Label(glance.label, systemImage: glance.systemImage)
+                                .font(.caption2.weight(.semibold))
+                                .labelStyle(.titleAndIcon)
+                                .foregroundStyle(tint(for: glance.urgency))
+                        }
+                    }
+                    .padding(.vertical, 6)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+            }
+            if stops.count > Self.previewLimit + 1 {
+                Text("… und \(stops.count - Self.previewLimit - 1) weitere")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 2)
+            }
+        }
+    }
+
+    /// Named buttons, not a row of guessable glyphs. "Weiter" is the one action
+    /// taken dozens of times a day, so it is the wide one.
+    private var actions: some View {
+        HStack(spacing: AppSpacing.tight) {
+            Button {
+                isExpanded.toggle()
+            } label: {
+                Label(
+                    isExpanded ? "Weniger" : "Übersicht",
+                    systemImage: isExpanded ? "chevron.up" : "list.bullet"
+                )
+                .font(.footnote.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 24)
+            }
+            .buttonStyle(.glass)
+            .controlSize(.large)
+            .disabled(stops.count < 2)
+
+            Button(action: onSkip) {
+                Label("Überspringen", systemImage: "forward.end.fill")
+                    .font(.footnote.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 24)
+            }
+            .buttonStyle(.glass)
+            .controlSize(.large)
+            .disabled(stops.count < 2)
+            .accessibilityHint("Verschiebt dieses Haus ans Ende der Route")
+
+            Menu {
+                Button(action: onReplan) {
+                    Label("Ab hier neu planen", systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
+                }
+                .disabled(isPlanning)
+
+                Button(action: onToggleOverlay) {
+                    Label(
+                        showsOverlay ? "Linie ausblenden" : "Linie einblenden",
+                        systemImage: showsOverlay ? "eye.slash" : "eye"
+                    )
+                }
+
+                Divider()
+
+                Button(role: .destructive, action: onEnd) {
+                    Label("Route beenden", systemImage: "xmark")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.footnote.weight(.bold))
+                    .frame(width: 30, height: 24)
+            }
+            .buttonStyle(.glass)
+            .controlSize(.large)
+            .accessibilityLabel("Weitere Routenoptionen")
+        }
+    }
+
+    private func appointmentChip(_ glance: RevisitGlance) -> some View {
+        Label(glance.label, systemImage: glance.systemImage)
+            .font(.caption2.weight(.semibold))
+            .labelStyle(.titleAndIcon)
+            .foregroundStyle(tint(for: glance.urgency))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(tint(for: glance.urgency).opacity(0.14), in: Capsule())
+            .accessibilityLabel(glance.voiceOver)
+    }
+
+    private func tint(for urgency: RevisitGlance.Urgency) -> Color {
+        switch urgency {
+        case .overdue: .red
+        case .imminent: .orange
+        case .upcoming: .indigo
+        }
     }
 }
 
