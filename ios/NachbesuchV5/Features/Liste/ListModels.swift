@@ -16,6 +16,9 @@ nonisolated struct HouseRowModel: Identifiable, Equatable, Sendable {
     let completedCount: Int
     let followUpCount: Int
     let joinedCount: Int
+    /// Doors set to "Später" in this scope. Kept separate from `followUpCount`
+    /// ("Niemand da"): both mean come back, only this one names an hour.
+    let laterCount: Int
     let openCount: Int
     let createdAt: Date
     let searchText: String
@@ -40,22 +43,20 @@ nonisolated struct HouseRowModel: Identifiable, Equatable, Sendable {
         let base = isSingleDoor
             ? markerOutcome.displayTitleValue
             : "\(completedCount)/\(unitCount) Türen · \(openCount) offen"
-        // A booked return time replaces the "last recorded" stamp: on a row that
-        // says "Später", when you are due back is the only time that matters.
-        if let nextRevisitAt {
-            return "\(base) · zurück um \(RevisitPlanner.clockFormatter.string(from: nextRevisitAt))"
-        }
+        // The booked return time used to be appended here as "· zurück um 18:30",
+        // buried in grey caption text between two other facts. It is now a tinted
+        // chip of its own — `RevisitGlance` — so the subtitle is back to the plain
+        // "when was this last touched" stamp and the two stop competing.
         guard let recordedAt else { return base }
         return "\(base) · \(recordedAt.formatted(date: .omitted, time: .shortened))"
     }
 
-    /// What VoiceOver reads instead of an emoji.
+    /// What VoiceOver reads instead of an emoji. The return time is spoken by the
+    /// chip's own label, so it is deliberately absent here.
     var accessibilityValue: String {
-        let base = isSingleDoor
+        isSingleDoor
             ? markerOutcome.displayTitleValue
             : "\(completedCount) von \(unitCount) Türen erledigt, \(openCount) offen"
-        guard let nextRevisitAt else { return base }
-        return "\(base), zurück um \(RevisitPlanner.clockFormatter.string(from: nextRevisitAt))"
     }
 }
 
@@ -64,7 +65,7 @@ extension Optional where Wrapped == VisitOutcome {
 }
 
 nonisolated enum ListFilter: String, CaseIterable, Identifiable, Sendable {
-    case all, open, unanswered, joined
+    case all, open, later, unanswered, joined
 
     var id: String { rawValue }
 
@@ -72,6 +73,7 @@ nonisolated enum ListFilter: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .all: "Alle"
         case .open: "Offen"
+        case .later: "Später"
         case .unanswered: "Ohne Status"
         case .joined: "Dabei"
         }
@@ -81,6 +83,7 @@ nonisolated enum ListFilter: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .all: "list.bullet"
         case .open: "arrow.clockwise"
+        case .later: "clock.fill"
         case .unanswered: "questionmark.circle"
         case .joined: "heart.fill"
         }
@@ -90,6 +93,7 @@ nonisolated enum ListFilter: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .all: "secondary"
         case .open: "red"
+        case .later: "indigo"
         case .unanswered: "orange"
         case .joined: "pink"
         }
@@ -99,6 +103,7 @@ nonisolated enum ListFilter: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .all: "Noch keine Häuser"
         case .open: "Keine offenen Nachbesuche"
+        case .later: "Nichts eingeplant"
         case .unanswered: "Alles eingetragen"
         case .joined: "Noch keine Beitritte"
         }
@@ -108,6 +113,7 @@ nonisolated enum ListFilter: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .all: "Füge auf der Karte dein erstes Haus hinzu."
         case .open: "Für diesen Zeitraum ist nichts mehr offen."
+        case .later: "Häuser mit einer gebuchten Uhrzeit erscheinen hier — nach Zeit gereiht."
         case .unanswered: "Jeder erfasste Haushalt hat bereits einen Status."
         case .joined: "Hier erscheinen Haushalte, die dabei sind."
         }
@@ -117,6 +123,7 @@ nonisolated enum ListFilter: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .all: true
         case .open: row.openCount > 0
+        case .later: row.laterCount > 0
         case .unanswered: row.completedCount < row.unitCount
         case .joined: row.joinedCount > 0
         }
@@ -170,6 +177,7 @@ nonisolated enum HouseListBuilder {
                 completedCount: tally.completed,
                 followUpCount: tally.notHome,
                 joinedCount: tally.joined,
+                laterCount: tally.later,
                 openCount: tally.open,
                 createdAt: seed.createdAt,
                 searchText: SearchText.fold(searchable),
@@ -190,6 +198,22 @@ nonisolated enum HouseListBuilder {
             }
         }
         return filter == .all ? result : result.filter(filter.matches)
+    }
+
+    /// Soonest appointment first, and overdue ones therefore at the very top.
+    ///
+    /// Only meaningful under the "Später" filter, where every row has a booked time
+    /// — sorting the whole corpus this way would push the timeless majority into an
+    /// arbitrary tail.
+    static func sortByRevisit(_ rows: [HouseRowModel]) -> [HouseRowModel] {
+        rows.sorted {
+            switch ($0.nextRevisitAt, $1.nextRevisitAt) {
+            case let (lhs?, rhs?): lhs < rhs
+            case (nil, _?): false
+            case (_?, nil): true
+            case (nil, nil): $0.createdAt > $1.createdAt
+            }
+        }
     }
 
     /// Field-tested default: open work first, then newest.

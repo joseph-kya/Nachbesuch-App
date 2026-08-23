@@ -7,6 +7,7 @@ import UIKit
 /// street.
 struct ListScreen: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAccent) private var accent
     @Environment(\.modelContext) private var modelContext
     @Environment(AppNoticeCenter.self) private var notices
     @Environment(LocationService.self) private var location
@@ -32,6 +33,10 @@ struct ListScreen: View {
     @State private var searchText = ""
     @State private var debouncedQuery = ""
     @State private var filter: ListFilter = .all
+    /// Drives the relative half of the revisit chips ("in 25 Min"). A single tick
+    /// for the whole screen: `HouseRow` compares the *rendered* glance, so a tick
+    /// that changes no wording re-renders nothing.
+    @State private var clock = Date.now
     @State private var selectedHouseID: UUID?
     @State private var showsLegend = false
     @State private var showsExport = false
@@ -131,6 +136,7 @@ struct ListScreen: View {
                             .accessibilityLabel("Straße \(section.title)")
                             .accessibilityValue(
                                 "\(section.houseCount) Adressen, \(section.completedCount) von \(section.unitCount) Türen erledigt"
+                                + (section.openCount > 0 ? ", \(section.openCount) offen" : "")
                             )
                             .accessibilityHint(
                                 collapsedSections.contains(section.id)
@@ -144,7 +150,7 @@ struct ListScreen: View {
                             if !collapsedSections.contains(section.id) {
                                 ForEach(section.rows) { row in
                                         Button { selectedHouseID = row.id } label: {
-                                            HouseRow(row: row)
+                                            HouseRow(row: row, now: clock)
                                                 .equatable()
                                                 .padding(.horizontal, 14)
                                                 .padding(.vertical, 11)
@@ -352,6 +358,14 @@ struct ListScreen: View {
             updateSortOrigin(fix?.coordinate)
         }
         // The GPS only runs while this ordering is actually on screen and in use.
+        .task(id: isActive) {
+            // Half a minute, not a full one: the chip rounds to the nearest minute,
+            // so a 60 s tick could leave "in 1 Min" standing for two.
+            while isActive, !Task.isCancelled {
+                clock = .now
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
         .task(id: sortByDistance && isActive) {
             guard sortByDistance, isActive else { return }
             location.beginUsing()
@@ -414,6 +428,21 @@ struct ListScreen: View {
                     unitCount: ranked.reduce(0) { $0 + $1.unitCount },
                     completedCount: ranked.reduce(0) { $0 + $1.completedCount },
                     openCount: ranked.reduce(0) { $0 + $1.openCount }
+                )
+            ]
+        } else if filter == .later {
+            // Under this filter the question is never "which street am I on" but
+            // "who is due next", so the rows arrive in one time-ordered run.
+            let byTime = HouseListBuilder.sortByRevisit(filtered)
+            return [
+                StreetSection(
+                    id: "revisit",
+                    title: "Nach Uhrzeit",
+                    rows: byTime,
+                    houseCount: byTime.count,
+                    unitCount: byTime.reduce(0) { $0 + $1.unitCount },
+                    completedCount: byTime.reduce(0) { $0 + $1.completedCount },
+                    openCount: byTime.reduce(0) { $0 + $1.openCount }
                 )
             ]
         } else {
@@ -482,8 +511,9 @@ struct ListScreen: View {
 
     private func tint(for filter: ListFilter) -> Color {
         switch filter {
-        case .all: .accentColor
+        case .all: accent
         case .open: .red
+        case .later: .indigo
         case .unanswered: .orange
         case .joined: .pink
         }
@@ -632,8 +662,21 @@ struct ListScreen: View {
 
 private struct HouseRow: View, Equatable {
     let row: HouseRowModel
+    /// Only ever read through `glance`. Compared by its *effect*, never directly —
+    /// see `==`.
+    let now: Date
 
-    static func == (lhs: HouseRow, rhs: HouseRow) -> Bool { lhs.row == rhs.row }
+    private var glance: RevisitGlance? {
+        RevisitGlance.make(at: row.nextRevisitAt, laterDoors: row.laterCount, now: now)
+    }
+
+    /// Two rows are the same row when they would draw the same thing. Comparing
+    /// `now` itself would invalidate every row on the screen twice a minute, which
+    /// is precisely what the value-typed row model exists to avoid; comparing the
+    /// glance means only a row whose chip actually changed its wording redraws.
+    static func == (lhs: HouseRow, rhs: HouseRow) -> Bool {
+        lhs.row == rhs.row && lhs.glance == rhs.glance
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -651,6 +694,9 @@ private struct HouseRow: View, Equatable {
                 Text(row.subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let glance {
+                    revisitChip(glance)
+                }
                 if !row.note.isEmpty {
                     Label(row.note, systemImage: "note.text")
                         .font(.caption2)
@@ -686,10 +732,47 @@ private struct HouseRow: View, Equatable {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.address)
         .accessibilityValue(
-            row.formattedDistance.map { "\(row.accessibilityValue), \($0) entfernt" }
-                ?? row.accessibilityValue
+            [
+                row.accessibilityValue,
+                glance?.voiceOver,
+                row.formattedDistance.map { "\($0) entfernt" }
+            ]
+            .compactMap { $0 }
+            .joined(separator: ", ")
         )
         .accessibilityHint("Öffnet die Details")
+    }
+
+    /// The return time, close to the address it belongs to rather than out in the
+    /// trailing column with the distance and the open count — those answer "where"
+    /// and "how much", this one answers "when", and it is the only one of the three
+    /// that can be late.
+    private func revisitChip(_ glance: RevisitGlance) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: glance.systemImage)
+            Text(glance.label)
+                .monospacedDigit()
+            if glance.extraDoors > 0 {
+                Text("+\(glance.extraDoors)")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(tint(for: glance.urgency))
+        .lineLimit(1)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(tint(for: glance.urgency).opacity(0.14), in: Capsule())
+        .padding(.top, 2)
+    }
+
+    private func tint(for urgency: RevisitGlance.Urgency) -> Color {
+        switch urgency {
+        case .overdue: .red
+        case .imminent: .orange
+        case .upcoming: .indigo
+        }
     }
 }
 
@@ -697,9 +780,23 @@ private struct HouseRow: View, Equatable {
 
 private struct StreetHeader: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAccent) private var accent
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let section: StreetSection
     let isExpanded: Bool
+
+    /// A street is finished only when every door is recorded *and* nothing is left
+    /// open. The old card could show a green-worthy "9/9" next to a red bar, because
+    /// the count and the colour answer different questions — "erledigt" counts a
+    /// door as recorded, while "offen" still wants a second visit. The subtitle now
+    /// says how many are open, so the colour has a visible reason.
+    private var isDone: Bool {
+        section.unitCount > 0 && section.completedCount >= section.unitCount && section.openCount == 0
+    }
+
+    private var tint: Color { isDone ? .green : accent }
+
+    private var barWidth: CGFloat { dynamicTypeSize.isAccessibilitySize ? 44 : 64 }
 
     var body: some View {
         // Both candidates used to be `HStack`s. When neither fits, `ViewThatFits`
@@ -711,81 +808,149 @@ private struct StreetHeader: View {
             headerLayout(compact: false)
             stackedLayout
         }
-        .padding(.trailing, 18)
         .contentShape(.rect)
-        .overlay(alignment: .topTrailing) {
-            Image(systemName: "chevron.down")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.tertiary)
-                .rotationEffect(.degrees(isExpanded ? 0 : -90))
-                .animation(.appFeedback(reduceMotion: reduceMotion), value: isExpanded)
-                .accessibilityHidden(true)
+    }
+
+    // MARK: Pieces
+
+    private var streetIcon: some View {
+        // A squircle instead of a circle: it echoes the card it sits in, and the
+        // soft gradient keeps the tinted field from reading as a flat blob on the
+        // dark background.
+        RoundedRectangle(cornerRadius: 11, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [tint.opacity(0.26), tint.opacity(0.12)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .frame(width: 36, height: 36)
+            .overlay {
+                Image(systemName: "road.lanes")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(tint)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .strokeBorder(tint.opacity(0.22), lineWidth: 0.5)
+            }
+            .animation(.appSettle(reduceMotion: reduceMotion), value: isDone)
+    }
+
+    private var title: some View {
+        Text(section.title)
+            // `Color.primary`, not `.primary`. A `Section` header inherits the
+            // list's secondary header style, and bare `.primary` is
+            // `HierarchicalShapeStyle.primary` — the *first level of the inherited
+            // style*, which here is still the grey header colour. `Color.primary`
+            // is the absolute label colour and actually wins, so the street name
+            // stops rendering dimmer than the addresses beneath it.
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Color.primary)
+    }
+
+    /// "9 Adressen" alone never explained the red bar. The open count does, and it
+    /// disappears the moment there is nothing left to come back to.
+    @ViewBuilder
+    private var subtitle: some View {
+        let addresses = "\(section.houseCount) \(section.houseCount == 1 ? "Adresse" : "Adressen")"
+        HStack(spacing: 5) {
+            Text(addresses)
+                .foregroundStyle(.secondary)
+            if section.openCount > 0 {
+                Text("·").foregroundStyle(.tertiary)
+                Text("\(section.openCount) offen")
+                    .monospacedDigit()
+                    .foregroundStyle(tint)
+            }
+        }
+        .font(.caption2)
+        .lineLimit(1)
+    }
+
+    private var counter: some View {
+        Text("\(section.completedCount)/\(section.unitCount)")
+            .font(.caption.weight(.semibold))
+            .monospacedDigit()
+            .foregroundStyle(isDone ? Color.green : .secondary)
+            .contentTransition(.numericText(value: Double(section.completedCount)))
+    }
+
+    /// A hand-drawn capsule rather than `ProgressView`: the system bar draws its
+    /// track at a hairline the tinted fill dwarfs, so a nearly-empty street looked
+    /// identical to one with no doors at all. Here the track is always visible and
+    /// the fill keeps a rounded stub as soon as there is any progress at all.
+    private func progressBar(width: CGFloat) -> some View {
+        ZStack(alignment: .leading) {
+            Capsule(style: .continuous)
+                .fill(.quaternary)
+            if section.progress > 0 {
+                Capsule(style: .continuous)
+                    .fill(tint)
+                    .frame(width: max(5, width * min(section.progress, 1)))
+            }
+        }
+        .frame(width: width, height: 5)
+        .animation(.appSettle(reduceMotion: reduceMotion), value: section.progress)
+        .animation(.appSettle(reduceMotion: reduceMotion), value: isDone)
+    }
+
+    private var chevron: some View {
+        Image(systemName: "chevron.down")
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(.tertiary)
+            .rotationEffect(.degrees(isExpanded ? 0 : -90))
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: isExpanded)
+            .frame(width: 12)
+            .accessibilityHidden(true)
+    }
+
+    // MARK: Layouts
+
+    private func headerLayout(compact: Bool) -> some View {
+        HStack(spacing: AppSpacing.snug) {
+            streetIcon
+
+            VStack(alignment: .leading, spacing: 2) {
+                title.lineLimit(compact ? 1 : 2)
+                subtitle
+            }
+
+            Spacer(minLength: AppSpacing.snug)
+
+            // Count over bar, right-aligned: the two read as one measurement
+            // instead of two competing trailing elements.
+            VStack(alignment: .trailing, spacing: 5) {
+                counter
+                progressBar(width: barWidth)
+            }
+
+            chevron
         }
     }
 
     private var stackedLayout: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: AppSpacing.snug) {
                 streetIcon
-                Text(section.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.primary)
+                VStack(alignment: .leading, spacing: 2) {
+                    title
+                    subtitle
+                }
+                Spacer(minLength: AppSpacing.snug)
+                chevron
             }
-            Text("\(section.houseCount) \(section.houseCount == 1 ? "Adresse" : "Adressen") · \(section.completedCount)/\(section.unitCount)")
-                .font(.caption2)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-            ProgressView(value: section.progress)
-                .tint(section.openCount == 0 ? .green : .red)
-                .animation(.appSettle(reduceMotion: reduceMotion), value: section.progress)
+            HStack(spacing: AppSpacing.snug) {
+                counter
+                GeometryReader { proxy in
+                    progressBar(width: proxy.size.width)
+                        .frame(height: proxy.size.height, alignment: .center)
+                }
+                .frame(height: 5)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var streetIcon: some View {
-        ZStack {
-            Circle().fill(Color.accentColor.opacity(0.13))
-            Image(systemName: "road.lanes")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-        }
-        .frame(width: 34, height: 34)
-    }
-
-    private func headerLayout(compact: Bool) -> some View {
-        HStack(alignment: compact ? .center : .firstTextBaseline, spacing: AppSpacing.snug) {
-            streetIcon
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(section.title)
-                    .font(.subheadline.weight(.semibold))
-                    // `Color.primary`, not `.primary`. A `Section` header inherits
-                    // the list's secondary header style, and bare `.primary` is
-                    // `HierarchicalShapeStyle.primary` — the *first level of the
-                    // inherited style*, which here is still the grey header colour.
-                    // `Color.primary` is the absolute label colour and actually wins,
-                    // so the street name stops rendering dimmer than the addresses
-                    // beneath it.
-                    .foregroundStyle(Color.primary)
-                    .lineLimit(compact ? 1 : 2)
-                Text("\(section.houseCount) \(section.houseCount == 1 ? "Adresse" : "Adressen")")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-            VStack(alignment: .trailing, spacing: 3) {
-                Text("\(section.completedCount)/\(section.unitCount)")
-                    .font(.caption.weight(.medium))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.numericText(value: Double(section.completedCount)))
-                ProgressView(value: section.progress)
-                    .frame(width: dynamicTypeSize.isAccessibilitySize ? 44 : 58)
-                    .tint(section.openCount == 0 ? .green : .red)
-            }
-            .animation(.appSettle(reduceMotion: reduceMotion), value: section.progress)
-
-        }
     }
 }
 

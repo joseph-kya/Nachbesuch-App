@@ -212,3 +212,63 @@ struct RevisitPlannerTests {
                 == RevisitPlanner.suggestions(now: now, calendar: calendar).first?.date)
     }
 }
+
+// MARK: - The list chip
+
+@Suite("Später — Anzeige in der Liste")
+struct RevisitGlanceTests {
+
+    private let calendar = Calendar(identifier: .gregorian)
+
+    private func now() -> Date {
+        calendar.date(from: DateComponents(year: 2026, month: 8, day: 24, hour: 14, minute: 0))!
+    }
+
+    private func glance(minutesFromNow: Int, doors: Int = 1) -> RevisitGlance? {
+        RevisitGlance.make(
+            at: now().addingTimeInterval(TimeInterval(minutesFromNow * 60)),
+            laterDoors: doors,
+            now: now(),
+            calendar: calendar
+        )
+    }
+
+    @Test("Ohne gebuchte Zeit gibt es keinen Chip")
+    func noTimeNoChip() {
+        #expect(RevisitGlance.make(at: nil, laterDoors: 0, now: now()) == nil)
+    }
+
+    @Test("Innerhalb einer Stunde wird in Minuten gezählt")
+    func countsMinutesWhenClose() {
+        #expect(glance(minutesFromNow: 25)?.label == "in 25 Min")
+        #expect(glance(minutesFromNow: 25)?.urgency == .imminent)
+    }
+
+    /// The whole point of the chip: past the booked minute it must stop reading like
+    /// a plan and start reading like a debt.
+    @Test("Eine verstrichene Zeit ist überfällig, nicht „um 13:48“")
+    func pastTimeIsOverdue() {
+        #expect(glance(minutesFromNow: -12)?.label == "12 Min überfällig")
+        #expect(glance(minutesFromNow: -12)?.urgency == .overdue)
+        #expect(glance(minutesFromNow: -180)?.label == "überfällig")
+    }
+
+    @Test("Ab einer Stunde steht die Uhrzeit da")
+    func showsClockTimeWhenFarOut() {
+        #expect(glance(minutesFromNow: 120)?.label == "um 16:00")
+        #expect(glance(minutesFromNow: 120)?.urgency == .upcoming)
+    }
+
+    @Test("Ein anderer Tag wird benannt")
+    func namesAnotherDay() {
+        #expect(glance(minutesFromNow: 20 * 60)?.label == "morgen 10:00")
+    }
+
+    /// Several booked doors in one house collapse to the earliest plus a counter —
+    /// the row has space for one time, not four.
+    @Test("Weitere gebuchte Türen erscheinen als Zähler")
+    func countsAdditionalDoors() {
+        #expect(glance(minutesFromNow: 30, doors: 3)?.extraDoors == 2)
+        #expect(glance(minutesFromNow: 30, doors: 1)?.extraDoors == 0)
+    }
+}
