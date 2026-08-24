@@ -1,18 +1,41 @@
 # Status
 
-Last updated: 2026-08-23T20:00:00+02:00 · HEAD: 7d3a0b8 · Tests: iOS 60 passing;
-Android domain + data passing · Branches: `salvage/offene-arbeit`,
-`refactor/minimal-ui` (beide noch nicht auf `main`)
+Last updated: 2026-08-24T12:00:00+02:00 · Tests: iOS 112 passing, 0 fehlgeschlagen;
+Android domain + data passing · `refactor/minimal-ui` und `salvage/offene-arbeit`
+sind auf `main` und auf `origin`
 
 ## In flight
-- `refactor/minimal-ui` — Empfohlene Route aus der Oberfläche genommen,
-  Stilrichtlinie geschrieben, Entschlackungsdurchgang. Beide Plattformen
-  kompilieren und die Tests laufen; **am Gerät durchgeklickt ist nichts davon.**
-  Das ist der nächste Schritt.
-- `salvage/offene-arbeit` — die vier Features, die als uncommittete Änderungen
-  im Arbeitsbaum lagen, jetzt in eigenen Commits.
+- **Am Gerät durchgeklickt ist immer noch nichts.** Die App wurde diese Sitzung
+  im Simulator (iPhone 17, iOS 26.5) mit 400 gesetzten Häusern gestartet, die
+  Karte rendert; Liste, Archiv und Detailblatt sind nur gebaut und getestet,
+  nicht bedient. Das bleibt der nächste Schritt — jetzt auf `main`, also mit
+  mehr Gewicht als vorher.
 
 ## Done
+- [x] Verlorene Türen auf der Karte · `PendingSave` · Der Karten-Screen brach
+  beim Verlassen des Tabs die verzögerte Speicherung **ab**, statt sie
+  abzuräumen: ein Status, der innerhalb der 350 ms vor dem Tabwechsel gesetzt
+  wurde, war weg. Die Liste hatte diesen Fehler schon behoben, die Karte nicht —
+  weil beide Screens eine eigene, wortgleiche Kopie von `scheduleSave()` hielten.
+  Die Entprellung und das Abräumen liegen jetzt einmal in
+  `Services/PendingSave.swift`, beide Screens räumen in `onDisappear` **und**
+  bei jedem Szenenwechsel weg vom Vordergrund ab (das Telefon in der Tasche ist
+  auch ein Abbau). Drei Tests halten den Vertrag.
+- [x] Nachlese zur Entschlackung · Der Durchgang vom 23.8. hatte vier fest
+  verdrahtete Farben stehen lassen — tatsächlich waren es achtzehn Fundstellen,
+  weil die erste Suche die Kurzform `.foregroundStyle(.red)` nicht traf.
+  Geändert wurde, was den Akzent vertritt statt Bedeutung zu tragen: das
+  Platzierungs-Fadenkreuz und der Haus-Pin auf der Karte, die Haus-Kachel im
+  Detailkopf, der Bestätigen-Knopf im Gebietseditor (grün neben einem
+  akzentgetönten Nachbarn) und zwei blaue Tönungen — Blau ist laut
+  `VisitOutcome.later` bereits „noch kein Status" und darf nicht nebenbei
+  Dekoration sein. Grün als „erledigt" heißt jetzt `Color.doneTone`. Die Rot-
+  und Orangetöne für Warnungen, offene Arbeit und Zerstörendes **bleiben** —
+  das ist Bedeutung, nicht Geschmack.
+- [x] `extension UUID: @retroactive Identifiable` entfernt · stand am Ende von
+  `ListScreen.swift` und erklärte modulweit eine Foundation-Type-Konformität,
+  damit genau ein `sheet(item:)` daran binden konnte. Ersetzt durch ein lokales
+  `HouseSelection` — dasselbe Muster, das die anderen Screens längst benutzen.
 - [x] Stilrichtlinie · `51e48d7` · `style.md` — Verfahren statt Geschmack:
   Streichen → Verschieben → Gestalten. Quellen: Apples Material- und
   Design-System-Vorgaben für iOS 26, Rams, NN/g.

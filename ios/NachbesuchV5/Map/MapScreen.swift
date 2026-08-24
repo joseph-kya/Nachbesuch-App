@@ -61,7 +61,7 @@ struct MapScreen: View {
     @State private var sheetRoute: MapRoute?
     @State private var confirmation: MapConfirmation?
     @State private var isLocating = false
-    @State private var saveTask: Task<Void, Never>?
+    @State private var pendingSave = PendingSave()
     @State private var namingTask: Task<Void, Never>?
     /// One namespace for every floating glass control, so they can morph into one
     /// another instead of cross-fading.
@@ -163,9 +163,16 @@ struct MapScreen: View {
         .onChange(of: gebiet?.id) { _, _ in
             resetForNewTerritory()
         }
+        .onChange(of: scenePhase) { _, phase in
+            // Pocketing the phone mid-street is a teardown like any other: the
+            // debounce must not outlive the foreground.
+            if phase != .active { flushPendingSave() }
+        }
         .onDisappear {
             camera.flush()
-            saveTask?.cancel()
+            // Cancelling alone lost every status set within the debounce window of
+            // leaving the tab. The list has flushed here all along; the map did not.
+            flushPendingSave()
             namingTask?.cancel()
         }
     }
@@ -744,14 +751,12 @@ struct MapScreen: View {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
-    /// Coalesces a burst of taps into one SwiftData write.
     private func scheduleSave() {
-        saveTask?.cancel()
-        saveTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(350))
-            guard !Task.isCancelled else { return }
-            modelContext.save(reporting: notices, context: "Status konnte nicht gespeichert werden")
-        }
+        pendingSave.schedule(in: modelContext, reporting: notices)
+    }
+
+    private func flushPendingSave() {
+        pendingSave.flush(in: modelContext, reporting: notices)
     }
 
     private func scheduleAutoNaming(force: Bool = false) {

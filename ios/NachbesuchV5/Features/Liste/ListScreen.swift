@@ -9,6 +9,7 @@ struct ListScreen: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAccent) private var accent
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(AppNoticeCenter.self) private var notices
     @Environment(LocationService.self) private var location
 
@@ -37,14 +38,14 @@ struct ListScreen: View {
     /// for the whole screen: `HouseRow` compares the *rendered* glance, so a tick
     /// that changes no wording re-renders nothing.
     @State private var clock = Date.now
-    @State private var selectedHouseID: UUID?
+    @State private var selectedHouse: HouseSelection?
     @State private var showsLegend = false
     @State private var showsExport = false
     /// The row waiting for a return time, once "Später" was swiped.
     @State private var revisitTarget: HouseRowModel?
     @State private var undo: UndoEntry?
     @State private var undoTask: Task<Void, Never>?
-    @State private var saveTask: Task<Void, Never>?
+    @State private var pendingSave = PendingSave()
     @Namespace private var zoom
 
     /// Nearest-first ordering, using the live position.
@@ -150,7 +151,7 @@ struct ListScreen: View {
 
                             if !collapsedSections.contains(section.id) {
                                 ForEach(section.rows) { row in
-                                        Button { selectedHouseID = row.id } label: {
+                                        Button { selectedHouse = HouseSelection(id: row.id) } label: {
                                             HouseRow(row: row, now: clock)
                                                 .equatable()
                                                 .padding(.horizontal, 14)
@@ -180,7 +181,7 @@ struct ListScreen: View {
                                         } label: {
                                             Label("Route", systemImage: "figure.walk")
                                         }
-                                        .tint(.blue)
+                                        .tint(accent)
                                     }
                                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                         Button {
@@ -311,12 +312,12 @@ struct ListScreen: View {
                     .accessibilityLabel("Gebiet exportieren")
                 }
             }
-            .sheet(item: $selectedHouseID) { id in
-                if let house = houses.first(where: { $0.id == id }) {
+            .sheet(item: $selectedHouse) { selection in
+                if let house = houses.first(where: { $0.id == selection.id }) {
                     HouseDetailSheet(house: house, scope: scope, writeDay: writeDay)
                         // The row grows into the sheet, and dragging it back down
                         // collapses it into the same row.
-                        .navigationTransition(.zoom(sourceID: id, in: zoom))
+                        .navigationTransition(.zoom(sourceID: selection.id, in: zoom))
                         .presentationDetents([.medium, .large])
                         .presentationDragIndicator(.visible)
                 }
@@ -384,9 +385,13 @@ struct ListScreen: View {
                 try? await Task.sleep(for: .seconds(60))
             }
         }
+        .onChange(of: scenePhase) { _, phase in
+            // Pocketing the phone mid-street is a teardown like any other: the
+            // debounce must not outlive the foreground.
+            if phase != .active { flushPendingSave() }
+        }
         .onDisappear {
             undoTask?.cancel()
-            saveTask?.cancel()
             flushPendingSave()
         }
     }
@@ -633,19 +638,11 @@ struct ListScreen: View {
     }
 
     private func scheduleSave() {
-        saveTask?.cancel()
-        saveTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(350))
-            guard !Task.isCancelled else { return }
-            modelContext.save(reporting: notices, context: "Status konnte nicht gespeichert werden")
-        }
+        pendingSave.schedule(in: modelContext, reporting: notices)
     }
 
-    /// The pending save must land even if the view goes away first — the old code
-    /// fired the mutation from an unstored `Task` after teardown, so the change was
-    /// lost until something unrelated happened to save.
     private func flushPendingSave() {
-        modelContext.save(reporting: notices, context: "Status konnte nicht gespeichert werden")
+        pendingSave.flush(in: modelContext, reporting: notices)
     }
 
     @ViewBuilder
@@ -881,7 +878,7 @@ private struct StreetHeader: View {
         if isDone {
             Label("fertig", systemImage: "checkmark")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.green)
+                .foregroundStyle(Color.doneTone)
                 .labelStyle(.titleAndIcon)
                 .lineLimit(1)
         } else {
@@ -977,6 +974,7 @@ private struct StreetHeader: View {
 
 private struct UndoBanner: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAccent) private var accent
     let label: String
     let action: () -> Void
 
@@ -987,7 +985,7 @@ private struct UndoBanner: View {
             HStack(spacing: AppSpacing.tight) {
                 HStack(spacing: AppSpacing.snug) {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Color.doneTone)
                         .symbolEffect(
                             .bounce,
                             options: reduceMotion ? .nonRepeating : .default,
@@ -1007,7 +1005,7 @@ private struct UndoBanner: View {
                     .buttonStyle(.glassProminent)
                     .buttonBorderShape(.capsule)
                     .controlSize(.small)
-                    .tint(.blue)
+                    .tint(accent)
             }
         }
         .accessibilityElement(children: .contain)
@@ -1056,6 +1054,13 @@ struct StatusLegendSheet: View {
     }
 }
 
-extension UUID: @retroactive Identifiable {
-    public var id: UUID { self }
+/// The address whose sheet is open.
+///
+/// This used to be a bare `UUID?` plus `extension UUID: @retroactive Identifiable`
+/// at the bottom of this file — a conformance on a Foundation type, declared module
+/// wide, so that one `sheet(item:)` could bind to it. Wrapping instead keeps the
+/// conformance where it is used, and matches the route types the other screens
+/// already present with.
+private struct HouseSelection: Identifiable {
+    let id: UUID
 }

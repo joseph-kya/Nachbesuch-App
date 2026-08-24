@@ -381,7 +381,7 @@ struct BoundaryDrawingBar: View {
                 .buttonStyle(.glassProminent)
                 .controlSize(.large)
                 .buttonBorderShape(.circle)
-                .tint(.green)
+                .tint(accent)
                 .disabled(pointCount < 3)
                 .glassEffectID("map.drawSave", in: namespace)
                 .accessibilityLabel("Gebiet speichern")
@@ -399,6 +399,7 @@ struct BoundaryDrawingBar: View {
 /// previous version offset the whole composite upward by 25 pt, so the house landed
 /// roughly 8–15 m from where the user aimed.
 struct PlacementReticle: View {
+    @Environment(\.appAccent) private var accent
     enum Kind { case house, boundaryPoint }
     let kind: Kind
 
@@ -414,11 +415,11 @@ struct PlacementReticle: View {
                             .font(.title3)
                             .foregroundStyle(.white)
                             .frame(width: 44, height: 44)
-                            .background(.red, in: Circle())
+                            .background(accent, in: Circle())
                             .overlay(Circle().stroke(.white, lineWidth: 3))
                             .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
                         Triangle()
-                            .fill(.red)
+                            .fill(accent)
                             .frame(width: 12, height: 9)
                     }
                 case .boundaryPoint:
@@ -427,10 +428,10 @@ struct PlacementReticle: View {
                             .stroke(.white, lineWidth: 4)
                             .frame(width: 26, height: 26)
                         Circle()
-                            .stroke(.red, lineWidth: 2.5)
+                            .stroke(accent, lineWidth: 2.5)
                             .frame(width: 26, height: 26)
-                        Rectangle().fill(.red).frame(width: 2, height: 36)
-                        Rectangle().fill(.red).frame(width: 36, height: 2)
+                        Rectangle().fill(accent).frame(width: 2, height: 36)
+                        Rectangle().fill(accent).frame(width: 36, height: 2)
                     }
                     .shadow(color: .black.opacity(0.3), radius: 2)
                     // Centred on the anchor, not resting above it.

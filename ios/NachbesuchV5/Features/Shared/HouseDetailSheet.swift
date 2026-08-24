@@ -4,6 +4,7 @@ import UIKit
 
 /// Everything about one address.
 struct HouseDetailSheet: View {
+    @Environment(\.appAccent) private var accent
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
@@ -209,7 +210,7 @@ struct HouseDetailSheet: View {
                 .font(.title3)
                 .foregroundStyle(.white)
                 .frame(width: 44, height: 44)
-                .background(.red, in: RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
+                .background(accent, in: RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 3) {

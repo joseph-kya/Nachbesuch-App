@@ -24,6 +24,13 @@ extension VisitOutcome {
     var accessibilityDescription: String { title }
 }
 
+extension Color {
+    /// „Erledigt" — nothing left to do here, and the affirmative half of every
+    /// confirmation. Deliberately outside the accent: no `VisitOutcome` is green,
+    /// so green can only ever mean *done*, whichever accent the user picked.
+    static let doneTone = Color.green
+}
+
 extension Optional where Wrapped == VisitOutcome {
     var displayEmoji: String { self?.emoji ?? "•" }
     var displayTitle: String { self?.title ?? "Noch kein Status" }

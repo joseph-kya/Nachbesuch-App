@@ -663,7 +663,7 @@ struct GebietRow: View, Equatable {
                     if model.isActive {
                         Label("Aktiv", systemImage: "checkmark.circle.fill")
                             .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.green)
+                            .foregroundStyle(Color.doneTone)
                             .labelStyle(.titleAndIcon)
                             .fixedSize()
                             .symbolEffect(.bounce, value: reduceMotion ? false : model.isActive)
@@ -731,7 +731,7 @@ struct ShareSheet: View {
             VStack(spacing: AppSpacing.regular) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 46))
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Color.doneTone)
                 Text("Backup erstellt")
                     .font(.headline)
                 Text(url.lastPathComponent)
