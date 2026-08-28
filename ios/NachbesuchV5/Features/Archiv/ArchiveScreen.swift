@@ -126,7 +126,7 @@ struct ArchiveScreen: View {
     /// vertical geometry: a plain ScrollView with lazy SwiftUI content.
     private var archiveScroll: some View {
         ScrollView {
-            GlassEffectContainer(spacing: 2) {
+            CompatGlassContainer(spacing: 2) {
                 LazyVStack(alignment: .leading, spacing: AppSpacing.regular) {
                     ArchiveSearchField(text: $searchText)
                         .padding(.horizontal, AppSpacing.regular)
@@ -334,7 +334,7 @@ struct ArchiveScreen: View {
                         .font(.subheadline.weight(.bold))
                         .frame(width: 32, height: 32)
                 }
-                .buttonStyle(.glass)
+                .compatGlassButton()
                 .buttonBorderShape(.circle)
                 .padding(10)
                 .accessibilityLabel("Aktionen für \(gebiet.displayName)")

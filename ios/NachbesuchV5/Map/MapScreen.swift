@@ -95,6 +95,22 @@ struct MapScreen: View {
     private var isSelecting: Bool { selectedHouseIDs != nil }
 
     var body: some View {
+        // The chrome anchors to `Color.clear`, which respects the safe area, rather
+        // than to the map stack, which does not. `MapHost` bleeds to the screen
+        // edges, and a bottom overlay on the stack it lives in therefore aligns to
+        // the *screen* bottom — under the tab bar. That was invisible on iOS 26,
+        // where the tab bar is a floating pill the map is meant to show through, and
+        // covered the Liste and Archiv items on iOS 18, where it is an opaque strip.
+        // Anchoring to the safe area puts "bottom" at the top of the tab bar on both.
+        Color.clear
+            .overlay {
+                mapStack
+            }
+            .overlay(alignment: .top) { topChrome }
+            .overlay(alignment: .bottom) { bottomChrome }
+    }
+
+    private var mapStack: some View {
         ZStack {
             MapHost(
                 startupRegion: camera.startupRegion,
@@ -140,8 +156,6 @@ struct MapScreen: View {
                     .accessibilityHidden(true)
             }
         }
-        .overlay(alignment: .top) { topChrome }
-        .overlay(alignment: .bottom) { bottomChrome }
         .sheet(item: $sheetRoute, content: sheet(for:))
         .alert(item: $confirmation, content: alert(for:))
         .task(id: isActive) {
@@ -251,7 +265,7 @@ struct MapScreen: View {
     /// container can merge as they move.
     @ViewBuilder
     private var topChrome: some View {
-        GlassEffectContainer(spacing: AppSpacing.snug) {
+        CompatGlassContainer(spacing: AppSpacing.snug) {
             VStack(spacing: AppSpacing.snug) {
                 if isSelecting {
                     MapSelectionBar(
@@ -298,13 +312,13 @@ struct MapScreen: View {
         }
         // The summary bar and the selection bar share a glass id, so switching modes
         // reshapes one panel rather than dissolving two unrelated ones.
-        .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+        .compatGlassTransition(.matchedGeometry, reduceMotion: reduceMotion)
         .animation(.appFeedback(reduceMotion: reduceMotion), value: topChromeLayout)
     }
 
     @ViewBuilder
     private var bottomChrome: some View {
-        GlassEffectContainer(spacing: AppSpacing.snug) {
+        CompatGlassContainer(spacing: AppSpacing.snug) {
             VStack(alignment: .trailing, spacing: AppSpacing.snug) {
                 if showsTerritoryButton {
                     TerritoryButton(namespace: glass, action: showTerritory)
@@ -351,7 +365,7 @@ struct MapScreen: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
             bottomChromeHeight = height
         }
-        .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+        .compatGlassTransition(.matchedGeometry, reduceMotion: reduceMotion)
         .animation(.appFeedback(reduceMotion: reduceMotion), value: bottomChromeLayout)
     }
 

@@ -133,6 +133,11 @@ final class SearchModel: NSObject, @preconcurrency MKLocalSearchCompleterDelegat
             showsError = true
             return nil
         }
-        return item.location.coordinate
+        // `MKMapItem.location` is iOS 26-only; `placemark.coordinate` is deprecated
+        // there but carries the same point on iOS 18.
+        if #available(iOS 26, *) {
+            return item.location.coordinate
+        }
+        return item.placemark.coordinate
     }
 }

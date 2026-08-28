@@ -97,11 +97,11 @@ struct RootView: View {
         .preferredColorScheme(
             (AppAppearance(rawValue: appearanceRaw) ?? .system).colorScheme
         )
-        .tabBarMinimizeBehavior(.onScrollDown)
+        .compatTabBarMinimize()
         // `safeAreaBar` rather than `overlay`: an overlaid banner swallows taps in
         // the navigation bar behind it, and the bar variant additionally extends the
         // scroll edge effect of any scroll view it insets.
-        .safeAreaBar(edge: .top, spacing: 0) {
+        .compatSafeAreaBar(edge: .top, spacing: 0) {
             AppNoticeBanner()
         }
         .task {

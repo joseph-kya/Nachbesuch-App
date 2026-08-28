@@ -54,6 +54,6 @@ extension View {
     /// against, so it needs `materialize` instead — otherwise the glass shape is
     /// being asked to morph from a geometry that does not exist.
     func standaloneGlassTransition(reduceMotion: Bool) -> some View {
-        glassEffectTransition(reduceMotion ? .identity : .materialize)
+        compatGlassTransition(.materialize, reduceMotion: reduceMotion)
     }
 }

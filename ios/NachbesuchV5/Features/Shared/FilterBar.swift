@@ -42,7 +42,7 @@ struct FilterBar: View {
         ScrollView(.horizontal) {
             // Container spacing matches the stack's, so the chips stay distinct at
             // rest and only blend while the selection moves between them.
-            GlassEffectContainer(spacing: AppSpacing.tight) {
+            CompatGlassContainer(spacing: AppSpacing.tight) {
                 HStack(spacing: AppSpacing.tight) {
                     ForEach(chips) { chip in
                         chipButton(chip)
@@ -53,9 +53,9 @@ struct FilterBar: View {
                                 .font(.subheadline.weight(.semibold))
                                 .frame(width: 20, height: 20)
                         }
-                        .buttonStyle(.glass)
+                        .compatGlassButton()
                         .buttonBorderShape(.circle)
-                        .glassEffectID("filter.help", in: glass)
+                        .compatGlassID("filter.help", in: glass)
                         .accessibilityLabel("Erklärung der Status-Symbole")
                     }
                 }
@@ -68,7 +68,7 @@ struct FilterBar: View {
         .scrollIndicators(.hidden)
         .scrollClipDisabled()
         .contentMargins(.horizontal, AppSpacing.regular, for: .scrollContent)
-        .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+        .compatGlassTransition(.matchedGeometry, reduceMotion: reduceMotion)
         .animation(.appFeedback(reduceMotion: reduceMotion), value: selectedID)
         // One haptic per selection. Attaching the trigger to every chip produced
         // two taps (old selection off, new selection on).
@@ -98,15 +98,15 @@ struct FilterBar: View {
         Group {
             if chip.isSelected {
                 Button { onSelect(chip.id) } label: { label }
-                    .buttonStyle(.glassProminent)
+                    .compatGlassButton(prominent: true)
                     .tint(chip.tint)
             } else {
                 Button { onSelect(chip.id) } label: { label }
-                    .buttonStyle(.glass)
+                    .compatGlassButton()
                     .tint(.primary)
             }
         }
-            .glassEffectID("filter.\(chip.id)", in: glass)
+            .compatGlassID("filter.\(chip.id)", in: glass)
             .accessibilityLabel("\(contextLabel): \(chip.title)")
             .accessibilityValue(chip.count.map { "\($0)" } ?? "")
             .accessibilityAddTraits(chip.isSelected ? [.isButton, .isSelected] : .isButton)

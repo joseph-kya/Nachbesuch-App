@@ -170,18 +170,36 @@ struct AddHouseSheet: View {
     private func loadSuggestedAddress() async {
         defer { isLoadingAddress = false }
         let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
-        guard let request = MKReverseGeocodingRequest(location: location),
-              let items = try? await request.mapItems,
-              let item = items.first,
-              !Task.isCancelled
-        else { return }
-
-        let suggestion = item.addressRepresentations?.fullAddress(includingRegion: false, singleLine: true)
-            ?? item.address?.shortAddress
-            ?? item.address?.fullAddress
-        guard let suggestion, address.isEmpty else { return }
+        guard let suggestion = await Self.suggestedAddress(at: location), !Task.isCancelled else { return }
+        guard address.isEmpty else { return }
         address = suggestion
         addressIsFocused = false
+    }
+
+    /// `MKReverseGeocodingRequest` is iOS 26-only. On iOS 18 the deprecated
+    /// `CLGeocoder` is the only reverse geocoder, and its `CLPlacemark` has no
+    /// single-line formatter, so the street line is assembled from its fields.
+    private static func suggestedAddress(at location: CLLocation) async -> String? {
+        if #available(iOS 26, *) {
+            guard let request = MKReverseGeocodingRequest(location: location),
+                  let items = try? await request.mapItems,
+                  let item = items.first
+            else { return nil }
+            return item.addressRepresentations?.fullAddress(includingRegion: false, singleLine: true)
+                ?? item.address?.shortAddress
+                ?? item.address?.fullAddress
+        }
+        guard let placemarks = try? await CLGeocoder().reverseGeocodeLocation(location),
+              let placemark = placemarks.first
+        else { return nil }
+        let street = [placemark.thoroughfare, placemark.subThoroughfare]
+            .compactMap { $0 }
+            .joined(separator: " ")
+        let city = [placemark.postalCode, placemark.locality]
+            .compactMap { $0 }
+            .joined(separator: " ")
+        let line = [street, city].filter { !$0.isEmpty }.joined(separator: ", ")
+        return line.isEmpty ? placemark.name : line
     }
 }
 

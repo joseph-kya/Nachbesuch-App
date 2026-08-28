@@ -184,14 +184,23 @@ actor GebietNamingService {
         guard !Task.isCancelled else { return nil }
         lastRequestAt = .now
 
-        // `CLGeocoder` is deprecated as of iOS 26.
         let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
-        guard let request = MKReverseGeocodingRequest(location: location) else { return nil }
-        guard let items = try? await request.mapItems, let item = items.first else { return nil }
-
-        let resolved = GermanPlaceNameExtractor.extractPlaceName(from: item)
-        guard let resolved else { return nil }
+        guard let resolved = await reverseGeocode(location) else { return nil }
         cache[key] = resolved
         return resolved
+    }
+
+    /// `MKReverseGeocodingRequest` is iOS 26-only; `CLGeocoder` is deprecated there
+    /// but is the only reverse geocoder iOS 18 has. Both funnel into the same
+    /// extractor, so the naming rules stay in one place.
+    private func reverseGeocode(_ location: CLLocation) async -> ResolvedPlace? {
+        if #available(iOS 26, *) {
+            guard let request = MKReverseGeocodingRequest(location: location) else { return nil }
+            guard let items = try? await request.mapItems, let item = items.first else { return nil }
+            return GermanPlaceNameExtractor.extractPlaceName(from: item)
+        }
+        guard let placemarks = try? await CLGeocoder().reverseGeocodeLocation(location),
+              let placemark = placemarks.first else { return nil }
+        return GermanPlaceNameExtractor.extractPlaceName(from: placemark)
     }
 }

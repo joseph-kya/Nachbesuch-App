@@ -107,7 +107,7 @@ struct ListScreen: View {
             // Container spacing must stay **below** the gap between the shapes it
             // holds. At 10 pt against an 8 pt row gap every row fused into one long
             // white slab — the list stopped looking like cards at all.
-            GlassEffectContainer(spacing: 2) {
+            CompatGlassContainer(spacing: 2) {
                 List {
                     if sections.isEmpty {
                         emptyState
@@ -237,8 +237,8 @@ struct ListScreen: View {
             .background { AppBackdrop() }
             .scrollDismissesKeyboard(.interactively)
             .searchable(text: $searchText, prompt: "Adresse, Notiz oder Tür")
-            .searchToolbarBehavior(.minimize)
-            .safeAreaBar(edge: .top, spacing: 0) {
+            .compatMinimizedSearch()
+            .compatSafeAreaBar(edge: .top, spacing: 0) {
                 FilterBar(
                     chips: filterChips,
                     contextLabel: "Liste",
@@ -253,7 +253,7 @@ struct ListScreen: View {
             // `safeAreaInset`, not `overlay`: an overlaid banner covered the bottom
             // ~56 pt of the list, so the row the user had just changed became
             // untappable for the whole undo window.
-            .safeAreaBar(edge: .bottom, spacing: 0) {
+            .compatSafeAreaBar(edge: .bottom, spacing: 0) {
                 ZStack {
                     if let undo {
                         UndoBanner(label: undo.label) { performUndo(undo) }
@@ -981,7 +981,7 @@ private struct UndoBanner: View {
     var body: some View {
         // Two sibling glass shapes in one container. Nesting the button inside a
         // glass panel prevents Liquid Glass from sampling the content correctly.
-        GlassEffectContainer(spacing: AppSpacing.tight) {
+        CompatGlassContainer(spacing: AppSpacing.tight) {
             HStack(spacing: AppSpacing.tight) {
                 HStack(spacing: AppSpacing.snug) {
                     Image(systemName: "checkmark.circle.fill")
@@ -1002,7 +1002,7 @@ private struct UndoBanner: View {
 
                 Button("Rückgängig", action: action)
                     .font(.footnote.weight(.semibold))
-                    .buttonStyle(.glassProminent)
+                    .compatGlassButton(prominent: true)
                     .buttonBorderShape(.capsule)
                     .controlSize(.small)
                     .tint(accent)

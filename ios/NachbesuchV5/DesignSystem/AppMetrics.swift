@@ -37,7 +37,18 @@ enum AppSpacing {
 /// Measured on an iPhone 17 Pro: the pill clears the home indicator by roughly
 /// 45 pt, plus a gap so the last card does not touch it.
 enum AppChrome {
-    static let tabBarClearance: CGFloat = 58
+    static var tabBarClearance: CGFloat {
+        // Only iOS 26 has the floating pill. The iOS 18 tab bar sits in a reserved
+        // strip the system already accounts for, and there is no
+        // `GlassEffectContainer` there to swallow the safe area, so reserving the
+        // extra 58 pt would just leave a gap under the last row.
+        // Deliberately real availability, not `LegacyChrome.isActive`: the tab bar
+        // is drawn by the system, so the DEBUG override cannot turn the pill back
+        // into a strip. Tying the clearance to the override would only put content
+        // under a pill that is still there.
+        if #available(iOS 26, *) { return 58 }
+        return 0
+    }
 }
 
 /// The minimum comfortable hit target. Applied via `.tappable()` so a control can

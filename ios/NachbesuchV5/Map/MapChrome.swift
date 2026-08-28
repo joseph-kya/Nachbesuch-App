@@ -62,7 +62,7 @@ struct MapSummaryCard: View {
         .padding(.horizontal, AppSpacing.regular)
         .padding(.vertical, 12)
         .mapChrome()
-        .glassEffectID("map.header", in: namespace)
+        .compatGlassID("map.header", in: namespace)
     }
 }
 
@@ -169,9 +169,9 @@ struct MapActionBar<Menu: View>: View {
         HStack(spacing: AppSpacing.snug) {
             if isPlacing {
                 Button("Abbrechen", action: onCancelPlacement)
-                    .buttonStyle(.glass)
+                    .compatGlassButton()
                     .controlSize(.large)
-                    .glassEffectID("map.secondary", in: namespace)
+                    .compatGlassID("map.secondary", in: namespace)
             } else {
                 SwiftUI.Menu {
                     menu()
@@ -180,9 +180,9 @@ struct MapActionBar<Menu: View>: View {
                         .font(.headline)
                         .frame(width: 24, height: 24)
                 }
-                .buttonStyle(.glass)
+                .compatGlassButton()
                 .controlSize(.large)
-                .glassEffectID("map.secondary", in: namespace)
+                .compatGlassID("map.secondary", in: namespace)
                 .accessibilityLabel("Kartenoptionen")
             }
 
@@ -201,11 +201,11 @@ struct MapActionBar<Menu: View>: View {
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity, minHeight: 26)
             }
-            .buttonStyle(.glassProminent)
+            .compatGlassButton(prominent: true)
             .controlSize(.large)
             .tint(accent)
             .disabled(!canAddHouse)
-            .glassEffectID("map.primary", in: namespace)
+            .compatGlassID("map.primary", in: namespace)
         }
         .animation(.appFeedback(reduceMotion: reduceMotion), value: isPlacing)
     }
@@ -236,11 +236,11 @@ struct LocateButton: View {
                 .symbolEffect(.pulse, isActive: isBusy && !reduceMotion)
                 .contentTransition(.symbolEffect(.replace))
         }
-        .buttonStyle(.glass)
+        .compatGlassButton()
         .controlSize(.large)
         .buttonBorderShape(.circle)
         .tint(isFollowing ? accent : nil)
-        .glassEffectID("map.locate", in: namespace)
+        .compatGlassID("map.locate", in: namespace)
         .accessibilityLabel(isFollowing ? "Standortverfolgung beenden" : "Zu meinem Standort")
         .accessibilityAddTraits(isFollowing ? [.isSelected] : [])
         .animation(.appFeedback(reduceMotion: reduceMotion), value: isFollowing)
@@ -317,7 +317,7 @@ struct MapSelectionBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .mapChrome()
-        .glassEffectID("map.header", in: namespace)
+        .compatGlassID("map.header", in: namespace)
     }
 }
 
@@ -342,26 +342,26 @@ struct BoundaryDrawingBar: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .mapChrome(cornerRadius: AppRadius.control)
-                .glassEffectID("map.drawHint", in: namespace)
+                .compatGlassID("map.drawHint", in: namespace)
 
             HStack(spacing: AppSpacing.snug) {
                 Button(action: onCancel) {
                     Image(systemName: "xmark").frame(width: 24, height: 24)
                 }
-                .buttonStyle(.glass)
+                .compatGlassButton()
                 .controlSize(.large)
                 .buttonBorderShape(.circle)
-                .glassEffectID("map.drawCancel", in: namespace)
+                .compatGlassID("map.drawCancel", in: namespace)
                 .accessibilityLabel("Gebiet abbrechen")
 
                 Button(action: onUndo) {
                     Image(systemName: "arrow.uturn.backward").frame(width: 24, height: 24)
                 }
-                .buttonStyle(.glass)
+                .compatGlassButton()
                 .controlSize(.large)
                 .buttonBorderShape(.circle)
                 .disabled(pointCount == 0)
-                .glassEffectID("map.drawUndo", in: namespace)
+                .compatGlassID("map.drawUndo", in: namespace)
                 .accessibilityLabel("Letzten Punkt entfernen")
 
                 Button(action: onAddPoint) {
@@ -370,20 +370,20 @@ struct BoundaryDrawingBar: View {
                         .frame(maxWidth: .infinity, minHeight: 26)
                         .contentTransition(.numericText(value: Double(pointCount + 1)))
                 }
-                .buttonStyle(.glassProminent)
+                .compatGlassButton(prominent: true)
                 .controlSize(.large)
                 .tint(accent)
-                .glassEffectID("map.drawAdd", in: namespace)
+                .compatGlassID("map.drawAdd", in: namespace)
 
                 Button(action: onSave) {
                     Image(systemName: "checkmark").frame(width: 24, height: 24)
                 }
-                .buttonStyle(.glassProminent)
+                .compatGlassButton(prominent: true)
                 .controlSize(.large)
                 .buttonBorderShape(.circle)
                 .tint(accent)
                 .disabled(pointCount < 3)
-                .glassEffectID("map.drawSave", in: namespace)
+                .compatGlassID("map.drawSave", in: namespace)
                 .accessibilityLabel("Gebiet speichern")
             }
             .animation(.appFeedback(reduceMotion: reduceMotion), value: pointCount)
@@ -501,7 +501,7 @@ struct MapGuideCard: View {
         }
         .padding(AppSpacing.regular)
         .mapChrome()
-        .glassEffectID("map.guide", in: namespace)
+        .compatGlassID("map.guide", in: namespace)
     }
 }
 
@@ -624,10 +624,10 @@ struct TerritoryButton: View {
                 .font(.system(size: 17, weight: .semibold))
                 .frame(width: 26, height: 26)
         }
-        .buttonStyle(.glass)
+        .compatGlassButton()
         .controlSize(.large)
         .buttonBorderShape(.circle)
-        .glassEffectID("map.territory", in: namespace)
+        .compatGlassID("map.territory", in: namespace)
         // Entry/exit is owned by the caller's `standaloneGlassTransition`, so the
         // glass shape and the view animate as one thing instead of a SwiftUI scale
         // fighting a glass morph.

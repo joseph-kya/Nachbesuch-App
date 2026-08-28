@@ -34,7 +34,7 @@ struct MapChromeModifier: ViewModifier {
                 .overlay { shape.strokeBorder(.separator.opacity(0.4), lineWidth: 0.5) }
                 .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
         } else {
-            content.glassEffect(isInteractive ? .regular.interactive() : .regular, in: shape)
+            content.compatGlass(interactive: isInteractive, in: shape, legacyShadowRadius: 8)
         }
     }
 }
@@ -98,7 +98,7 @@ struct ContentCardModifier: ViewModifier {
                 .overlay { shape.strokeBorder(.separator.opacity(0.35), lineWidth: 0.5) }
         } else {
             content
-                .glassEffect(isInteractive ? .regular.interactive() : .regular, in: shape)
+                .compatGlass(interactive: isInteractive, in: shape)
                 // The rim is what makes a glass card read as an object rather than a
                 // lighter patch of background.
                 .overlay {

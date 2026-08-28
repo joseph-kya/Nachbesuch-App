@@ -1,12 +1,16 @@
+import CoreLocation
 import Foundation
 import MapKit
 
 /// Turns a geocoding result into a short, human place name for a territory.
 ///
-/// Reads `MKAddressRepresentations` rather than `CLPlacemark`, which is deprecated
-/// as of iOS 26. The structured API exposes a city but no postal code or district,
-/// so the postal code is recovered from the formatted address — reliable for the
-/// DACH region, where it is a leading 4- or 5-digit group.
+/// Two entry points feed one shared resolver. On iOS 26 the source is
+/// `MKAddressRepresentations`; the structured API exposes a city but no postal code
+/// or district, so the postal code is recovered from the formatted address —
+/// reliable for the DACH region, where it is a leading 4- or 5-digit group. On
+/// iOS 18 the source is `CLPlacemark`, which is deprecated as of iOS 26 but is the
+/// only reverse-geocoding result available there; it carries the postal code and
+/// the district (`subLocality`) as fields, so neither has to be parsed.
 nonisolated enum GermanPlaceNameExtractor {
     /// Cities big enough that the bare city name is useless as a territory label —
     /// canvassers there think in districts.
@@ -31,14 +35,39 @@ nonisolated enum GermanPlaceNameExtractor {
     /// Deliberately not a `"Gebiet"` sentinel: that string also counts as a generic
     /// name, so a failed geocode produced a territory that was classified as unnamed
     /// forever and re-geocoded on every launch.
+    @available(iOS 26, *)
     static func extractPlaceName(from item: MKMapItem) -> GebietNamingService.ResolvedPlace? {
         let representations = item.addressRepresentations
-        let city = representations?.cityName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fullAddress = item.address?.fullAddress ?? ""
-        let postalCode = postalCode(in: fullAddress)
+        return resolve(
+            city: representations?.cityName,
+            region: representations?.regionName,
+            postalCode: postalCode(in: item.address?.fullAddress ?? ""),
+            contextName: representations?.cityWithContext(.short)
+        )
+    }
+
+    /// The iOS 18 path. `subLocality` is what `cityWithContext(.short)` approximates
+    /// on the newer API — the district inside a large city.
+    static func extractPlaceName(from placemark: CLPlacemark) -> GebietNamingService.ResolvedPlace? {
+        resolve(
+            city: placemark.locality,
+            region: placemark.administrativeArea,
+            postalCode: placemark.postalCode,
+            contextName: placemark.subLocality
+        )
+    }
+
+    private static func resolve(
+        city rawCity: String?,
+        region rawRegion: String?,
+        postalCode rawPostalCode: String?,
+        contextName rawContext: String?
+    ) -> GebietNamingService.ResolvedPlace? {
+        let city = rawCity?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let postalCode = rawPostalCode?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard let city, !city.isEmpty else {
-            guard let region = representations?.regionName?.trimmingCharacters(in: .whitespacesAndNewlines),
+            guard let region = rawRegion?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !region.isEmpty else { return nil }
             let cleaned = cleanAdministrativeArea(region)
             return make(place: cleaned, postalCode: postalCode, city: cleaned)
@@ -55,8 +84,7 @@ nonisolated enum GermanPlaceNameExtractor {
         }
 
         if metropolitanCities.contains(folded),
-           let context = representations?.cityWithContext(.short)?
-               .trimmingCharacters(in: .whitespacesAndNewlines),
+           let context = rawContext?.trimmingCharacters(in: .whitespacesAndNewlines),
            !context.isEmpty, GebietNameAllocator.fold(context) != folded {
             return make(place: cleanPlaceName(context), postalCode: postalCode, city: city)
         }
