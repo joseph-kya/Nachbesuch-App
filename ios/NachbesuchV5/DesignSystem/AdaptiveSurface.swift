@@ -251,12 +251,12 @@ struct SectionSurface: View {
             if prefersOpaque {
                 shape.fill(Color(uiColor: .secondarySystemGroupedBackground))
             } else {
-                // Use the same regular Liquid Glass as Archive's `contentCard`.
-                // Keeping one material definition across content screens prevents
-                // the list from looking like a translucent overlay while Archive
-                // looks like the intended glass surface.
+                // Match Archive's regular material grade, but keep it strictly in
+                // the background. `glassEffect` is safe on Archive's card content;
+                // as a List row background it becomes an effect layer over the row
+                // and blurs the address text behind it.
                 Color.clear
-                    .compatGlass(interactive: false, in: shape)
+                    .background(.regularMaterial, in: shape)
                     .overlay {
                         shape.strokeBorder(
                             .white.opacity(colorScheme == .dark ? 0.10 : 0.55),
