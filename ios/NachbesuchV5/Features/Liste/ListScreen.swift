@@ -492,12 +492,14 @@ struct ListScreen: View {
     }
 
     private func toggleSection(_ id: String) {
-        // `appFeedback`, not `appSettle`: a `List` fades a removed row out in place
-        // before it reclaims the height, so there is an unavoidable moment of
-        // half-transparent rows in a full-height container. The fix is not a longer
-        // curve, it is a shorter one — and it has to match the curve the corner radii
-        // in `SectionSurface` travel on, or the two halves of the fold disagree.
-        withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
+        // SwiftUI's UIKit-backed List animates conditional row removal with recycled
+        // snapshots. That produces ghost rows and a delayed fold, especially when a
+        // street has many addresses. Keep the structural change atomic; the chevron,
+        // progress bar and completion mark still animate locally via their own value
+        // animations, so the interaction remains responsive without visual artifacts.
+        var transaction = Transaction()
+        transaction.animation = nil
+        withTransaction(transaction) {
             if collapsedSections.contains(id) {
                 collapsedSections.remove(id)
             } else {
@@ -521,7 +523,9 @@ struct ListScreen: View {
     /// screen animate — a `List` does not render the other 250 — so this costs the
     /// same as collapsing the one street the user is looking at.
     private func setAllStreets(expanded: Bool) {
-        withAnimation(.appSettle(reduceMotion: reduceMotion)) {
+        var transaction = Transaction()
+        transaction.animation = nil
+        withTransaction(transaction) {
             if expanded {
                 collapsedSections.removeAll()
             } else {
