@@ -36,6 +36,20 @@ extension AnyTransition {
             : .opacity.combined(with: .scale(scale: 0.94, anchor: .bottom))
     }
 
+    /// A block that comes and goes *inside* a card that stays put — the campaign-day
+    /// picker, the revisit summary, the damaged-data warning, the fifth metric tile.
+    ///
+    /// Deliberately not `appChrome`: those are free-floating panels that arrive from
+    /// nowhere, while these blocks are already inside a surface whose height is
+    /// animating around them. A fade with a shallow top-anchored scale reads as the
+    /// card growing a new section; anything deeper competes with the height change
+    /// and produces the double motion this used to be turned off to avoid.
+    static func blockSwap(reduceMotion: Bool) -> AnyTransition {
+        reduceMotion
+            ? .opacity
+            : .opacity.combined(with: .scale(scale: 0.97, anchor: .top))
+    }
+
     /// A banner sliding in from an edge — the notice banner and the undo banner.
     static func appBanner(edge: Edge, reduceMotion: Bool) -> AnyTransition {
         reduceMotion

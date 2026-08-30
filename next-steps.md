@@ -6,6 +6,16 @@ every decision below was made by the owner, not assumed by an agent.
 **Audience:** the AI agent executing this work, over long autonomous sessions.
 **Language:** English for instructions, German for anything a user sees.
 
+## Product direction update — 30 August 2026
+
+Route planning and external walking navigation are no longer product goals. Remove
+the dormant multi-stop engine, graph/cache/overlay state, route tests, and every
+`Fußroute öffnen` Apple Maps handoff. For short field distances the context switch is
+more work than the navigation saves. Do not replace it with an automatic next-stop
+cue: choosing the next house stays a manual map decision, and `Haus hinzufügen`
+remains the persistent primary action. This decision supersedes every later route,
+next-stop, restoration, or coordination item in this document.
+
 > ⚠️ **This app is in production.** Two real canvassing rounds (19. and 20.08.2026) with
 > real donor data exist on exactly one device and in exactly one folder. Until Task 1 and
 > Task 2 are done, every action taken here operates without a safety net. Do them first,
@@ -499,15 +509,14 @@ do not migrate themselves; the backup file from Task 1 is the only bridge.
 - the persisted camera and the `map.didEverCenterOnUser` flag
   (`ios/NachbesuchV5/Map/MapCameraStore.swift:17-21`) → the app will centre on the user once more, as if
   freshly installed. Harmless, but expected — do not treat it as a bug afterwards.
-- **any active recommended route** (`ios/NachbesuchV5/Route/RouteStore.swift`, keys `route.<uuid>`) →
-  👤 **finish or end the current route before migrating**, or the plan is lost while the
-  houses remain.
+- obsolete route preferences may remain in `UserDefaults`, but the route feature no
+  longer exists and those keys are intentionally ignored. No field data depends on them.
 
 ### 4.3 Procedure — do not reorder
 
 1. **Verify Task 1's acceptance checks pass.** Not "a backup exists" — the checks.
 2. Copy the backup to a second location.
-3. 👤 Owner: end any active route in the app.
+3. Confirm the current territory and camera are still present before exporting.
 4. Copy the folder — copy, not move; the original stays as a fallback until the new tree
    is proven:
    ```bash
@@ -531,10 +540,9 @@ do not migrate themselves; the backup file from Task 1 is the only bridge.
    grep -rn "at.volkshilfe.nachbesuch.v5" . --include="*.swift" --include="*.md" --include="*.sh" --include="*.yml"
    ```
    At minimum `README.md`, `next-steps.md`, `porting.md` and any `simctl` command.
-   Align the two Overpass `User-Agent` strings —
-   `ios/NachbesuchV5/Services/AreaHouseImportService.swift` currently sends `"Nachbesuch-iOS/2.8"` while
-   `ios/NachbesuchV5/Route/WalkingNetwork.swift` derives one from `CFBundleShortVersionString`. Make both
-   read `Nachbesuch-iOS/<MARKETING_VERSION>` from the bundle. Overpass mirrors block
+   Make the Overpass `User-Agent` in
+   `ios/NachbesuchV5/Services/AreaHouseImportService.swift` read
+   `Nachbesuch-iOS/<MARKETING_VERSION>` from the bundle. Overpass mirrors block
    anonymous or inconsistent clients, so this is not cosmetic.
 7. Build and test:
    ```bash

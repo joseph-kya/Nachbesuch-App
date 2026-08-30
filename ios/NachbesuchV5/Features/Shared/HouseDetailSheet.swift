@@ -8,6 +8,7 @@ struct HouseDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AppNoticeCenter.self) private var notices
 
     @Bindable var house: House
@@ -99,11 +100,6 @@ struct HouseDetailSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Section {
-                            Button {
-                                MapNavigation.openWalkingRoute(to: house.coordinate, name: house.address)
-                            } label: {
-                                Label("Fußroute öffnen", systemImage: "figure.walk")
-                            }
                             Button {
                                 UIPasteboard.general.string = house.address
                                 notices.show("Adresse kopiert")
@@ -220,6 +216,12 @@ struct HouseDetailSheet: View {
                 Text("\(summary.completedCount) von \(summary.units.count) erledigt")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .contentTransition(.numericText(value: Double(summary.completedCount)))
+                    .animation(
+                        .appFeedback(reduceMotion: reduceMotion),
+                        value: summary.completedCount
+                    )
                     .accessibilityLabel("Fortschritt")
                     .accessibilityValue("\(summary.completedCount) von \(summary.units.count) Türen erledigt")
             }
@@ -313,7 +315,6 @@ struct HouseDetailSheet: View {
         // Any non-"Später" answer settles the door, so its pending reminder has to
         // go — otherwise a phone buzzes at 18:00 for a household that joined at 17.
         cancelReminder(for: door.id)
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
         guard !house.isApartmentBuilding, current != outcome else { return }
         // Auto-dismiss is a convenience for the single-door case, but it must be
@@ -335,7 +336,6 @@ struct HouseDetailSheet: View {
         house.setOutcome(.later, for: unitID, day: writeDay, revisitAt: date)
         save()
         scheduleReminder(for: unitID, at: date)
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
         notices.show("Später um \(RevisitPlanner.clockFormatter.string(from: date))")
     }
 
@@ -349,7 +349,6 @@ struct HouseDetailSheet: View {
         for unitID in openDoorIDs {
             scheduleReminder(for: unitID, at: date)
         }
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
         notices.show("\(openDoorIDs.count) Türen: später um \(RevisitPlanner.clockFormatter.string(from: date))")
     }
 
@@ -405,7 +404,10 @@ struct HouseDetailSheet: View {
     }
 
     private func save() {
-        modelContext.save(reporting: notices, context: "Änderung konnte nicht gespeichert werden")
+        if modelContext.save(reporting: notices, context: "Änderung konnte nicht gespeichert werden") {
+            notices.show("Gespeichert")
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        }
     }
 }
 

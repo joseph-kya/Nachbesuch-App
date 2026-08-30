@@ -20,6 +20,7 @@ nonisolated struct BilanzSnapshot: Sendable, Equatable {
     var pendingRevisits = 0
     /// Doors eligible for a revisit at all: the denominator day 2 should be judged by.
     var revisitTargets = 0
+    var damagedHouseCount = 0
 
     static let empty = BilanzSnapshot()
 
@@ -52,7 +53,11 @@ nonisolated enum BilanzStatsEngine {
         snapshot.houseCount = seeds.count
 
         for seed in seeds {
-            guard let doors = try? decoder.decode([DoorResult].self, from: seed.unitsData) else { continue }
+            let state = HouseDataState.decode(seed.unitsData, decoder: decoder)
+            guard let doors = state.doors else {
+                snapshot.damagedHouseCount += 1
+                continue
+            }
             for door in doors {
                 snapshot.overall.ingest(door, scope: .combined)
 
@@ -68,6 +73,7 @@ nonisolated enum BilanzStatsEngine {
                 // Day 2 is only meaningful for doors that needed one.
                 let isRevisitTarget = door.outcome == .notHome || door.outcome == nil
                 if isRevisitTarget { snapshot.revisitTargets += 1 }
+                guard isRevisitTarget || door.day2Outcome != nil else { continue }
                 snapshot.day2.unitCount += 1
                 if let day2Outcome = door.result(on: 2) {
                     snapshot.day2.completed += 1

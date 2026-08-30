@@ -59,12 +59,20 @@ nonisolated enum VisitOutcome: String, Codable, CaseIterable, Hashable, Identifi
 
     /// A shape cue that is independent of hue, so the outcomes stay
     /// distinguishable for colour-blind users and in greyscale.
+    /// Every state is enclosed, so a column of them shares one silhouette and reads
+    /// as a status column rather than as five unrelated pictures.
+    ///
+    /// The set used to mix two enclosed symbols with three free-standing ones, which
+    /// at 17 pt gave neighbouring rows visibly different ink weight and different
+    /// optical widths — the same misalignment the cards had, one column further in.
+    /// `clock.fill` and `circle.dashed` are already discs, so they stay as they are;
+    /// the two loose glyphs move into circles to match.
     nonisolated var symbolName: String {
         switch self {
         case .notHome: "arrow.clockwise.circle.fill"
-        case .earlyNo: "hand.raised.slash.fill"
+        case .earlyNo: "hand.raised.circle.fill"
         case .lateNo: "xmark.circle.fill"
-        case .joined: "heart.fill"
+        case .joined: "heart.circle.fill"
         case .later: "clock.fill"
         }
     }

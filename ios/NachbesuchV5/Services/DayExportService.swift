@@ -36,8 +36,12 @@ nonisolated struct ExportDocument: Sendable {
     let includedHouses: Int
     let totalHouses: Int
     let visitedOnly: Bool
+    /// Present when the source of truth was unreadable. Share actions are withheld;
+    /// an apparently successful but incomplete export is never produced.
+    let validationFailure: String?
 
     var isEmpty: Bool { houses.isEmpty }
+    var isExportable: Bool { validationFailure == nil }
 
     /// "Ottakring · 1160 Wien · 19. August 2026 · Gesamt"
     var subtitle: String {
@@ -142,9 +146,14 @@ enum DayExportService {
         var summary = ExportSummary()
         var exported: [ExportHouse] = []
         var included = 0
+        var damagedAddress: String?
 
         for house in raw {
-            guard let doors = try? decoder.decode([DoorResult].self, from: house.unitsData) else { continue }
+            let state = HouseDataState.decode(house.unitsData, decoder: decoder)
+            guard let doors = state.doors else {
+                damagedAddress = house.address
+                break
+            }
 
             // Strict: what was actually recorded for this scope.
             let recorded = doors.compactMap { door -> (DoorResult, VisitOutcome)? in
@@ -239,7 +248,10 @@ enum DayExportService {
             summary: summary,
             includedHouses: included,
             totalHouses: raw.count,
-            visitedOnly: options.visitedOnly
+            visitedOnly: options.visitedOnly,
+            validationFailure: damagedAddress.map {
+                "Daten beschädigt bei „\($0)“. Der Export wurde nicht erstellt."
+            }
         )
     }
 

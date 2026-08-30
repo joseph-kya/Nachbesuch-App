@@ -6,8 +6,8 @@ import UniformTypeIdentifiers
 /// Memory and accounting: the balance for the active territory, then every
 /// territory grouped by campaign day.
 struct ArchiveScreen: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAccent) private var accent
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.modelContext) private var modelContext
     @Environment(AppNoticeCenter.self) private var notices
 
@@ -30,6 +30,19 @@ struct ArchiveScreen: View {
     @State private var backupURL: URL?
     @State private var showsImporter = false
     @State private var isWorking = false
+    /// Bumped whenever SwiftData commits, so the index can be rebuilt on a real
+    /// change without `body` paying to look for one.
+    ///
+    /// The key this replaces ended in `houses.max(by: { $0.updatedAt < $1.updatedAt })`.
+    /// That is an O(n) scan that faults `updatedAt` on **every** house in the
+    /// territory, and because it was computed inside `body` — as the `id` of a
+    /// `.task` — it ran again on every single body evaluation. This screen scanned twice — houses *and* territories. Tapping a card sets
+    /// `selectedGebietID`, which re-evaluates `body`, which paid for a full scan of
+    /// 1000+ models before the selection could be drawn. That is the tap
+    /// that lands seconds late, and the inconsistency is faulting: the scan is cheap
+    /// once the objects are in memory and expensive when they are not.
+    @State private var dataVersion = 0
+
 
     enum ArchiveFilter: String, CaseIterable, Identifiable {
         case all, open
@@ -73,16 +86,14 @@ struct ArchiveScreen: View {
     private struct IndexKey: Hashable {
         let gebietCount: Int
         let houseCount: Int
-        let newestHouse: Date?
-        let newestGebiet: Date?
+        let version: Int
     }
 
     private var indexKey: IndexKey {
         IndexKey(
             gebietCount: gebiete.count,
             houseCount: houses.count,
-            newestHouse: houses.max(by: { $0.updatedAt < $1.updatedAt })?.updatedAt,
-            newestGebiet: gebiete.max(by: { $0.updatedAt < $1.updatedAt })?.updatedAt
+            version: dataVersion
         )
     }
 
@@ -118,6 +129,9 @@ struct ArchiveScreen: View {
             debouncedQuery = searchText
         }
         .onChange(of: debouncedQuery) { _, _ in recomputeResults() }
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+            dataVersion &+= 1
+        }
     }
 
     /// A native `List` combines UIKit cell reuse, elastic section headers, searchable
@@ -125,18 +139,20 @@ struct ArchiveScreen: View {
     /// four tried to settle in different frames. This deliberately has one owner for
     /// vertical geometry: a plain ScrollView with lazy SwiftUI content.
     private var archiveScroll: some View {
-        ScrollView {
+        ScrollViewReader { proxy in
+            ScrollView {
             CompatGlassContainer(spacing: 2) {
                 LazyVStack(alignment: .leading, spacing: AppSpacing.regular) {
                     ArchiveSearchField(text: $searchText)
                         .padding(.horizontal, AppSpacing.regular)
+                        .id(Self.topAnchor)
 
                     FilterBar(
                         chips: archiveFilterChips,
                         contextLabel: "Archiv",
                         onSelect: { id in
                             guard let value = ArchiveFilter(rawValue: id) else { return }
-                            applyFilter(value)
+                            applyFilter(value, proxy: proxy)
                         }
                     )
 
@@ -161,7 +177,7 @@ struct ArchiveScreen: View {
                         LazyVStack(alignment: .leading, spacing: AppSpacing.snug) {
                             ArchiveSectionLabel(title: section.title)
                             ForEach(section.items) { item in
-                                gebietCard(item)
+                                gebietCard(item, proxy: proxy)
                             }
                         }
                         .padding(.horizontal, AppSpacing.regular)
@@ -180,8 +196,33 @@ struct ArchiveScreen: View {
                 // tab bar with no way to scroll it clear.
                 .padding(.bottom, AppSpacing.loose + AppChrome.tabBarClearance)
             }
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .compatSoftScrollEdges()
         }
-        .scrollDismissesKeyboard(.interactively)
+    }
+
+    /// The identity the screen returns to whenever the block above the list changes
+    /// height. See `selectGebiet`.
+    private static let topAnchor = "archive.top"
+
+    /// Put the balance back on screen after something replaced it.
+    ///
+    /// The active territory's balance sits at the top of this scroll view, and its
+    /// height is genuinely variable: the campaign-day picker, the revisit summary and
+    /// the fifth metric tile each exist for some territories and not others, which is
+    /// up to ~190 pt of difference. Swapping it while the user is scrolled past it
+    /// moved every card below by that difference — the card under their finger jumped,
+    /// and when the content shrank the scroll view bounced off its new content height.
+    /// Both of the symptoms this screen was reported for.
+    ///
+    /// Freezing the swap (which is what this screen used to do) removes the animation
+    /// but not the jump. Going back to the balance does: the one thing that moves is
+    /// the list, deliberately, in the direction of the thing the tap just changed —
+    /// which is also the confirmation the tap was missing, since the balance was
+    /// off-screen the whole time.
+    private func returnToBalance(_ proxy: ScrollViewProxy) {
+        proxy.scrollTo(Self.topAnchor, anchor: .top)
     }
 
     @ToolbarContentBuilder
@@ -273,12 +314,12 @@ struct ArchiveScreen: View {
     // MARK: Row
 
     @ViewBuilder
-    private func gebietCard(_ item: ArchiveSearchResult) -> some View {
+    private func gebietCard(_ item: ArchiveSearchResult, proxy: ScrollViewProxy) -> some View {
         if let gebiet = gebiete.first(where: { $0.id == item.gebietID }) {
             let entry = index.entry(for: gebiet.id)
             ZStack(alignment: .topTrailing) {
                 Button {
-                    selectGebiet(gebiet.id)
+                    selectGebiet(gebiet.id, proxy: proxy)
                 } label: {
                     GebietRow(
                         model: GebietRowModel(
@@ -296,17 +337,19 @@ struct ArchiveScreen: View {
                         )
                     )
                     .equatable()
-                    // Reserve the top-right hit area for the visible action menu.
-                    .padding(.trailing, 42)
+                    // Reserve the top-right hit area for the visible action menu —
+                    // now 44 pt plus its margin, so the text cannot run under it.
+                    .padding(.trailing, 52)
                     .padding(.leading, 16)
                     .padding(.vertical, 13)
                     .contentCard(cornerRadius: AppRadius.card)
+                    // Always present, only its opacity moves. Inserting and removing
+                    // the shape made the wash pop on and off; a fill that is animatable
+                    // lets the old and the new card trade the highlight in one motion.
                     .overlay {
-                        if gebiet.id == activeGebiet?.id {
-                            RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
-                                .fill(accent.opacity(0.08))
-                                .allowsHitTesting(false)
-                        }
+                        RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                            .fill(accent.opacity(gebiet.id == activeGebiet?.id ? 0.08 : 0))
+                            .allowsHitTesting(false)
                     }
                 }
                 .buttonStyle(PressableRowStyle())
@@ -336,7 +379,14 @@ struct ArchiveScreen: View {
                 }
                 .compatGlassButton()
                 .buttonBorderShape(.circle)
-                .padding(10)
+                // `.padding(10)` sat here on its own. Padding *outside* a styled
+                // button is margin, not target: it moves the control inwards and
+                // leaves it the size of its 32 pt glyph, under Apple's 44 pt
+                // minimum, floating over a card-sized button that happily takes any
+                // tap that misses. `.tappable()` is this codebase's own helper for
+                // exactly that, and it was not applied here.
+                .tappable()
+                .padding(4)
                 .accessibilityLabel("Aktionen für \(gebiet.displayName)")
             }
             // VoiceOver equivalents: the swipe actions were previously reachable
@@ -410,10 +460,14 @@ struct ArchiveScreen: View {
         return found
     }
 
-    /// Balance visibility and filtered cards change atomically and without a layout
-    /// animation. Animating removal of the chart's glass card leaves a compositor
-    /// snapshot behind for several frames, so the balance flashes over the new list.
-    private func applyFilter(_ value: ArchiveFilter) {
+    /// Balance visibility and the filtered cards change atomically and without a
+    /// layout animation. "Offen" hides the balance card outright, and animating the
+    /// *removal* of a glass card leaves a compositor snapshot behind for several
+    /// frames, so the balance flashed over the new list. That is still true, so the
+    /// swap itself stays frozen — but the list is returned to the top afterwards,
+    /// because a filter that drops half the cards otherwise leaves the user parked at
+    /// an offset that no longer refers to anything they were looking at.
+    private func applyFilter(_ value: ArchiveFilter, proxy: ScrollViewProxy) {
         guard filter != value else { return }
         let nextResults = searchResults(filter: value)
         var transaction = Transaction()
@@ -422,19 +476,25 @@ struct ArchiveScreen: View {
             filter = value
             results = nextResults
         }
+        withAnimation(.appSettle(reduceMotion: reduceMotion)) {
+            returnToBalance(proxy)
+        }
     }
 
     /// Replacing the active territory swaps the complete balance subtree: chart,
-    /// counters, progress and (for two-day territories) the scope picker. Treating
-    /// that as one animated selection made unrelated shapes interpolate at once and
-    /// left compositor snapshots behind. The row still supplies normal press and
-    /// selection feedback; the data replacement itself is deliberately atomic.
-    private func selectGebiet(_ id: UUID) {
+    /// counters, progress and (for two-day territories) the campaign-day picker.
+    ///
+    /// The card around that subtree survives the swap, so — unlike the filter above —
+    /// there is no glass shape being inserted or removed here and nothing to leave a
+    /// snapshot behind. What is left is one card resizing while its contents cross-fade
+    /// and its numbers roll, which is exactly what `BalanceSection` now animates. The
+    /// scroll movement is folded into the same transaction so the list and the card
+    /// settle together instead of racing.
+    private func selectGebiet(_ id: UUID, proxy: ScrollViewProxy) {
         guard selectedGebietID != id else { return }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
+        withAnimation(.appSettle(reduceMotion: reduceMotion)) {
             selectedGebietID = id
+            returnToBalance(proxy)
         }
     }
 
@@ -485,7 +545,7 @@ struct ArchiveScreen: View {
             return Alert(
                 title: Text("„\(name)“ löschen?"),
                 message: Text("Alle Häuser und Ergebnisse dieses Gebiets werden entfernt."),
-                primaryButton: .destructive(Text("Löschen")) { delete(id) },
+                primaryButton: .destructive(Text("Löschen")) { Task { await delete(id) } },
                 secondaryButton: .cancel(Text("Abbrechen"))
             )
         case .restore(let backup):
@@ -502,12 +562,23 @@ struct ArchiveScreen: View {
 
     // MARK: Actions
 
-    private func delete(_ id: UUID) {
+    private func delete(_ id: UUID) async {
         guard let gebiet = gebiete.first(where: { $0.id == id }) else { return }
-        // Batch delete instead of a synchronous per-house loop on the main actor.
-        try? modelContext.delete(model: House.self, where: #Predicate { $0.gebietID == id || $0.dayID == id })
+        let dependents: [House]
+        do {
+            dependents = try modelContext.fetch(
+                FetchDescriptor<House>(predicate: #Predicate { $0.gebietID == id || $0.dayID == id })
+            )
+        } catch {
+            notices.report(error, context: "Zugehörige Häuser konnten nicht gelesen werden. Nichts wurde gelöscht")
+            return
+        }
+        for house in dependents { modelContext.delete(house) }
         modelContext.delete(gebiet)
         guard modelContext.save(reporting: notices, context: "Gebiet konnte nicht gelöscht werden") else { return }
+        for house in dependents {
+            await ReminderService.cancelAllRevisits(house: house.id)
+        }
         // Deliberately no replacement territory. The old code fabricated one under a
         // third name whenever the last was deleted, so the user could never reach the
         // empty state they had explicitly asked for.
@@ -567,6 +638,7 @@ struct ArchiveScreen: View {
 /// Search lives in scroll content rather than navigation chrome. Its height never
 /// depends on scroll velocity, overscroll or large-title state.
 private struct ArchiveSearchField: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var text: String
 
     var body: some View {
@@ -586,9 +658,11 @@ private struct ArchiveSearchField: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .transition(.blockSwap(reduceMotion: reduceMotion))
                 .accessibilityLabel("Suche löschen")
             }
         }
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: text.isEmpty)
         .padding(.horizontal, 14)
         .frame(minHeight: AppTouch.minimum)
         .navigationGlass(cornerRadius: AppRadius.control, interactive: true)
@@ -610,6 +684,9 @@ private struct ArchiveSectionLabel: View {
             Text(title)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
+                // The active-territory label is retitled in place when the selection
+                // changes; without this the old and the new name hard-cut.
+                .contentTransition(.opacity)
             Spacer(minLength: 0)
             if let trailing {
                 Text(trailing)
@@ -643,17 +720,22 @@ struct GebietRowModel: Identifiable, Equatable {
 /// that did not change. The old row was a 150-line function returning `some View`,
 /// which meant every row re-rendered on every keystroke.
 struct GebietRow: View, Equatable {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAccent) private var accent
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let model: GebietRowModel
 
     static func == (lhs: GebietRow, rhs: GebietRow) -> Bool { lhs.model == rhs.model }
 
     var body: some View {
         HStack(spacing: AppSpacing.snug) {
+            // The rail grows out of the row's centre rather than blinking on. Two
+            // rows change at once when the selection moves, so this reads as the
+            // marker travelling from the old territory to the new one.
             RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(model.isActive ? accent : .clear)
+                .fill(accent)
                 .frame(width: 4)
+                .scaleEffect(y: model.isActive ? 1 : 0, anchor: .center)
+                .opacity(model.isActive ? 1 : 0)
 
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: AppSpacing.tight) {
@@ -666,7 +748,7 @@ struct GebietRow: View, Equatable {
                             .foregroundStyle(Color.doneTone)
                             .labelStyle(.titleAndIcon)
                             .fixedSize()
-                            .symbolEffect(.bounce, value: reduceMotion ? false : model.isActive)
+                            .transition(.blockSwap(reduceMotion: reduceMotion))
                     }
                     if model.isTwoDay {
                         Text("2 Tage")
@@ -686,10 +768,10 @@ struct GebietRow: View, Equatable {
                 HStack(spacing: AppSpacing.snug) {
                     ProgressView(value: model.progress)
                         .tint(model.open == 0 ? .green : .red)
-                        .animation(.appSettle(reduceMotion: reduceMotion), value: model.progress)
                     Text("\(model.completed)/\(model.total)")
                         .font(.caption.weight(.medium))
                         .monospacedDigit()
+                        .contentTransition(.numericText(value: Double(model.completed)))
                         .foregroundStyle(.secondary)
                 }
 
@@ -702,6 +784,10 @@ struct GebietRow: View, Equatable {
             }
         }
         .padding(.vertical, 6)
+        // Only the selection is animated here. Keying the whole model would make a
+        // row rebuilt by a search keystroke animate its way in, which is not a state
+        // change the user made and reads as the list twitching.
+        .animation(.appSettle(reduceMotion: reduceMotion), value: model.isActive)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(model.name)
         .accessibilityValue(
@@ -715,7 +801,9 @@ struct GebietRow: View, Equatable {
     private func statLabel(systemImage: String, value: Int, tint: Color) -> some View {
         HStack(spacing: 3) {
             Image(systemName: systemImage).foregroundStyle(tint)
-            Text("\(value)").monospacedDigit()
+            Text("\(value)")
+                .monospacedDigit()
+                .contentTransition(.numericText(value: Double(value)))
         }
     }
 }

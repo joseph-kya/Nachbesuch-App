@@ -1,5 +1,6 @@
 import CoreLocation
 import Observation
+import UIKit
 
 /// Continuous, foreground-only location + heading for the map.
 ///
@@ -73,6 +74,7 @@ final class LocationService: NSObject {
     /// Registers a screen that wants live updates.
     func beginUsing() {
         users += 1
+        refreshHeadingOrientation()
         startStreaming()
     }
 
@@ -106,7 +108,7 @@ final class LocationService: NSObject {
     }
 
     private func beginUpdates() {
-        guard !isStreaming else { return }
+        guard users > 0, !isStreaming else { return }
         isStreaming = true
         manager.startUpdatingLocation()
         // Heading needs a magnetometer, which the Simulator does not have.
@@ -118,6 +120,23 @@ final class LocationService: NSObject {
 
     /// Whether a direction indicator can be shown at all on this device.
     var isHeadingAvailable: Bool { CLLocationManager.headingAvailable() }
+
+    /// Core Location reports headings relative to the physical top of the device;
+    /// keep that reference aligned with the active window in landscape and iPad
+    /// multitasking instead of assuming portrait forever.
+    func refreshHeadingOrientation() {
+        guard let orientation = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive })?
+            .interfaceOrientation else { return }
+        switch orientation {
+        case .portrait: manager.headingOrientation = .portrait
+        case .portraitUpsideDown: manager.headingOrientation = .portraitUpsideDown
+        case .landscapeLeft: manager.headingOrientation = .landscapeLeft
+        case .landscapeRight: manager.headingOrientation = .landscapeRight
+        default: break
+        }
+    }
 
     /// Temporarily raises accuracy while the user is actively being followed.
     func setFollowing(_ following: Bool) {
@@ -183,6 +202,7 @@ extension LocationService: CLLocationManagerDelegate {
             case .authorizedWhenInUse, .authorizedAlways:
                 self.beginUpdates()
             case .denied, .restricted:
+                self.stopStreaming()
                 self.resolveFreshFixWaiters(with: nil)
             default:
                 break

@@ -18,6 +18,30 @@ nonisolated enum ReminderSettings {
     /// Whether the standing 14/16/18 list reminder is scheduled. Default on — the
     /// prompt is the reason the feature was asked for.
     nonisolated static let dailyListKey = "reminders.dailyList"
+    nonisolated static let unscheduledCountKey = "reminders.unscheduledRevisits"
+}
+
+nonisolated struct RevisitReminderCandidate: Sendable, Equatable {
+    let houseID: UUID
+    let doorID: UUID
+    let day: Int
+    let address: String
+    let doorLabel: String
+    let isApartmentBuilding: Bool
+    let date: Date
+}
+
+nonisolated struct ReminderReconciliationResult: Sendable, Equatable {
+    let dueInApp: Int
+    let scheduled: Int
+    let unscheduled: Int
+    let failed: Int
+}
+
+nonisolated struct ReminderSchedulePlan: Sendable, Equatable {
+    let dueInApp: Int
+    let scheduledCandidates: [RevisitReminderCandidate]
+    let overflow: Int
 }
 
 nonisolated enum ReminderService {
@@ -36,6 +60,29 @@ nonisolated enum ReminderService {
 
     nonisolated static let dailyListTitle = "Nachbesuchsliste"
     nonisolated static let dailyListBody = "Nachbesuchsliste an Teamleiter senden!"
+    /// iOS retains at most 64 pending local requests. Fifteen slots remain reserved
+    /// for the standing weekday reminders; revisit appointments always get the
+    /// remaining budget first and every overflow stays visible in the canonical
+    /// in-app queue.
+    nonisolated static let pendingRequestLimit = 64
+    nonisolated static let revisitBudget = 49
+
+    nonisolated static func plan(
+        _ candidates: [RevisitReminderCandidate],
+        now: Date,
+        budget: Int = revisitBudget
+    ) -> ReminderSchedulePlan {
+        let due = candidates.filter { $0.date <= now }.count
+        let future = candidates.filter { $0.date > now }.sorted {
+            ($0.date, $0.address, $0.doorLabel) < ($1.date, $1.address, $1.doorLabel)
+        }
+        let selected = Array(future.prefix(max(budget, 0)))
+        return ReminderSchedulePlan(
+            dueInApp: due,
+            scheduledCandidates: selected,
+            overflow: max(future.count - selected.count, 0)
+        )
+    }
 
     nonisolated static func revisitIdentifier(house: UUID, door: UUID, day: Int) -> String {
         "\(revisitPrefix).\(house.uuidString).\(door.uuidString).\(day)"
@@ -107,7 +154,6 @@ nonisolated enum ReminderService {
         content.body = isApartmentBuilding ? "\(address) — \(doorLabel)" : address
         content.sound = .default
         content.userInfo = ["houseID": house.uuidString, "doorID": door.uuidString]
-        content.interruptionLevel = .timeSensitive
 
         let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
         let request = UNNotificationRequest(
@@ -131,6 +177,66 @@ nonisolated enum ReminderService {
         let identifiers = pending.map(\.identifier).filter { $0.hasPrefix(prefix) }
         guard !identifiers.isEmpty else { return }
         await cancel(identifiers: identifiers)
+    }
+
+    /// Rebuilds Notification Center from persisted visit state. Notifications are
+    /// a projection; the returned counts let the UI be honest when iOS capacity or
+    /// authorization prevents that projection from being complete.
+    nonisolated static func reconcile(_ candidates: [RevisitReminderCandidate], now: Date = .now) async -> ReminderReconciliationResult {
+        let center = UNUserNotificationCenter.current()
+        let pending = await center.pendingNotificationRequests()
+        let oldRevisits = pending.map(\.identifier).filter { $0.hasPrefix("\(revisitPrefix).") }
+        if !oldRevisits.isEmpty { center.removePendingNotificationRequests(withIdentifiers: oldRevisits) }
+
+        let plan = plan(candidates, now: now)
+        let selected = plan.scheduledCandidates
+
+        guard await ensureAuthorized() else {
+            return ReminderReconciliationResult(
+                dueInApp: plan.dueInApp,
+                scheduled: 0,
+                unscheduled: selected.count + plan.overflow,
+                failed: 0
+            )
+        }
+
+        var failed = 0
+        for candidate in selected {
+            let content = UNMutableNotificationContent()
+            content.title = "Nachbesuch fällig"
+            content.body = candidate.isApartmentBuilding
+                ? "\(candidate.address) — \(candidate.doorLabel)"
+                : candidate.address
+            content.sound = .default
+            content.userInfo = [
+                "houseID": candidate.houseID.uuidString,
+                "doorID": candidate.doorID.uuidString,
+                "day": candidate.day
+            ]
+            let components = Calendar.current.dateComponents(
+                [.year, .month, .day, .hour, .minute], from: candidate.date
+            )
+            let request = UNNotificationRequest(
+                identifier: revisitIdentifier(
+                    house: candidate.houseID, door: candidate.doorID, day: candidate.day
+                ),
+                content: content,
+                trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+            )
+            do { try await center.add(request) } catch { failed += 1 }
+        }
+
+        let verified = await center.pendingNotificationRequests()
+            .map(\.identifier)
+            .filter { $0.hasPrefix("\(revisitPrefix).") }
+            .count
+        let verificationMisses = max(selected.count - verified, 0)
+        return ReminderReconciliationResult(
+            dueInApp: plan.dueInApp,
+            scheduled: verified,
+            unscheduled: plan.overflow + verificationMisses,
+            failed: failed
+        )
     }
 
     // MARK: Daily list reminder

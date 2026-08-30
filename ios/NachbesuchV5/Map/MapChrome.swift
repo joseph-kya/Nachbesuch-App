@@ -104,6 +104,11 @@ struct StatStrip: View {
                 label: "Häuser",
                 tint: .secondary
             )
+            if stats.damagedHouseCount > 0 {
+                Label("\(stats.damagedHouseCount) beschädigt", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .accessibilityLabel("\(stats.damagedHouseCount) Häuser mit beschädigten Daten")
+            }
             if !isStacked { Spacer(minLength: 0) }
         }
         // Without this the wrapped block sized to its content and the card centred
@@ -187,22 +192,23 @@ struct MapActionBar<Menu: View>: View {
             }
 
             Button(action: onPrimary) {
-                HStack(spacing: 7) {
+                ViewThatFits(in: .horizontal) {
+                    Label(
+                        isPlacing ? "Hier eintragen" : "Haus hinzufügen",
+                        systemImage: isPlacing ? "checkmark" : "plus"
+                    )
+                    Label(
+                        isPlacing ? "Eintragen" : "Hinzufügen",
+                        systemImage: isPlacing ? "checkmark" : "plus"
+                    )
                     Image(systemName: isPlacing ? "checkmark" : "plus")
-                        .contentTransition(.symbolEffect(.replace))
-                    Text(isPlacing ? "Hier eintragen" : "Haus hinzufügen")
-                        // At accessibility sizes this wrapped to three lines and
-                        // hyphenated mid-word — "Haus + hinzufü-gen" — with the icon
-                        // stranded on the second line. One line that scales down is
-                        // legible; a hyphenated fragment is not.
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
                 }
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity, minHeight: 26)
             }
             .compatGlassButton(prominent: true)
             .controlSize(.large)
+            .buttonBorderShape(.capsule)
             .tint(accent)
             .disabled(!canAddHouse)
             .compatGlassID("map.primary", in: namespace)

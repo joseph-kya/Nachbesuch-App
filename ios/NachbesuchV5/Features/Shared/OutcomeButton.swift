@@ -109,7 +109,15 @@ struct LaterButton: View {
 }
 
 /// Compact status glyph for list rows — shape plus colour, never colour alone.
+///
+/// The glyph owns its own animation rather than relying on the caller. It is the
+/// single place in the app where a door's result becomes visible, and it is shown in
+/// list rows, apartment rows and the map callout — all of which change it by writing
+/// to the model, which is not an animated transaction anywhere. `.replace` makes the
+/// old symbol hand over to the new one instead of the row blinking.
 struct OutcomeGlyph: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let outcome: VisitOutcome?
     var size: Font = .body
 
@@ -117,6 +125,8 @@ struct OutcomeGlyph: View {
         Image(systemName: outcome?.symbolName ?? "circle.dashed")
             .font(size)
             .foregroundStyle(outcome.displayTint)
+            .contentTransition(.symbolEffect(.replace.downUp))
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: outcome)
             .accessibilityHidden(true)
     }
 }

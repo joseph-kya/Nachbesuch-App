@@ -14,6 +14,7 @@ final class PendingSave {
     private var task: Task<Void, Never>?
     private let delay: Duration
     private let failureContext: String
+    private var success: (() -> Void)?
 
     init(
         delay: Duration = .milliseconds(350),
@@ -24,12 +25,21 @@ final class PendingSave {
     }
 
     /// Coalesces a burst of taps into one write.
-    func schedule(in modelContext: ModelContext, reporting notices: AppNoticeCenter) {
+    func schedule(
+        in modelContext: ModelContext,
+        reporting notices: AppNoticeCenter,
+        onSuccess: @escaping () -> Void = {}
+    ) {
         task?.cancel()
+        success = onSuccess
         task = Task { @MainActor in
             try? await Task.sleep(for: self.delay)
             guard !Task.isCancelled else { return }
-            modelContext.save(reporting: notices, context: self.failureContext)
+            let didSave = modelContext.save(reporting: notices, context: self.failureContext)
+            self.task = nil
+            let completion = self.success
+            self.success = nil
+            if didSave { completion?() }
         }
     }
 
@@ -42,6 +52,10 @@ final class PendingSave {
     func flush(in modelContext: ModelContext, reporting notices: AppNoticeCenter) {
         task?.cancel()
         task = nil
-        modelContext.save(reporting: notices, context: failureContext)
+        let completion = success
+        success = nil
+        if modelContext.save(reporting: notices, context: failureContext) {
+            completion?()
+        }
     }
 }

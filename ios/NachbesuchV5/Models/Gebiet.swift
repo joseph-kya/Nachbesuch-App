@@ -153,7 +153,7 @@ final class Gebiet {
 
     // MARK: - Boundary
 
-    var hasBoundary: Bool { !boundaryData.isEmpty }
+    var hasBoundary: Bool { boundaryCoordinates.count >= 3 }
 
     var boundaryCoordinates: [CLLocationCoordinate2D] {
         get {
@@ -170,11 +170,19 @@ final class Gebiet {
             return coordinates
         }
         set {
+            guard !newValue.isEmpty else {
+                boundaryData = Data()
+                cachedBoundary = []
+                touch()
+                return
+            }
+            let valid = newValue.filter { StoredCoordinate($0).isPlausible }
+            guard valid.count >= 3 else { return }
             // Never clobber a readable boundary with an encode failure.
             guard let encoded = try? AppCoders.boundaryEncoder()
-                .encode(newValue.map(StoredCoordinate.init)) else { return }
+                .encode(valid.map(StoredCoordinate.init)) else { return }
             boundaryData = encoded
-            cachedBoundary = newValue
+            cachedBoundary = valid
             touch()
         }
     }

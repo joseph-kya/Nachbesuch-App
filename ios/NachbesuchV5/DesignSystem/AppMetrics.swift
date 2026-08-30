@@ -5,17 +5,50 @@ import SwiftUI
 /// Split out of the old `AdaptiveGlass.swift`, which held corner radii that had
 /// nothing to do with glass, and where two of five tokens carried the same value —
 /// a distinction that conveyed nothing and was guaranteed to drift.
+/// The content layer draws **one** radius.
+///
+/// It used to draw four on a single screen — a 32 pt street card, a 24 pt address
+/// card, an 11 pt icon squircle and a circle — stacked directly on top of each
+/// other. Nested corners only read as deliberate when they are concentric, and
+/// these shared no centre and no scale, so the list read as a pile of unrelated
+/// rounded things. A street and its addresses are now one container with one
+/// radius, and the shapes inside it are gone.
 enum AppRadius {
     /// Chips, badges, inline pills.
     static let small: CGFloat = 12
     /// Buttons and segmented controls.
     static let control: CGFloat = 18
-    /// Rows inside a list. Concentric with `card`, one step tighter.
-    static let row: CGFloat = 24
-    /// Cards inside a scroll view.
+    /// Cards and grouped sections in the content layer.
     static let card: CGFloat = 32
     /// Floating panels over the map.
     static let chrome: CGFloat = 32
+}
+
+/// The leading columns a grouped list shares.
+///
+/// A street header and the addresses under it are one object, so they get one set
+/// of edges. Before this, the header card began at 16, the address cards at 30 and
+/// the header's icon at 20 — three left edges within 14 pt of one another, which
+/// reads as three failed attempts at the same alignment rather than as a hierarchy.
+enum AppLayout {
+    /// Card edge to content.
+    static let rowInset: CGFloat = 16
+    /// The status glyph's column. The street header has nothing here, so its title
+    /// starts at `rowInset` and the addresses are indented past it by exactly this
+    /// column — one deliberate step instead of three near-misses.
+    static let glyphColumn: CGFloat = 28
+    static let glyphGap: CGFloat = 12
+    /// Where every address's text — and every separator — begins, measured from the
+    /// **card edge**, so it includes `rowInset`. `rowSeparator` is applied to a view
+    /// that has already taken its own `rowInset` padding, which means it measures
+    /// from the card edge too; leaving that term out put the hairlines 16 pt to the
+    /// left of the text they are supposed to start under.
+    static var textInset: CGFloat { rowInset + glyphColumn + glyphGap }
+    /// Air between two street sections. The surface and the header content both
+    /// reserve it: `listRowBackground` is laid out independently of the row's own
+    /// content, so a gap added to only one of them puts the street name outside the
+    /// container it belongs to.
+    static let sectionGap: CGFloat = 14
 }
 
 enum AppSpacing {

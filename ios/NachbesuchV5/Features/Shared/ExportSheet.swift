@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import UIKit
 
 /// Export a territory — or a hand-picked selection — as PDF or text.
 struct ExportSheet: View {
@@ -117,7 +118,18 @@ struct ExportSheet: View {
     @ViewBuilder
     private var shareSection: some View {
         Section {
-            if let document, document.isEmpty {
+            if let failure = document?.validationFailure {
+                ContentUnavailableView {
+                    Label("Export nicht möglich", systemImage: "exclamationmark.triangle.fill")
+                } description: {
+                    Text(failure)
+                } actions: {
+                    Button("Diagnosehinweis kopieren") {
+                        UIPasteboard.general.string = failure
+                        notices.show("Diagnosehinweis kopiert")
+                    }
+                }
+            } else if let document, document.isEmpty {
                 ContentUnavailableView {
                     Label("Nichts zu exportieren", systemImage: "tray")
                 } description: {
@@ -203,7 +215,7 @@ struct ExportSheet: View {
         )
         guard !Task.isCancelled else { return }
         document = built
-        guard !built.isEmpty else { return }
+        guard built.isExportable, !built.isEmpty else { return }
 
         do {
             let url = try DayExportService.makePDF(built)

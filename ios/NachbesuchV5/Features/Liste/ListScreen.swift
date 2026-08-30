@@ -46,6 +46,19 @@ struct ListScreen: View {
     @State private var undo: UndoEntry?
     @State private var undoTask: Task<Void, Never>?
     @State private var pendingSave = PendingSave()
+    /// Bumped whenever SwiftData commits, so the corpus can be rebuilt on a real
+    /// change without `body` paying to look for one.
+    ///
+    /// The key this replaces ended in `houses.max(by: { $0.updatedAt < $1.updatedAt })`.
+    /// That is an O(n) scan that faults `updatedAt` on **every** house in the
+    /// territory, and because it was computed inside `body` — as the `id` of a
+    /// `.task` — it ran again on every single body evaluation. Tapping a row sets
+    /// `selectedHouse`, which re-evaluates `body`, which paid for a full scan of
+    /// 1000+ models before the sheet could even begin presenting. That is the tap
+    /// that lands seconds late, and the inconsistency is faulting: the scan is cheap
+    /// once the objects are in memory and expensive when they are not.
+    @State private var dataVersion = 0
+
     @Namespace private var zoom
 
     /// Nearest-first ordering, using the live position.
@@ -82,15 +95,17 @@ struct ListScreen: View {
         let territoryID: UUID?
         let scope: DayScope
         let count: Int
-        let newestUpdate: Date?
+        let version: Int
     }
 
+    /// Cheap by construction: two identifiers, a count the query already knows, and
+    /// a counter. Nothing here touches a model's properties.
     private var corpusKey: CorpusKey {
         CorpusKey(
             territoryID: gebiet?.id,
             scope: scope,
             count: houses.count,
-            newestUpdate: houses.max(by: { $0.updatedAt < $1.updatedAt })?.updatedAt
+            version: dataVersion
         )
     }
 
@@ -119,21 +134,30 @@ struct ListScreen: View {
                             .frame(maxWidth: .infinity, minHeight: 280)
                     } else {
                         ForEach(sections) { section in
-                            // A normal row instead of a native Section header: native
-                            // headers hover and stack translucent street cards over
-                            // the addresses while scrolling.
+                            let isExpanded = !collapsedSections.contains(section.id)
+                            // The street header is a real list row. A native `Section`
+                            // header has its own implicit leading/trailing margins, so
+                            // its glass surface was visibly narrower than the address
+                            // rows even with zero row insets. Keeping every segment in
+                            // the same row geometry lets the material, rim and
+                            // separators form one continuous card.
                             Button {
                                 toggleSection(section.id)
                             } label: {
-                                StreetHeader(
-                                    section: section,
-                                    isExpanded: !collapsedSections.contains(section.id)
-                                )
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 13)
-                                .contentCard(cornerRadius: AppRadius.card)
+                                StreetHeader(section: section, isExpanded: isExpanded)
+                                    .padding(.horizontal, AppLayout.rowInset)
+                                    .padding(.vertical, 12)
+                                    .rowSeparator(isExpanded)
+                                    .padding(.top, AppLayout.sectionGap)
+                                    .padding(.horizontal, AppSpacing.regular)
                             }
-                            .buttonStyle(PressableRowStyle())
+                            .buttonStyle(
+                                GroupedRowStyle(
+                                    isFirst: true,
+                                    isLast: !isExpanded,
+                                    topGap: AppLayout.sectionGap
+                                )
+                            )
                             .accessibilityLabel("Straße \(section.title)")
                             .accessibilityValue(
                                 section.openCount > 0
@@ -141,48 +165,38 @@ struct ListScreen: View {
                                     : "\(section.houseCount) Adressen, fertig"
                             )
                             .accessibilityHint(
-                                collapsedSections.contains(section.id)
-                                    ? "Blendet alle Adressen dieser Straße ein"
-                                    : "Blendet die Adressen dieser Straße aus"
+                                isExpanded
+                                    ? "Blendet alle Adressen dieser Straße aus"
+                                    : "Blendet alle Adressen dieser Straße ein"
                             )
-                            .listRowInsets(.init(top: 14, leading: 16, bottom: 6, trailing: 16))
+                            .listRowInsets(EdgeInsets())
                             .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
+                            .listRowBackground(
+                                SectionSurface(
+                                    isFirst: true,
+                                    isLast: !isExpanded,
+                                    topGap: AppLayout.sectionGap
+                                )
+                            )
 
-                            if !collapsedSections.contains(section.id) {
-                                ForEach(section.rows) { row in
-                                        Button { selectedHouse = HouseSelection(id: row.id) } label: {
-                                            HouseRow(row: row, now: clock)
-                                                .equatable()
-                                                .padding(.horizontal, 14)
-                                                .padding(.vertical, 11)
-                                                // No `interactive` and no per-row
-                                                // morph identity: dozens of rows each
-                                                // tracking touches and negotiating a
-                                                // matched-geometry transition is what
-                                                // made collapsing a street stutter.
-                                                // The press response comes from
-                                                // `PressableRowStyle` instead.
-                                                .contentCard(cornerRadius: AppRadius.row, elevated: false)
-                                        }
-                                    .buttonStyle(PressableRowStyle())
-                                    .matchedTransitionSource(id: row.id, in: zoom)
-                                    .listRowInsets(
-                                        .init(top: 5, leading: 16, bottom: 5, trailing: 16)
-                                    )
-                                    .listRowSeparator(.hidden)
-                                    .listRowBackground(Color.clear)
-                                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                        Button {
-                                            MapNavigation.openWalkingRoute(
-                                                to: coordinate(of: row.id),
-                                                name: row.address
-                                            )
-                                        } label: {
-                                            Label("Route", systemImage: "figure.walk")
-                                        }
-                                        .tint(accent)
+                            if isExpanded {
+                                ForEach(Array(section.rows.enumerated()), id: \.element.id) { index, row in
+                                    let isLast = index == section.rows.count - 1
+                                    Button { selectedHouse = HouseSelection(id: row.id) } label: {
+                                        HouseRow(row: row, now: clock)
+                                            .equatable()
+                                            .padding(.horizontal, AppLayout.rowInset)
+                                            .padding(.vertical, 11)
+                                            .rowSeparator(!isLast)
+                                            .padding(.horizontal, AppSpacing.regular)
                                     }
+                                    .buttonStyle(GroupedRowStyle(isLast: isLast))
+                                    .matchedTransitionSource(id: row.id, in: zoom)
+                                    .listRowInsets(EdgeInsets())
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(
+                                        SectionSurface(isFirst: false, isLast: isLast)
+                                    )
                                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                         Button {
                                             applyQuickStatus(.joined, to: row)
@@ -208,12 +222,6 @@ struct ListScreen: View {
                                         }
                                         .tint(VisitOutcome.later.tint)
                                     }
-                                    .accessibilityAction(named: "Fußroute öffnen") {
-                                        MapNavigation.openWalkingRoute(
-                                            to: coordinate(of: row.id),
-                                            name: row.address
-                                        )
-                                    }
                                     .accessibilityAction(named: "Als „Niemand da“ markieren") {
                                         applyQuickStatus(.notHome, to: row)
                                     }
@@ -226,6 +234,8 @@ struct ListScreen: View {
                     }
                 }
                 .listStyle(.plain)
+                .listSectionSpacing(0)
+                .environment(\.defaultMinListHeaderHeight, 0)
                 .scrollContentBackground(.hidden)
                 // `.loose` alone left the last address under the floating tab bar.
                 .contentMargins(
@@ -233,6 +243,7 @@ struct ListScreen: View {
                     AppSpacing.loose + AppChrome.tabBarClearance,
                     for: .scrollContent
                 )
+                .compatSoftScrollEdges()
             }
             .background { AppBackdrop() }
             .scrollDismissesKeyboard(.interactively)
@@ -361,6 +372,10 @@ struct ListScreen: View {
             debouncedQuery = searchText
         }
         .onChange(of: debouncedQuery) { _, _ in recomputeSections() }
+        // The signal the scan was standing in for, delivered instead of hunted for.
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+            dataVersion &+= 1
+        }
         .onChange(of: location.location) { _, fix in
             updateSortOrigin(fix?.coordinate)
         }
@@ -477,14 +492,17 @@ struct ListScreen: View {
     }
 
     private func toggleSection(_ id: String) {
-        // Never animate insertion/removal of glass list rows. UIKit keeps recycled
-        // row snapshots alive during that transition, which produces the stacked,
-        // duplicated text seen when a street collapses. The chevron has its own
-        // small local animation; the expensive list geometry changes atomically.
-        if collapsedSections.contains(id) {
-            collapsedSections.remove(id)
-        } else {
-            collapsedSections.insert(id)
+        // `appFeedback`, not `appSettle`: a `List` fades a removed row out in place
+        // before it reclaims the height, so there is an unavoidable moment of
+        // half-transparent rows in a full-height container. The fix is not a longer
+        // curve, it is a shorter one — and it has to match the curve the corner radii
+        // in `SectionSurface` travel on, or the two halves of the fold disagree.
+        withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
+            if collapsedSections.contains(id) {
+                collapsedSections.remove(id)
+            } else {
+                collapsedSections.insert(id)
+            }
         }
     }
 
@@ -499,11 +517,16 @@ struct ListScreen: View {
         }
     }
 
+    /// Same motion as one street, applied to all of them. Only the rows actually on
+    /// screen animate — a `List` does not render the other 250 — so this costs the
+    /// same as collapsing the one street the user is looking at.
     private func setAllStreets(expanded: Bool) {
-        if expanded {
-            collapsedSections.removeAll()
-        } else {
-            collapsedSections.formUnion(sections.map(\.id))
+        withAnimation(.appSettle(reduceMotion: reduceMotion)) {
+            if expanded {
+                collapsedSections.removeAll()
+            } else {
+                collapsedSections.formUnion(sections.map(\.id))
+            }
         }
     }
 
@@ -528,10 +551,6 @@ struct ListScreen: View {
         case .unanswered: .orange
         case .joined: .pink
         }
-    }
-
-    private func coordinate(of id: UUID) -> CLLocationCoordinate2D {
-        houses.first { $0.id == id }?.coordinate ?? .init()
     }
 
     // MARK: Status changes
@@ -564,7 +583,6 @@ struct ListScreen: View {
             )
         )
         scheduleSave()
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
     /// Books or drops the reminders belonging to a quick status write.
@@ -638,7 +656,10 @@ struct ListScreen: View {
     }
 
     private func scheduleSave() {
-        pendingSave.schedule(in: modelContext, reporting: notices)
+        pendingSave.schedule(in: modelContext, reporting: notices) {
+            notices.show("Gespeichert")
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        }
     }
 
     private func flushPendingSave() {
@@ -682,21 +703,30 @@ private struct HouseRow: View, Equatable {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(row.markerOutcome.displayTint.opacity(0.13))
-                OutcomeGlyph(outcome: row.markerOutcome, size: .title3)
-            }
-            .frame(width: 42, height: 42)
+        HStack(spacing: AppLayout.glyphGap) {
+            // A bare symbol in the shared column, not a symbol on a tinted disc. The
+            // disc was a third circle competing with two rounded rectangles for the
+            // same 40 pt, and on an untouched territory it drew 232 identical ones.
+            // The glyph is already shape-coded and colour-coded; the ring around it
+            // added neither.
+            OutcomeGlyph(outcome: row.markerOutcome, size: .body)
+                .frame(width: AppLayout.glyphColumn, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(row.address)
-                    .font(.body.weight(.medium))
-                    .lineLimit(2)
-                Text(row.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(row.title)
+                    // Not larger than the street name above it. The house number is
+                    // the scannable part, but it is *inside* a street, and setting it
+                    // at 20 pt under a 15 pt header inverted the hierarchy.
+                    .font(.body.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                if let subtitle = row.subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 if let glance {
                     revisitChip(glance)
                 }
@@ -717,7 +747,12 @@ private struct HouseRow: View, Equatable {
                     .foregroundStyle(.secondary)
             }
 
-            if row.openCount > 0 {
+            // Multi-door houses only. On a single-door house "1 offen" is the third
+            // copy of one fact — the glyph beside it is already the red "come back"
+            // mark, and for one door there is nothing the count can add that the mark
+            // does not already say. It made every row of a fresh territory carry an
+            // identical red badge, which is a decoration, not a signal.
+            if !row.isSingleDoor, row.openCount > 0 {
                 Text("\(row.openCount)")
                     .font(.caption.weight(.bold))
                     .monospacedDigit()
@@ -731,7 +766,9 @@ private struct HouseRow: View, Equatable {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 5)
+        // The row draws the number; VoiceOver still gets the whole address, because
+        // "6" on its own is not an address to someone who cannot see the street
+        // header above it.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.address)
         .accessibilityValue(
@@ -783,7 +820,6 @@ private struct HouseRow: View, Equatable {
 
 private struct StreetHeader: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.appAccent) private var accent
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let section: StreetSection
     let isExpanded: Bool
@@ -792,13 +828,13 @@ private struct StreetHeader: View {
     /// open. The old card could show a green-worthy "9/9" next to a red bar, because
     private var isDone: Bool { section.isDone }
 
-    /// **Identity, not state.** The street icon is the row's mark — it says "this is
-    /// a street", and it says it in the colour the user chose for the app. It must
-    /// not also carry progress: an icon that changes colour when the last door is
-    /// recorded is a second, quieter version of the answer the counter and the bar
-    /// already give loudly, and it made the accent look like it meant something.
-    private var identityTint: Color { accent }
-
+    /// The street's mark used to be a tinted squircle holding `road.lanes`, tinted
+    /// with the app accent to mean "identity, not state". That reasoning only holds
+    /// while the accent is not the state colour — and the accent *is* red, the same
+    /// red as "offen", the filter chip and the open glyph, so identity and state were
+    /// indistinguishable and the screen had one colour. The street name is the
+    /// identity; it does not need a badge to say it is a street.
+    ///
     /// **State.** Red while there is something to come back to, green when there is
     /// not — the same red the "Offen" filter chip and the per-row open badge use, so
     /// "offen" is one colour throughout the screen rather than three.
@@ -821,30 +857,6 @@ private struct StreetHeader: View {
 
     // MARK: Pieces
 
-    private var streetIcon: some View {
-        // A squircle instead of a circle: it echoes the card it sits in, and the
-        // soft gradient keeps the tinted field from reading as a flat blob on the
-        // dark background.
-        RoundedRectangle(cornerRadius: 11, style: .continuous)
-            .fill(
-                LinearGradient(
-                    colors: [identityTint.opacity(0.26), identityTint.opacity(0.12)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-            .frame(width: 36, height: 36)
-            .overlay {
-                Image(systemName: "road.lanes")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(identityTint)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .strokeBorder(identityTint.opacity(0.22), lineWidth: 0.5)
-            }
-    }
-
     private var title: some View {
         Text(section.title)
             // `Color.primary`, not `.primary`. A `Section` header inherits the
@@ -853,8 +865,10 @@ private struct StreetHeader: View {
             // style*, which here is still the grey header colour. `Color.primary`
             // is the absolute label colour and actually wins, so the street name
             // stops rendering dimmer than the addresses beneath it.
-            .font(.subheadline.weight(.semibold))
+            // Outranks the house numbers under it, which are `.body.weight(.semibold)`.
+            .font(.headline)
             .foregroundStyle(Color.primary)
+            .lineLimit(1)
     }
 
     /// How many addresses. What is *there* — the state belongs to the counter.
@@ -875,20 +889,35 @@ private struct StreetHeader: View {
     /// and the label says which of the two things it means.
     @ViewBuilder
     private var counter: some View {
-        if isDone {
-            Label("fertig", systemImage: "checkmark")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.doneTone)
-                .labelStyle(.titleAndIcon)
-                .lineLimit(1)
-        } else {
-            Text("\(section.openCount) offen")
-                .font(.caption.weight(.semibold))
-                .monospacedDigit()
-                .foregroundStyle(stateTint)
-                .contentTransition(.numericText(value: Double(section.openCount)))
-                .lineLimit(1)
+        Group {
+            if isDone {
+                Label("fertig", systemImage: "checkmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.doneTone)
+                    .labelStyle(.titleAndIcon)
+                    .lineLimit(1)
+                    .symbolEffect(
+                        .bounce,
+                        options: reduceMotion ? .nonRepeating : .default,
+                        value: isDone
+                    )
+                    .transition(.blockSwap(reduceMotion: reduceMotion))
+            } else {
+                Text("\(section.openCount) offen")
+                    .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(stateTint)
+                    .contentTransition(.numericText(value: Double(section.openCount)))
+                    .lineLimit(1)
+                    .transition(.blockSwap(reduceMotion: reduceMotion))
+            }
         }
+        // The one place on this screen `appCelebrate` is warranted. `Motion.swift`
+        // reserves it for "genuine moments of completion, never routine interaction",
+        // and the last open door on a street is exactly that — it happens once per
+        // street per campaign, and it is the thing the user is walking around to
+        // achieve. Every other count change on this screen is `appFeedback`.
+        .animation(.appCelebrate(reduceMotion: reduceMotion), value: isDone)
     }
 
     /// A hand-drawn capsule rather than `ProgressView`: the system bar draws its
@@ -924,8 +953,6 @@ private struct StreetHeader: View {
 
     private func headerLayout(compact: Bool) -> some View {
         HStack(spacing: AppSpacing.snug) {
-            streetIcon
-
             VStack(alignment: .leading, spacing: 2) {
                 title.lineLimit(compact ? 1 : 2)
                 subtitle
@@ -947,7 +974,6 @@ private struct StreetHeader: View {
     private var stackedLayout: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: AppSpacing.snug) {
-                streetIcon
                 VStack(alignment: .leading, spacing: 2) {
                     title
                     subtitle
@@ -1037,7 +1063,6 @@ struct StatusLegendSheet: View {
                     }
                 }
                 Section("Gesten") {
-                    Label("Nach rechts wischen öffnet die Fußroute", systemImage: "figure.walk")
                     Label("Nach links wischen setzt einen Schnellstatus", systemImage: "hand.draw")
                     Label("Tippen öffnet die Details", systemImage: "hand.tap")
                 }

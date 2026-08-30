@@ -11,6 +11,10 @@ nonisolated struct HouseRowModel: Identifiable, Equatable, Sendable {
     let address: String
     let note: String
     let street: String
+    /// The door's own name — "6", "12a/3" — when the address has one.
+    let houseNumber: String?
+    /// The address without the postal code and the city.
+    let shortAddress: String
     let markerOutcome: VisitOutcome?
     let unitCount: Int
     let completedCount: Int
@@ -39,23 +43,46 @@ nonisolated struct HouseRowModel: Identifiable, Equatable, Sendable {
         return String(format: "%.1f km", distance / 1000)
     }
 
+    /// What the row leads with.
+    ///
+    /// The street is already the section header directly above, so the row says the
+    /// number and nothing else. The full string this replaces — "Am Sonnenhang 6,
+    /// 9210 Pörtschach am Wörthersee" — repeated the header, then added a postal
+    /// code and a city identical for every address in the territory, and the two
+    /// lines it wrapped onto were what made four addresses fill a screen.
+    ///
+    /// The full address is still what VoiceOver reads and what the undo banner and
+    /// the export name, so nothing is lost — it is only not *drawn* four times.
+    var title: String { houseNumber ?? shortAddress }
+
     /// What is *there*, never what is left — the trailing badge is the one place
     /// the open count belongs, and it was written here too.
     ///
-    /// The pair it replaces read "5/6 Türen · 3 offen", which is two different
+    /// `nil` when there is nothing to say. A fresh territory has no result on any
+    /// door, and "Noch kein Status" under every single row is the dashed grey glyph
+    /// beside it spelled out: the same fact, in the widest possible form, on the
+    /// screen the most times. Without it an untouched row is one line tall.
+    ///
+    /// The pair this replaces read "5/6 Türen · 3 offen", which is two different
     /// definitions of finished in one line: 5 of 6 doors are *recorded*, and 3 of
     /// them still want a second visit. Six doors, five recorded, three open is a
     /// true sentence and an unreadable one at a doorstep.
-    var subtitle: String {
-        let base = isSingleDoor
-            ? markerOutcome.displayTitleValue
-            : "\(unitCount) Türen"
+    var subtitle: String? {
+        var parts: [String] = []
+        if isSingleDoor {
+            // Only a real result. The absence of one is the glyph's job.
+            if let markerOutcome { parts.append(markerOutcome.title) }
+        } else {
+            parts.append("\(unitCount) Türen")
+        }
         // The booked return time used to be appended here as "· zurück um 18:30",
         // buried in grey caption text between two other facts. It is now a tinted
         // chip of its own — `RevisitGlance` — so the subtitle is back to the plain
         // "when was this last touched" stamp and the two stop competing.
-        guard let recordedAt else { return base }
-        return "\(base) · \(recordedAt.formatted(date: .omitted, time: .shortened))"
+        if let recordedAt {
+            parts.append(recordedAt.formatted(date: .omitted, time: .shortened))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// What VoiceOver reads instead of an emoji. The return time is spoken by the
@@ -192,6 +219,8 @@ nonisolated enum HouseListBuilder {
                 address: seed.address,
                 note: seed.note,
                 street: street,
+                houseNumber: StreetNameParser.houseNumber(from: seed.address),
+                shortAddress: StreetNameParser.withoutLocality(seed.address),
                 markerOutcome: OutcomeTally.markerOutcome(for: doors, scope: scope),
                 unitCount: doors.count,
                 completedCount: tally.completed,

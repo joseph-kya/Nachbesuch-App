@@ -18,6 +18,24 @@ enum DebugSeed {
         return count
     }
 
+    /// A distinct, digit-free name per street.
+    ///
+    /// The seed used to emit "Teststraße \(street + 1) \(index + 1)". Geographically
+    /// that is a grid, but `StreetNameParser` splits an address at its first digit —
+    /// so every one of those addresses reported the street "Teststraße", the list
+    /// collapsed the whole grid into one section, and the fixture could not exercise
+    /// the grouped list it exists to stress. A letter suffix keeps the names unique
+    /// without putting a digit where the house number goes.
+    private static func streetName(_ index: Int) -> String {
+        var suffix = ""
+        var remaining = index
+        repeat {
+            suffix = String(UnicodeScalar(UInt8(65 + remaining % 26))) + suffix
+            remaining = remaining / 26 - 1
+        } while remaining >= 0
+        return "Teststraße \(suffix)"
+    }
+
     /// Parks the camera over the generated block so a perf run lands on the pins
     /// rather than wherever the map happened to be. Span is overridable:
     ///   SIMCTL_CHILD_NACHBESUCH_SPAN=0.0008
@@ -72,7 +90,7 @@ enum DebugSeed {
                 let isApartment = index % 7 == 0
                 let unitCount = isApartment ? 4 + (index % 5) : 1
                 let house = House(
-                    address: "Teststraße \(street + 1) \(index + 1)",
+                    address: "\(streetName(street)) \(index + 1)",
                     latitude: latitude,
                     longitude: longitude,
                     gebietID: gebiet.id,

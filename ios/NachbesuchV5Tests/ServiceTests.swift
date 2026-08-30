@@ -34,6 +34,38 @@ struct StreetNameParserTests {
         #expect(StreetNameParser.street(from: "Hauptplatz") == "Hauptplatz")
         #expect(StreetNameParser.street(from: "12 Hauptstraße") == "12 Hauptstraße")
     }
+
+    /// The list draws this instead of the whole address, because the street is
+    /// already the section header above the row.
+    @Test("Hausnummer ist die Gegenprobe zum Straßennamen")
+    func extractsHouseNumber() {
+        #expect(StreetNameParser.houseNumber(from: "Am Augarten 3") == "3")
+        #expect(StreetNameParser.houseNumber(from: "Teststraße 1, 1010 Wien") == "1")
+        #expect(StreetNameParser.houseNumber(from: "Thaliastraße\u{00A0}12") == "12")
+    }
+
+    /// Punctuation is stripped from the street but must survive in the number:
+    /// the slash in "12a/3" is part of what names the door.
+    @Test("Nummernzusätze bleiben erhalten")
+    func keepsHouseNumberQualifiers() {
+        #expect(StreetNameParser.houseNumber(from: "Thaliastraße 12a/3") == "12a/3")
+        #expect(StreetNameParser.houseNumber(from: "Kirchgasse 5 Stiege 2") == "5 Stiege 2")
+    }
+
+    /// `nil`, not an empty string — the row falls back to naming itself with the
+    /// address when there is no number to show.
+    @Test("Ohne Nummer gibt es keine Nummer")
+    func hasNoHouseNumberWhenAddressHasNone() {
+        #expect(StreetNameParser.houseNumber(from: "Hauptplatz") == nil)
+        #expect(StreetNameParser.houseNumber(from: "Am Hof, 1010 Wien") == nil)
+        #expect(StreetNameParser.houseNumber(from: "12 Hauptstraße") == nil)
+    }
+
+    @Test("PLZ und Ort fallen weg")
+    func dropsLocality() {
+        #expect(StreetNameParser.withoutLocality("Am Sonnenhang 6, 9210 Pörtschach") == "Am Sonnenhang 6")
+        #expect(StreetNameParser.withoutLocality("Hauptplatz") == "Hauptplatz")
+    }
 }
 
 @Suite("Gebiets-Schwerpunkt")
@@ -531,6 +563,8 @@ struct DistanceSortTests {
     private func row(_ address: String, latitude: Double, longitude: Double) -> HouseRowModel {
         HouseRowModel(
             id: UUID(), address: address, note: "", street: "Teststraße",
+            houseNumber: StreetNameParser.houseNumber(from: address),
+            shortAddress: StreetNameParser.withoutLocality(address),
             markerOutcome: nil, unitCount: 1, completedCount: 0,
             followUpCount: 0, joinedCount: 0, laterCount: 0, openCount: 1,
             createdAt: .now, searchText: "", latitude: latitude, longitude: longitude,

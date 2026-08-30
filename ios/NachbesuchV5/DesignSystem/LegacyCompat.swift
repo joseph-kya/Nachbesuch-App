@@ -211,3 +211,23 @@ extension View {
         }
     }
 }
+
+// MARK: - Scroll edges
+
+extension View {
+    /// `scrollEdgeEffectStyle(.soft, for:)` — the iOS 26 Liquid Glass treatment where
+    /// content dissolves into the bar above it instead of sliding under a hard line.
+    ///
+    /// This is the glass that belongs on a list screen. The rows themselves are
+    /// content and get a plain material; the *edge* where content meets the filter
+    /// bar and the tab bar is navigation layer, and it is the place the effect was
+    /// designed for. Inert below iOS 26, which has no scroll edge effect to style.
+    @ViewBuilder
+    func compatSoftScrollEdges() -> some View {
+        if #available(iOS 26, *), !LegacyChrome.isForced {
+            scrollEdgeEffectStyle(.soft, for: .all)
+        } else {
+            self
+        }
+    }
+}

@@ -72,15 +72,16 @@ final class House {
     /// on an unreadable blob, so a transient decode failure can never be converted
     /// into permanent data loss by overwriting it with an empty array.
     func decodedUnits() -> [DoorResult]? {
-        if unitsData.isEmpty { return [] }
-        return try? AppCoders.unitsDecoder().decode([DoorResult].self, from: unitsData)
+        dataState.doors
     }
+
+    var dataState: HouseDataState { HouseDataState.decode(unitsData) }
 
     var units: [DoorResult] { decodedUnits() ?? [] }
 
     /// True when the stored doors are unreadable — surfaced in the UI instead of
     /// silently showing a house with zero households.
-    var isDamaged: Bool { !unitsData.isEmpty && decodedUnits() == nil }
+    var isDamaged: Bool { dataState.isDamaged }
 
     func summary(for scope: DayScope = .combined) -> HouseSummary {
         HouseSummary(units: units, scope: scope)
@@ -200,10 +201,17 @@ final class House {
         writeUnits(copy)
     }
 
-    /// Replaces the encoded doors wholesale (backup restore). Goes through the same
-    /// funnel so `updatedAt` cannot be left behind.
-    func replaceUnitsData(_ data: Data) {
-        unitsData = data
-        touch()
+    /// Replaces encoded backup/migration data only after it has been decoded.
+    /// Existing readable data is kept intact when validation fails.
+    @discardableResult
+    func replaceUnitsData(_ data: Data) throws -> Bool {
+        let snapshot = try ValidatedHouseSnapshot.validate(address: address, unitsData: data)
+        return writeUnits(snapshot.doors)
+    }
+
+    /// Preferred restore funnel for already-decoded backup values.
+    @discardableResult
+    func replaceUnits(_ doors: [DoorResult]) -> Bool {
+        writeUnits(doors)
     }
 }

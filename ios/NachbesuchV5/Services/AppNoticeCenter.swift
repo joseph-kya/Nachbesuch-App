@@ -121,3 +121,22 @@ struct AppNoticeBanner: View {
         }
     }
 }
+
+struct ReminderCapacityBanner: View {
+    let count: Int
+
+    var body: some View {
+        Label(
+            "\(count) Erinnerungen konnten nicht geplant werden. Alle Termine bleiben unter „Heute fällig“ sichtbar.",
+            systemImage: "bell.badge.fill"
+        )
+        .font(.subheadline.weight(.medium))
+        .foregroundStyle(.orange)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .mapChrome(cornerRadius: AppRadius.card)
+        .padding(.horizontal, AppSpacing.regular)
+        .accessibilityElement(children: .combine)
+    }
+}

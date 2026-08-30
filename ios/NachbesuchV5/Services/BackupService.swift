@@ -280,8 +280,14 @@ enum BackupService {
     ) async throws -> BackupImportResult {
         // Read the current state HERE rather than accepting arrays captured in a view
         // body, which could already be stale by the time the loop runs.
-        let existingGebiete = (try? modelContext.fetch(FetchDescriptor<Gebiet>())) ?? []
-        let existingHouses = (try? modelContext.fetch(FetchDescriptor<House>())) ?? []
+        let existingGebiete: [Gebiet]
+        let existingHouses: [House]
+        do {
+            existingGebiete = try modelContext.fetch(FetchDescriptor<Gebiet>())
+            existingHouses = try modelContext.fetch(FetchDescriptor<House>())
+        } catch {
+            throw BackupError.storeUnavailable(underlying: error)
+        }
         do {
             return try await performImport(backup, into: modelContext,
                                            existingGebiete: existingGebiete,
@@ -305,12 +311,12 @@ enum BackupService {
 
         // Pre-encode all units off the main thread; the inserts themselves stay on the
         // main-actor context where SwiftData requires them.
-        let unitsDataByHouseID = await Task.detached(priority: .userInitiated) { () -> [UUID: Data] in
+        let unitsDataByHouseID = try await Task.detached(priority: .userInitiated) { () throws -> [UUID: Data] in
             let encoder = AppCoders.unitsEncoder()
             var encoded: [UUID: Data] = [:]
             encoded.reserveCapacity(backup.houses.count)
             for house in backup.houses {
-                encoded[house.id] = (try? encoder.encode(house.units)) ?? Data()
+                encoded[house.id] = try encoder.encode(house.units)
             }
             return encoded
         }.value
@@ -332,9 +338,10 @@ enum BackupService {
                 gebietIDMap[backupGebiet.id] = existing.id
                 if existing.boundaryData.isEmpty && !backupGebiet.boundaryData.isEmpty {
                     existing.boundaryData = backupGebiet.boundaryData
+                    existing.touch()
                 }
                 if existing.name.isEmpty && !backupGebiet.name.isEmpty {
-                    existing.name = backupGebiet.name
+                    existing.rename(to: backupGebiet.name)
                 }
                 continue
             }
@@ -411,6 +418,7 @@ enum BackupError: LocalizedError {
     case unreadableFile
     case corruptContents(underlying: (any Error)?)
     case unreadableHouse(address: String)
+    case storeUnavailable(underlying: any Error)
 
     var errorDescription: String? {
         switch self {
@@ -422,6 +430,8 @@ enum BackupError: LocalizedError {
             "Das Backup ist unvollständig oder beschädigt und konnte nicht gelesen werden."
         case .unreadableHouse(let address):
             "Die Türdaten von „\(address)“ konnten nicht gelesen werden. Es wurde kein Backup geschrieben, damit nichts verloren geht."
+        case .storeUnavailable:
+            "Der lokale Datenspeicher konnte nicht gelesen werden. Der Import wurde nicht ausgeführt."
         }
     }
 }

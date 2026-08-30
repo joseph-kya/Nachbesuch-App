@@ -21,8 +21,6 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     var onCameraMoved: ((MKCoordinateRegion) -> Void)?
     var onTrackingModeChanged: ((Bool) -> Void)?
     var onTapHouse: ((UUID) -> Void)?
-    /// Set from the host on every update.
-    var picksRouteStart = false
     /// Raised when the tapped pin has others stacked underneath it, so the UI can
     /// offer a list instead of opening whichever one happened to win the touch.
     var onStackedPins: (([UUID]) -> Void)?
@@ -39,10 +37,7 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
 
     private var boundaryOverlay: MKOverlay?
     private var boundaryHash: Int?
-    private var routeOverlay: RoutePolyline?
-    private var routeHash: Int?
     private var draftAnnotations: [DraftPointAnnotation] = []
-    private var nextStopAnnotation: NextStopAnnotation?
 
     private var lastCommandID: UUID?
     private var pendingDropHouseID: UUID?
@@ -270,51 +265,6 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         mapView.addOverlay(overlay, level: .aboveRoads)
     }
 
-    /// Draws the planned walking order. Rebuilt only when the order actually
-    /// changes — recording a status shortens the remaining route, and redrawing a
-    /// few-hundred-point polyline on every pin tap would be wasteful.
-    func syncRoute(_ mapView: MKMapView, coordinates: [CLLocationCoordinate2D]) {
-        var hasher = Hasher()
-        hasher.combine(coordinates.count)
-        for coordinate in coordinates {
-            hasher.combine(coordinate.latitude)
-            hasher.combine(coordinate.longitude)
-        }
-        let value = hasher.finalize()
-        guard value != routeHash else { return }
-        routeHash = value
-
-        if let routeOverlay {
-            mapView.removeOverlay(routeOverlay)
-            self.routeOverlay = nil
-        }
-        guard coordinates.count >= 2 else { return }
-        let line = RoutePolyline(coordinates: coordinates, count: coordinates.count)
-        routeOverlay = line
-        // Below the boundary so a drawn territory outline stays readable on top.
-        mapView.addOverlay(line, level: .aboveRoads)
-    }
-
-    /// Places (or moves) the ring that marks the next house on the route.
-    func syncNextStop(_ mapView: MKMapView, coordinate: CLLocationCoordinate2D?) {
-        guard let coordinate else {
-            if let existing = nextStopAnnotation {
-                mapView.removeAnnotation(existing)
-                nextStopAnnotation = nil
-            }
-            return
-        }
-        if let existing = nextStopAnnotation {
-            guard existing.coordinate.latitude != coordinate.latitude
-                || existing.coordinate.longitude != coordinate.longitude else { return }
-            existing.coordinate = coordinate
-            return
-        }
-        let annotation = NextStopAnnotation(coordinate: coordinate)
-        nextStopAnnotation = annotation
-        mapView.addAnnotation(annotation)
-    }
-
     func syncDraftPoints(_ mapView: MKMapView, points: [CLLocationCoordinate2D]) {
         if draftAnnotations.count != points.count {
             UIView.performWithoutAnimation {
@@ -468,10 +418,6 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
                   let view = mapView.view(for: house) as? HousePinView else { continue }
             view.refreshScale()
         }
-        if let next = nextStopAnnotation,
-           let halo = mapView.view(for: next) as? NextStopHaloView {
-            halo.refreshScale()
-        }
     }
 
     // MARK: - MKMapViewDelegate
@@ -488,15 +434,6 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
                 accuracy: lastHeadingAccuracy,
                 mapHeadingDegrees: mapView.camera.heading
             )
-            return view
-
-        case is NextStopAnnotation:
-            let view = mapView.dequeueReusableAnnotationView(
-                withIdentifier: NextStopHaloView.reuseIdentifier,
-                for: annotation
-            )
-            (view as? NextStopHaloView)?.coordinator = self
-            (view as? NextStopHaloView)?.refreshScale()
             return view
 
         case is HouseAnnotation:
@@ -551,11 +488,6 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
 
-        // Picking a route start wants one house, not a menu.
-        guard !picksRouteStart else {
-            onTapHouse?(houseID)
-            return
-        }
         let stacked = stackedHouseIDs(around: houseID)
         if stacked.count > 1 {
             onStackedPins?(stacked)
@@ -623,14 +555,6 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     }
 
     func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-        if let route = overlay as? RoutePolyline {
-            let renderer = MKPolylineRenderer(polyline: route)
-            renderer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.85)
-            renderer.lineWidth = 5
-            renderer.lineCap = .round
-            renderer.lineJoin = .round
-            return renderer
-        }
         if let polygon = overlay as? MKPolygon {
             let renderer = MKPolygonRenderer(polygon: polygon)
             renderer.fillColor = UIColor.systemRed.withAlphaComponent(0.13)

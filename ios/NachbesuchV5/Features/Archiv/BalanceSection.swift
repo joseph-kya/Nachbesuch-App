@@ -3,8 +3,8 @@ import SwiftUI
 
 /// The active territory's balance, embedded at the top of the archive.
 struct BalanceSection: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let gebiet: Gebiet
     let entry: ArchiveEntry?
@@ -23,6 +23,7 @@ struct BalanceSection: View {
         VStack(alignment: .leading, spacing: AppSpacing.snug) {
             if gebiet.isTwoDay {
                 DayScopePicker(scope: $scope)
+                    .transition(.blockSwap(reduceMotion: reduceMotion))
             }
 
             if entry?.houseCount ?? 0 == 0 {
@@ -33,12 +34,23 @@ struct BalanceSection: View {
                 }
                 .frame(maxWidth: .infinity)
             } else {
+                if let damaged = entry?.damagedHouseCount, damaged > 0 {
+                    Label("\(damaged) Häuser mit beschädigten Daten — Wiederherstellung nötig",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentPanel(cornerRadius: AppRadius.control)
+                        .transition(.blockSwap(reduceMotion: reduceMotion))
+                }
                 progressCard
                 metrics
                 chart
 
                 if gebiet.isTwoDay, let entry {
                     revisitSummary(entry: entry)
+                        .transition(.blockSwap(reduceMotion: reduceMotion))
                 }
             }
         }
@@ -46,16 +58,55 @@ struct BalanceSection: View {
         // One card around the whole balance. The blocks inside are plain fills:
         // stacking glass inside glass just muddies both.
         .contentCard(cornerRadius: AppRadius.card)
+        // One key for the whole card, and it sits *outside* the card so the card's
+        // own height is part of what animates — otherwise the contents cross-fade
+        // inside a box that has already snapped to its new size.
+        //
+        // One key rather than several: every number here comes from the same tally,
+        // so keying each digit separately would have them roll over in slightly
+        // different frames instead of reading as one measurement being retaken. And
+        // one `.animation` rather than several stacked, because `.animation(_:value:)`
+        // does not merely animate its key — it overrides the transaction for the whole
+        // subtree, so a second one silently wins over the first.
+        .animation(.appSettle(reduceMotion: reduceMotion), value: key)
+    }
+
+    /// Everything that changes the shape or the numbers of this card: which territory
+    /// it is showing, whether that territory has the campaign-day picker and the
+    /// revisit summary at all, and the tally every figure is derived from.
+    private struct BalanceKey: Equatable {
+        let gebietID: UUID
+        let isTwoDay: Bool
+        let houseCount: Int
+        let damagedHouseCount: Int
+        let tally: OutcomeTally
+    }
+
+    private var key: BalanceKey {
+        BalanceKey(
+            gebietID: gebiet.id,
+            isTwoDay: gebiet.isTwoDay,
+            houseCount: entry?.houseCount ?? 0,
+            damagedHouseCount: entry?.damagedHouseCount ?? 0,
+            tally: tally
+        )
+    }
+
+    /// Held as its own value so the headline digits and the `numericText` transition
+    /// are driven by exactly the same number — rounding it twice let the two disagree
+    /// by one for the length of the animation.
+    private var percentComplete: Int {
+        Int((tally.completionFraction * 100).rounded())
     }
 
     private var progressCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text("\(Int((tally.completionFraction * 100).rounded()))")
+                Text("\(percentComplete)")
                     .font(.largeTitle.bold())
                     .fontDesign(.rounded)
                     .monospacedDigit()
-                    .contentTransition(.numericText(value: tally.completionFraction * 100))
+                    .contentTransition(.numericText(value: Double(percentComplete)))
                 Text("% erledigt")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -63,15 +114,14 @@ struct BalanceSection: View {
                 Text("\(tally.completed)/\(tally.unitCount)")
                     .font(.subheadline.weight(.medium))
                     .monospacedDigit()
+                    .contentTransition(.numericText(value: Double(tally.completed)))
                     .foregroundStyle(.secondary)
             }
             ProgressView(value: tally.completionFraction)
                 .tint(tally.open == 0 ? .green : .red)
-                .animation(.appSettle(reduceMotion: reduceMotion), value: tally.completionFraction)
         }
         .padding(12)
         .contentPanel(cornerRadius: AppRadius.control)
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: tally.completed)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Fortschritt")
         .accessibilityValue("\(tally.completed) von \(tally.unitCount) Türen erledigt")
@@ -92,6 +142,7 @@ struct BalanceSection: View {
             // four results the report is about onto a second row for nothing.
             if tally.later > 0 {
                 metricTile(outcome: .later, value: tally.later)
+                    .transition(.blockSwap(reduceMotion: reduceMotion))
             }
         }
     }
@@ -113,7 +164,6 @@ struct BalanceSection: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
         .contentPanel(cornerRadius: AppRadius.small)
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: value)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(outcome.title)
         .accessibilityValue("\(value)")
@@ -157,7 +207,7 @@ struct BalanceSection: View {
     /// What the second day actually achieved — measured only against the doors that
     /// were eligible for a revisit, not against every door in the territory.
     private func revisitSummary(entry: ArchiveEntry) -> some View {
-        let target = entry.day1.notHome
+        let target = entry.revisitTargets
         let done = entry.day2.completed
         return VStack(alignment: .leading, spacing: 4) {
             Text("Nachbesuche")

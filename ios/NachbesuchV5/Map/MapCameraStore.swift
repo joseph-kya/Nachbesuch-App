@@ -34,6 +34,7 @@ final class MapCameraStore {
     static let recenterSpan = MKCoordinateSpan(latitudeDelta: 0.0045, longitudeDelta: 0.0045)
 
     private let defaults: UserDefaults
+    private var territoryID: UUID?
     private var persistTask: Task<Void, Never>?
 
     /// Live camera. Deliberately a plain property, not `@Published`/`@Observable`:
@@ -41,9 +42,12 @@ final class MapCameraStore {
     /// SwiftUI body.
     private(set) var region: MKCoordinateRegion
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, territoryID: UUID? = nil) {
         self.defaults = defaults
-        region = Self.restore(from: defaults) ?? Self.fallbackRegion
+        self.territoryID = territoryID
+        region = Self.restore(from: defaults, territoryID: territoryID)
+            ?? Self.restore(from: defaults, territoryID: nil)
+            ?? Self.fallbackRegion
         #if DEBUG
         // Test-harness override, so a performance run can pin the camera to a known
         // zoom without racing the store's own persistence.
@@ -116,19 +120,33 @@ final class MapCameraStore {
         persistNow()
     }
 
-    private func persistNow() {
-        guard region.isUsable else { return }
-        defaults.set(region.center.latitude, forKey: Key.latitude)
-        defaults.set(region.center.longitude, forKey: Key.longitude)
-        defaults.set(region.span.latitudeDelta, forKey: Key.latitudeDelta)
-        defaults.set(region.span.longitudeDelta, forKey: Key.longitudeDelta)
+    /// Camera memory belongs to a territory. Switching cities must never reopen on
+    /// the previous territory's street and make the new one appear empty.
+    @discardableResult
+    func selectTerritory(_ id: UUID?) -> MKCoordinateRegion {
+        guard id != territoryID else { return region }
+        flush()
+        territoryID = id
+        region = Self.restore(from: defaults, territoryID: id) ?? Self.fallbackRegion
+        return region
     }
 
-    private static func restore(from defaults: UserDefaults) -> MKCoordinateRegion? {
-        guard let latitude = defaults.object(forKey: Key.latitude) as? Double,
-              let longitude = defaults.object(forKey: Key.longitude) as? Double,
-              let latitudeDelta = defaults.object(forKey: Key.latitudeDelta) as? Double,
-              let longitudeDelta = defaults.object(forKey: Key.longitudeDelta) as? Double
+    private var keySuffix: String { territoryID.map { ".\($0.uuidString)" } ?? "" }
+
+    private func persistNow() {
+        guard region.isUsable else { return }
+        defaults.set(region.center.latitude, forKey: Key.latitude + keySuffix)
+        defaults.set(region.center.longitude, forKey: Key.longitude + keySuffix)
+        defaults.set(region.span.latitudeDelta, forKey: Key.latitudeDelta + keySuffix)
+        defaults.set(region.span.longitudeDelta, forKey: Key.longitudeDelta + keySuffix)
+    }
+
+    private static func restore(from defaults: UserDefaults, territoryID: UUID?) -> MKCoordinateRegion? {
+        let suffix = territoryID.map { ".\($0.uuidString)" } ?? ""
+        guard let latitude = defaults.object(forKey: Key.latitude + suffix) as? Double,
+              let longitude = defaults.object(forKey: Key.longitude + suffix) as? Double,
+              let latitudeDelta = defaults.object(forKey: Key.latitudeDelta + suffix) as? Double,
+              let longitudeDelta = defaults.object(forKey: Key.longitudeDelta + suffix) as? Double
         else { return nil }
         let region = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: latitude, longitude: longitude),

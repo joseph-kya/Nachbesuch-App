@@ -71,6 +71,7 @@ struct MapScreen: View {
         self.gebiet = gebiet
         _scope = scope
         self.isActive = isActive
+        _camera = State(initialValue: MapCameraStore(territoryID: gebiet?.id))
         let territoryID = gebiet?.id
         // Guard against `nil`: `gebietID == nil || dayID == nil` matched every
         // orphaned house in the store, rendering them as pins on a territory-less
@@ -121,6 +122,7 @@ struct MapScreen: View {
                 boundary: boundary,
                 draftPoints: mode == .drawingArea ? draftBoundary : [],
                 selectedHouseIDs: selectedHouseIDs,
+                isActive: isActive,
                 isSatellite: isSatellite,
                 poiPreset: poiPreset,
                 reduceMotion: reduceMotion,
@@ -149,6 +151,9 @@ struct MapScreen: View {
                 previewProvider: contextPreview(for:)
             )
             .ignoresSafeArea()
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in
+                location.refreshHeadingOrientation()
+            }
 
             if mode != .browsing {
                 PlacementReticle(kind: mode == .placingHouse ? .house : .boundaryPoint)
@@ -540,6 +545,8 @@ struct MapScreen: View {
         housesByID = [:]
         lastPipelineKey = nil
         structuralVersion &+= 1
+        let restored = camera.selectTerritory(gebiet?.id)
+        cameraCommand = .region(restored, animated: false)
     }
 
     // MARK: - Camera
@@ -695,6 +702,9 @@ struct MapScreen: View {
         for house in doomed { modelContext.delete(house) }
         guard modelContext.save(reporting: notices, context: "Auswahl konnte nicht gelöscht werden")
         else { return }
+        Task {
+            for house in doomed { await ReminderService.cancelAllRevisits(house: house.id) }
+        }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         exitSelection()
     }
@@ -734,7 +744,6 @@ struct MapScreen: View {
         let doorID = door.id
         Task { await ReminderService.cancelRevisit(house: houseID, door: doorID, day: day) }
         scheduleSave()
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
     /// Books a return time for a single-door pin, from the long-press menu.
@@ -755,18 +764,19 @@ struct MapScreen: View {
         }
         scheduleSave()
         notices.show("Später um \(RevisitPlanner.clockFormatter.string(from: date))")
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
     private func markOpenDoors(for id: UUID) {
         guard let house = housesByID[id] else { return }
         guard house.setOutcomeForOpenDoors(.notHome, day: writeDay(for: house)) > 0 else { return }
         scheduleSave()
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
     private func scheduleSave() {
-        pendingSave.schedule(in: modelContext, reporting: notices)
+        pendingSave.schedule(in: modelContext, reporting: notices) {
+            notices.show("Gespeichert")
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        }
     }
 
     private func flushPendingSave() {
@@ -797,12 +807,9 @@ struct MapScreen: View {
 
     private func contextMenu(for pin: MapPinSnapshot) -> UIMenu {
         let id = pin.id
-        let navigation = UIMenu(options: .displayInline, children: [
+        let details = UIMenu(options: .displayInline, children: [
             UIAction(title: "Details öffnen", image: UIImage(systemName: "info.circle")) { _ in
                 openHouse(id)
-            },
-            UIAction(title: "Fußroute öffnen", image: UIImage(systemName: "figure.walk")) { _ in
-                MapNavigation.openWalkingRoute(to: pin.coordinate, name: pin.address)
             }
         ])
 
@@ -839,7 +846,7 @@ struct MapScreen: View {
             }
         ])
 
-        return UIMenu(title: pin.address, children: [navigation, status, destructive])
+        return UIMenu(title: pin.address, children: [details, status, destructive])
     }
 
     private func contextPreview(for pin: MapPinSnapshot) -> UIViewController? {
@@ -936,6 +943,7 @@ struct MapScreen: View {
                     guard let house = housesByID[id] else { return }
                     modelContext.delete(house)
                     if modelContext.save(reporting: notices, context: "Haus konnte nicht gelöscht werden") {
+                        Task { await ReminderService.cancelAllRevisits(house: id) }
                         UINotificationFeedbackGenerator().notificationOccurred(.success)
                     }
                 },

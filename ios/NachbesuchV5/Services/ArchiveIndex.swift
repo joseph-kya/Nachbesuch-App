@@ -13,12 +13,42 @@ nonisolated struct ArchiveEntry: Sendable {
     let day1: OutcomeTally
     let day2: OutcomeTally
     let pendingRevisits: Int
+    let revisitTargets: Int
+    let damagedHouseCount: Int
     /// Folded haystack: name, place, notes, every address and house note.
     let searchText: String
     /// Folded date words: "heute", weekday, month name, numeric forms.
     let dateText: String
     let day1Date: Date
     let day2Date: Date?
+
+    init(
+        gebietID: UUID,
+        houseCount: Int,
+        overall: OutcomeTally,
+        day1: OutcomeTally,
+        day2: OutcomeTally,
+        pendingRevisits: Int,
+        revisitTargets: Int = 0,
+        damagedHouseCount: Int = 0,
+        searchText: String,
+        dateText: String,
+        day1Date: Date,
+        day2Date: Date?
+    ) {
+        self.gebietID = gebietID
+        self.houseCount = houseCount
+        self.overall = overall
+        self.day1 = day1
+        self.day2 = day2
+        self.pendingRevisits = pendingRevisits
+        self.revisitTargets = revisitTargets
+        self.damagedHouseCount = damagedHouseCount
+        self.searchText = searchText
+        self.dateText = dateText
+        self.day1Date = day1Date
+        self.day2Date = day2Date
+    }
 
     var isComplete: Bool { overall.unitCount > 0 && overall.open == 0 }
 }
@@ -63,6 +93,8 @@ nonisolated enum ArchiveIndexBuilder {
             var day1 = OutcomeTally.empty
             var day2 = OutcomeTally.empty
             var pendingRevisits = 0
+            var revisitTargets = 0
+            var damagedHouseCount = 0
             var text = ""
         }
 
@@ -79,7 +111,11 @@ nonisolated enum ArchiveIndexBuilder {
             accumulator.text += " " + house.address
             if !house.note.isEmpty { accumulator.text += " " + house.note }
 
-            guard let doors = try? decoder.decode([DoorResult].self, from: house.unitsData) else { continue }
+            let state = HouseDataState.decode(house.unitsData, decoder: decoder)
+            guard let doors = state.doors else {
+                accumulator.damagedHouseCount += 1
+                continue
+            }
             for door in doors {
                 accumulator.overall.ingest(door, scope: .combined)
 
@@ -91,6 +127,9 @@ nonisolated enum ArchiveIndexBuilder {
                     accumulator.day1.open += 1
                 }
 
+                let isRevisitTarget = door.outcome == .notHome || door.outcome == nil || door.day2Outcome != nil
+                guard isRevisitTarget else { continue }
+                accumulator.revisitTargets += 1
                 accumulator.day2.unitCount += 1
                 if let result = door.result(on: 2) {
                     accumulator.day2.completed += 1
@@ -114,6 +153,8 @@ nonisolated enum ArchiveIndexBuilder {
                 day1: accumulator.day1,
                 day2: accumulator.day2,
                 pendingRevisits: accumulator.pendingRevisits,
+                revisitTargets: accumulator.revisitTargets,
+                damagedHouseCount: accumulator.damagedHouseCount,
                 searchText: SearchText.fold(haystack),
                 dateText: dateText(day1: gebiet.day1Date, day2: gebiet.day2Date),
                 day1Date: gebiet.day1Date,

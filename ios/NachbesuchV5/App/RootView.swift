@@ -12,6 +12,7 @@ struct RootView: View {
 
     @Query(sort: \Gebiet.day1Date, order: .reverse) private var gebiete: [Gebiet]
     @Query(sort: \CampaignDay.date, order: .reverse) private var legacyDays: [CampaignDay]
+    @Query(sort: \House.updatedAt, order: .reverse) private var allHouses: [House]
 
     @AppStorage("migration.legacyDaysToGebiete.v3") private var didMigrateLegacyDays = false
     /// Distinguishes "brand new install" from "the user deliberately deleted
@@ -24,6 +25,8 @@ struct RootView: View {
     @AppStorage("selectedGebietID") private var selectedGebietIDString = ""
     @AppStorage("appearance.mode") private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage("appearance.accent") private var accentRaw = AppAccent.volkshilfe.rawValue
+    @AppStorage(ReminderSettings.unscheduledCountKey) private var unscheduledRevisits = 0
+    @AppStorage(ReminderSettings.dailyListKey) private var dailyListReminders = true
 
     private var selectedGebietID: UUID? {
         get { UUID(uuidString: selectedGebietIDString) }
@@ -102,7 +105,12 @@ struct RootView: View {
         // the navigation bar behind it, and the bar variant additionally extends the
         // scroll edge effect of any scroll view it insets.
         .compatSafeAreaBar(edge: .top, spacing: 0) {
-            AppNoticeBanner()
+            VStack(spacing: AppSpacing.tight) {
+                AppNoticeBanner()
+                if unscheduledRevisits > 0 {
+                    ReminderCapacityBanner(count: unscheduledRevisits)
+                }
+            }
         }
         .task {
             await migrateLegacyDaysIfNeeded()
@@ -114,6 +122,7 @@ struct RootView: View {
             }
             #endif
             ensureSelection()
+            await reconcileReminders()
         }
         .onChange(of: gebiete.count) { _, _ in
             ensureSelection()
@@ -129,8 +138,44 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
                 modelContext.save(reporting: notices)
+            } else {
+                Task { await reconcileReminders() }
             }
         }
+        .task(id: reminderRevision) {
+            guard scenePhase == .active else { return }
+            await reconcileReminders()
+        }
+    }
+
+    private var reminderRevision: String {
+        "\(allHouses.count)-\(allHouses.first?.updatedAt.timeIntervalSinceReferenceDate ?? 0)"
+    }
+
+    private func reconcileReminders() async {
+        var candidates: [RevisitReminderCandidate] = []
+        for house in allHouses {
+            guard let doors = house.decodedUnits() else { continue }
+            for door in doors {
+                if door.outcome == .later, let date = door.revisitAt {
+                    candidates.append(.init(
+                        houseID: house.id, doorID: door.id, day: 1,
+                        address: house.address, doorLabel: door.label,
+                        isApartmentBuilding: house.isApartmentBuilding, date: date
+                    ))
+                }
+                if door.day2Outcome == .later, let date = door.day2RevisitAt {
+                    candidates.append(.init(
+                        houseID: house.id, doorID: door.id, day: 2,
+                        address: house.address, doorLabel: door.label,
+                        isApartmentBuilding: house.isApartmentBuilding, date: date
+                    ))
+                }
+            }
+        }
+        let result = await ReminderService.reconcile(candidates)
+        unscheduledRevisits = result.unscheduled + result.failed
+        await ReminderService.applyDailyListReminders(enabled: dailyListReminders)
     }
 
     /// Gives a brand-new install something to work with.
@@ -171,10 +216,6 @@ struct RootView: View {
     /// stranded the data permanently, with missing territories as the only symptom.
     private func migrateLegacyDaysIfNeeded() async {
         guard !didMigrateLegacyDays else { return }
-        guard !legacyDays.isEmpty else {
-            didMigrateLegacyDays = true
-            return
-        }
 
         var didChange = false
         for day in legacyDays where !gebiete.contains(where: { $0.id == day.id }) {
@@ -188,9 +229,15 @@ struct RootView: View {
         }
 
         // Houses written before territories existed carry only the legacy key.
-        let orphans = (try? modelContext.fetch(
-            FetchDescriptor<House>(predicate: #Predicate { $0.gebietID == nil })
-        )) ?? []
+        let orphans: [House]
+        do {
+            orphans = try modelContext.fetch(
+                FetchDescriptor<House>(predicate: #Predicate { $0.gebietID == nil })
+            )
+        } catch {
+            notices.report(error, context: "Alte Hauszuordnungen konnten nicht geprüft werden")
+            return
+        }
         for house in orphans where house.dayID != nil {
             house.gebietID = house.dayID
             didChange = true

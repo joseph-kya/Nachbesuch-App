@@ -68,15 +68,8 @@ struct MapHost: UIViewRepresentable {
     let changedHouseIDs: Set<UUID>
     let boundary: [CLLocationCoordinate2D]
     let draftPoints: [CLLocationCoordinate2D]
-    /// The planned walking order, already trimmed to what is still open.
-    ///
-    /// Dormant: the recommended route has no user interface at the moment, so
-    /// nothing passes these. The drawing path is kept intact rather than deleted,
-    /// because the planner it renders is still here and still tested.
-    var routeCoordinates: [CLLocationCoordinate2D] = []
-    /// The house the route says to walk to next, ringed on the map.
-    var nextStopCoordinate: CLLocationCoordinate2D?
     let selectedHouseIDs: Set<UUID>?
+    let isActive: Bool
     let isSatellite: Bool
     let poiPreset: POIPreset
     let reduceMotion: Bool
@@ -91,13 +84,6 @@ struct MapHost: UIViewRepresentable {
     var onCameraIdle: (MKCoordinateRegion) -> Void = { _ in }
     var onCameraMoved: (MKCoordinateRegion) -> Void = { _ in }
     var onTrackingModeChanged: (Bool) -> Void = { _ in }
-    /// Whether a tap on a pin picks a route start instead of opening it.
-    ///
-    /// Passed as a value and re-applied on every update, so the coordinator always
-    /// acts on the current mode rather than on state captured in a stale closure.
-    /// Dormant along with `routeCoordinates`.
-    var picksRouteStart = false
-
     var onTapHouse: (UUID) -> Void = { _ in }
     var onStackedPins: ([UUID]) -> Void = { _ in }
     var onDropConsumed: (UUID) -> Void = { _ in }
@@ -114,11 +100,10 @@ struct MapHost: UIViewRepresentable {
         coordinator.mapView = mapView
 
         mapView.register(HousePinView.self, forAnnotationViewWithReuseIdentifier: HousePinView.reuseIdentifier)
-        mapView.register(NextStopHaloView.self, forAnnotationViewWithReuseIdentifier: NextStopHaloView.reuseIdentifier)
         mapView.register(DraftPointView.self, forAnnotationViewWithReuseIdentifier: DraftPointView.reuseIdentifier)
         mapView.register(UserLocationPuckView.self, forAnnotationViewWithReuseIdentifier: UserLocationPuckView.reuseIdentifier)
 
-        mapView.showsUserLocation = true
+        mapView.showsUserLocation = isActive
         mapView.showsCompass = false      // custom compass placed clear of the chrome
         mapView.showsScale = true
         mapView.showsBuildings = true
@@ -143,19 +128,19 @@ struct MapHost: UIViewRepresentable {
         coordinator.onCameraIdle = onCameraIdle
         coordinator.onCameraMoved = onCameraMoved
         coordinator.onTrackingModeChanged = onTrackingModeChanged
-        coordinator.picksRouteStart = picksRouteStart
         coordinator.onTapHouse = onTapHouse
         coordinator.onStackedPins = onStackedPins
         coordinator.onDropConsumed = onDropConsumed
         coordinator.menuProvider = menuProvider
         coordinator.previewProvider = previewProvider
         coordinator.reduceMotionEnabled = reduceMotion
+        if mapView.showsUserLocation != isActive {
+            mapView.showsUserLocation = isActive
+        }
 
         coordinator.applyConfiguration(mapView, satellite: isSatellite, poi: poiPreset)
         coordinator.applyChromeInsets(mapView, insets: chromeInsets)
         coordinator.syncBoundary(mapView, boundary: boundary)
-        coordinator.syncRoute(mapView, coordinates: routeCoordinates)
-        coordinator.syncNextStop(mapView, coordinate: nextStopCoordinate)
         coordinator.syncDraftPoints(mapView, points: draftPoints)
         coordinator.applyUserHeading(userHeading, accuracy: userHeadingAccuracy)
 

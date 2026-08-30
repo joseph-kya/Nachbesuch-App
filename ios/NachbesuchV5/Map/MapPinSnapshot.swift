@@ -16,6 +16,9 @@ nonisolated struct MapPinSnapshot: Identifiable, Sendable, Equatable {
     let joinedCount: Int
     let earlyNoCount: Int
     let lateNoCount: Int
+    /// The pin remains present, but uses an explicit warning instead of pretending
+    /// that unreadable door data means zero doors.
+    let isDamaged: Bool
     /// Doors still needing a visit — straight from `OutcomeTally.open`, the one
     /// implementation of that question.
     ///
@@ -36,7 +39,8 @@ nonisolated struct MapPinSnapshot: Identifiable, Sendable, Equatable {
     /// Glyph baked into the pin bitmap: the outcome emoji for a single household,
     /// a progress counter for an apartment building.
     var markerText: String {
-        unitCount == 1 ? markerOutcome.displayEmojiRaw : "\(completedCount)/\(unitCount)"
+        if isDamaged { return "!" }
+        return unitCount == 1 ? markerOutcome.displayEmojiRaw : "\(completedCount)/\(unitCount)"
     }
 
     /// Same source as everything else that says "offen".
@@ -109,10 +113,11 @@ nonisolated struct MapDayStats: Sendable, Equatable {
     let openCount: Int
     let earlyNoCount: Int
     let lateNoCount: Int
+    let damagedHouseCount: Int
 
     static let empty = MapDayStats(
         houseCount: 0, followUpCount: 0, joinedCount: 0,
-        openCount: 0, earlyNoCount: 0, lateNoCount: 0
+        openCount: 0, earlyNoCount: 0, lateNoCount: 0, damagedHouseCount: 0
     )
 }
 
@@ -179,6 +184,7 @@ nonisolated enum MapPinSnapshotBuilder {
         var open = 0
         var earlyNo = 0
         var lateNo = 0
+        var damaged = 0
 
         for house in houses {
             let snapshot = pin(for: house, scope: scope, decoder: decoder)
@@ -188,6 +194,7 @@ nonisolated enum MapPinSnapshotBuilder {
             open += snapshot.openCount
             earlyNo += snapshot.earlyNoCount
             lateNo += snapshot.lateNoCount
+            if snapshot.isDamaged { damaged += 1 }
         }
 
         return PreparedMapSnapshot(
@@ -198,7 +205,8 @@ nonisolated enum MapPinSnapshotBuilder {
                 joinedCount: joined,
                 openCount: open,
                 earlyNoCount: earlyNo,
-                lateNoCount: lateNo
+                lateNoCount: lateNo,
+                damagedHouseCount: damaged
             ),
             bounds: MapBounds.around(houses.map(\.coordinate))
         )
@@ -220,6 +228,7 @@ nonisolated enum MapPinSnapshotBuilder {
         var open = snapshot.stats.openCount
         var earlyNo = snapshot.stats.earlyNoCount
         var lateNo = snapshot.stats.lateNoCount
+        var damaged = snapshot.stats.damagedHouseCount
 
         for house in changed {
             let updated = pin(for: house, scope: scope, decoder: decoder)
@@ -230,6 +239,7 @@ nonisolated enum MapPinSnapshotBuilder {
             earlyNo += updated.earlyNoCount - (previous?.earlyNoCount ?? 0)
             lateNo += updated.lateNoCount - (previous?.lateNoCount ?? 0)
             open += updated.openCount - (previous?.openCount ?? 0)
+            damaged += (updated.isDamaged ? 1 : 0) - (previous?.isDamaged == true ? 1 : 0)
         }
 
         return PreparedMapSnapshot(
@@ -240,7 +250,8 @@ nonisolated enum MapPinSnapshotBuilder {
                 joinedCount: max(joined, 0),
                 openCount: max(open, 0),
                 earlyNoCount: max(earlyNo, 0),
-                lateNoCount: max(lateNo, 0)
+                lateNoCount: max(lateNo, 0),
+                damagedHouseCount: max(damaged, 0)
             ),
             // A content patch never moves a pin, so the extent is unchanged.
             bounds: snapshot.bounds
@@ -256,7 +267,8 @@ nonisolated enum MapPinSnapshotBuilder {
         // `LightweightDoor` type bridged by raw-string equality, so renaming a
         // `VisitOutcome` case would have silently dropped doors from the counts with
         // no compiler error anywhere.
-        let doors = (try? decoder.decode([DoorResult].self, from: house.unitsData)) ?? []
+        let state = HouseDataState.decode(house.unitsData, decoder: decoder)
+        let doors = state.doors ?? []
         let tally = OutcomeTally.tally(doors, scope: scope)
         return MapPinSnapshot(
             id: house.id,
@@ -270,6 +282,7 @@ nonisolated enum MapPinSnapshotBuilder {
             joinedCount: tally.joined,
             earlyNoCount: tally.earlyNo,
             lateNoCount: tally.lateNo,
+            isDamaged: state.isDamaged,
             openCount: tally.open,
             nextRevisitAt: doors.compactMap { $0.displayRevisitAt(in: scope) }.min()
         )

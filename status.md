@@ -1,17 +1,32 @@
 # Status
 
-Last updated: 2026-08-24T12:00:00+02:00 · Tests: iOS 112 passing, 0 fehlgeschlagen;
+Last updated: 2026-08-30T23:21:00+02:00 · Tests: iOS 89 passing, 1 diagnostic
+PDF test skipped, 0 fehlgeschlagen on iOS 26.5 and iOS 18.5;
 Android domain + data passing · `refactor/minimal-ui` und `salvage/offene-arbeit`
 sind auf `main` und auf `origin`
 
 ## In flight
-- **Am Gerät durchgeklickt ist immer noch nichts.** Die App wurde diese Sitzung
-  im Simulator (iPhone 17, iOS 26.5) mit 400 gesetzten Häusern gestartet, die
-  Karte rendert; Liste, Archiv und Detailblatt sind nur gebaut und getestet,
-  nicht bedient. Das bleibt der nächste Schritt — jetzt auf `main`, also mit
-  mehr Gewicht als vorher.
+- Archiv und Detailblatt brauchen weiterhin einen vollständigen manuellen
+  Golden-Path-Durchgang. Die Liste wurde auf iOS 26.5 mit 180 gesetzten Häusern
+  visuell geprüft und bedient; Öffnen/Schließen der Straßen, die gemeinsame
+  Glasfläche und die Accessibility-Zustände funktionieren.
 
 ## Done
+- [x] `THE UPGRADE` reliability pass · damaged/empty/readable house data now has
+  one shared meaning across map, archive, balance and export; damaged exports
+  fail closed. Raw replacements validate before overwrite, backup fetches fail
+  explicitly, territory mutations invalidate derived state, and deletion removes
+  dependent houses plus reminders only after persistence succeeds.
+- [x] Reminder reconciliation · saved revisit promises are rebuilt on launch,
+  foregrounding and data changes; the deterministic 49-item revisit budget leaves
+  room for the 15 daily reminders and shows overflow/failures persistently in-app.
+- [x] Field loop polish · save feedback follows the real SwiftData commit, search
+  resolution is single-flight, map cameras are territory-specific, location work
+  follows the active map and real scene orientation, and Dynamic Type uses adaptive
+  labels without replacing the primary `Haus hinzufügen` action.
+- [x] Upgrade regression contract · corrupt data, Tag-2 denominator and reminder
+  overflow have dedicated tests. Full suites pass
+  on both the current iOS 26.5 and minimum iOS 18.5 simulator runtimes.
 - [x] Verlorene Türen auf der Karte · `PendingSave` · Der Karten-Screen brach
   beim Verlassen des Tabs die verzögerte Speicherung **ab**, statt sie
   abzuräumen: ein Status, der innerhalb der 350 ms vor dem Tabwechsel gesetzt
@@ -39,10 +54,10 @@ sind auf `main` und auf `origin`
 - [x] Stilrichtlinie · `51e48d7` · `style.md` — Verfahren statt Geschmack:
   Streichen → Verschieben → Gestalten. Quellen: Apples Material- und
   Design-System-Vorgaben für iOS 26, Rams, NN/g.
-- [x] Empfohlene Route ohne Oberfläche · `6c72966`, `37e8698` · auf beiden
-  Plattformen aus der Karte genommen, Planer und Gehwegegraph bleiben
-  vollständig erhalten und getestet. Rückweg steht in `RouteSession.swift`
-  und im README.
+- [x] Routen- und Folgevorschlagsfunktion vollständig entfernt · Planer,
+  Gehwegegraph, Overlays, Apple-Maps-Handoff, automatischer Folgevorschlag und
+  zugehörige Tests sind aus iOS entfernt. Die Wahl des nächsten Hauses bleibt beim
+  Menschen; `Haus hinzufügen` ist wieder die primäre Kartenaktion.
 - [x] Entschlackung · `ce419ca`, `7d3a0b8` · kein fest verdrahtetes Rot mehr
   als Akzent (iOS **und** Android — auf Android blieb die Kartenchrome rot,
   wenn „Blau" gewählt war), Hintergrund von drei Verlaufsschichten auf eine,
@@ -52,8 +67,6 @@ sind auf `main` und auf `origin`
 - [x] Akzentfarbe konsistent durchgereicht (iOS) · `a679690` · `\.appAccent`
   statt `Color.accentColor`, das auf den Asset-Catalog auflöste.
 - [x] „Später" als Chip und Filter in der Liste · `8e75c03`.
-- [x] Route straßenweise planen und Termine einplanen · `944d352` · liegt jetzt
-  ohne Oberfläche bereit.
 
 ## Done — früher
 - [x] „Später" und Erinnerungen · `6d61029`, `1c9951d` · fünfter Status mit

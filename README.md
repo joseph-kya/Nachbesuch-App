@@ -42,7 +42,7 @@ Häuser und Ergebnisse, ohne Backup-Import.
 OSM-Import, Satellit, Orte ein-/ausblenden, Standortverfolgung.
 
 **Liste** — die Nachbesuchs-Arbeitsliste. Nach Straßen gruppiert, offene Türen
-zuerst, Filter-Chips mit Live-Zählern, Wischen für Route und Schnellstatus mit
+zuerst, Filter-Chips mit Live-Zählern und Wischen für Schnellstatus mit
 benanntem Undo.
 
 **Archiv** — Gedächtnis und Abrechnung. Bilanz des aktiven Gebiets, taggruppierte
@@ -281,28 +281,15 @@ Türen in der Reihenfolge, in der du sie abgearbeitet hast. Die Uhrzeit selbst w
 Gruppierung nach Straßen im PDF entfallen; der Bericht liest sich jetzt als Ablauf
 der Runde statt als Verzeichnis.
 
-### Empfohlene Route — derzeit ohne Oberfläche
+### Keine Routenfunktion
 
-**Das Feature ist aus der Karte genommen.** Im Feld hat es nicht überzeugt, und ein
-Vorschlag, dem man nicht folgt, ist schlechter als keiner: er kostet einen Blick,
-jedes Mal. Der Menüpunkt „Empfohlene Route", das Startpunkt-Blatt und das Panel mit
-der laufenden Route existieren nicht mehr.
+Die Routenfunktion ist vollständig entfernt: kein Planer, kein Wegenetz, kein
+Routen-Zustand und auch kein Sprung zu Apple Maps. Bei den kurzen Abständen im Feld
+kostet der App-Wechsel mehr Aufmerksamkeit, als er spart.
 
-Was **bleibt**, weil es funktioniert und getestet ist: der Planer selbst
-(`RoutePlanner`, `RouteOrdering`, `RouteSchedule`), der Fußwege-Graph aus der
-Overpass-API (`WalkingNetwork`), der laufende Zustand (`RouteSession`, `RouteStore`)
-und der Zeichenpfad in `MapHost` / `MapCoordinator`, dessen Routen-Argumente jetzt
-schlicht leer vorbelegt sind. Die Reihenfolge wird straßenweise gebaut — eine Straße
-wird fertig gegangen, bevor die nächste beginnt — und gebuchte „Später"-Termine
-werden zu ihrer Uhrzeit eingeplant, statt um 15:00 am 18:00-Haus vorbeizulaufen.
-
-Wer die Oberfläche zurückholt, holt drei Ansichten aus der Historie zurück
-(`RoutePanel`, `RouteStartPrompt`, `RouteStartPicker` in `MapChrome.swift`) plus den
-`RoutePhase`-Zustand in `MapScreen`. Der Kommentar oben in `RouteSession.swift` sagt
-dasselbe noch einmal an der Stelle, an der man danach sucht.
-
-Weiterhin da und davon unberührt: **„Fußroute öffnen"** im Kontextmenü eines Pins,
-das für *ein* Haus die Gehstrecke in Apple Maps öffnet.
+Stattdessen zeigt die Karte lokal und nachvollziehbar den **nächsten offenen Besuch**.
+Ein Tipp öffnet das Haus direkt in Nachbesuch. Entfernung und fällige „Später“-Termine
+helfen bei der Auswahl, ohne eine optimierte Gehroute vorzutäuschen.
 
 ### „Nächste zuerst"
 Die Liste kann nach **Entfernung** sortieren und zeigt dann pro Zeile, wie weit das
@@ -436,17 +423,13 @@ Zwei Regeln tragen die Kartenleistung:
 
 ## Tests
 
-78 Tests grün und ein diagnostischer PDF-Test gezielt übersprungen, im Swift-6-Modus,
+Die Tests laufen im Swift-6-Modus,
 mit Schwerpunkt auf den oben korrigierten Fehlern:
 Tag-Semantik, Änderungsstempel, Schutz beschädigter Daten, Gebiets-Invarianten,
 Schwerpunktberechnung, Straßennamen, Suche, Bilanz, Export-Umfang und Pin-Aufbau
-bis 10.000 Häuser. Für die Route zusätzlich: dass jedes Haus genau einmal besucht
-wird, dass 2-opt eine Kreuzung auflöst und die Verfeinerung nie verschlechtert, dass
-der gezeichnete Weg dem Straßengraphen folgt (zwei Häuser 60 m Luftlinie, über 400 m
-zu Fuß) und dass ohne Netz sauber auf die Luftlinie zurückgefallen wird. Dazu die
-Warteschlange: übersprungene Häuser rutschen ans Ende und gehen nicht verloren,
-erledigte fallen heraus, und die gezeichnete Linie läuft nach einem Übersprung nicht
-rückwärts durch bereits erledigte Türen.
+bis 10.000 Häuser. Die Upgrade-Regressionstests decken zusätzlich beschädigte
+Hausdaten, den korrekten Tag-2-Nenner, die deterministische Auswahl des nächsten
+Besuchs und sichtbare Überläufe des Erinnerungsbudgets ab.
 
 ```bash
 xcodebuild test -project ios/NachbesuchV5.xcodeproj -scheme NachbesuchV5 -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
