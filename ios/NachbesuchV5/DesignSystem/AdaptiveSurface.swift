@@ -236,7 +236,6 @@ struct AppBackdrop: View {
 struct SectionSurface: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
     /// Rounds the top — the street header.
@@ -246,13 +245,6 @@ struct SectionSurface: View {
     /// Air above the section. Carried by the background rather than by a spacer row
     /// so the gap between two streets cannot drift from the corner that sits in it.
     var topGap: CGFloat = 0
-
-    /// One key for both ends, because two stacked `.animation(_:value:)` modifiers do
-    /// not compose — the second silently overrides the first for the whole subtree.
-    private struct Ends: Equatable {
-        let first: Bool
-        let last: Bool
-    }
 
     private var prefersOpaque: Bool {
         #if DEBUG
@@ -344,16 +336,11 @@ struct SectionSurface: View {
                     .overlay { gloss(shape) }
             }
         }
-        // The corners have to *travel*, and this is the modifier that makes them.
-        //
-        // `isLast` flips the instant a street is collapsed, so the header snapped to
-        // a rounded bottom while its addresses were still fading out underneath it —
-        // a hard-cut square edge sitting over ghost rows, with the next street sliding
-        // up through the gap. `UnevenRoundedRectangle` animates its `RectangleCornerRadii`,
-        // but only inside a transaction, and a `listRowBackground` does not inherit the
-        // one the row's own removal is running in. Keying it here puts the rounding on
-        // the same clock as the fold.
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: Ends(first: isFirst, last: isLast))
+        // Structural list updates are intentionally atomic. Animating these radii
+        // independently from UIKit's row removal creates a transient pill or a clipped
+        // bottom edge while the old rows are being recycled. The chevron and progress
+        // controls still provide motion; the container shape simply resolves to the
+        // correct geometry for its current state.
         .padding(.top, topGap)
         .padding(.horizontal, AppSpacing.regular)
     }
