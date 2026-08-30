@@ -245,85 +245,24 @@ struct SectionSurface: View {
         return reduceTransparency || colorSchemeContrast == .increased
     }
 
-    /// What separates glass from frost.
-    ///
-    /// A material on its own is only the blur half: it diffuses what is behind it and
-    /// stops there, which is frosted bathroom glass. Real Liquid Glass is blur *plus*
-    /// specular — a lit edge and a sheen that say the surface has a front face
-    /// catching a light. `glassEffect` supplies both, but it cannot be used here: as a
-    /// `listRowBackground` it is one glass element per row, and a dozen of them
-    /// sampling and re-blurring each other renders the house numbers illegible.
-    /// Photographed, then reverted. So the specular is drawn by hand.
-    ///
-    /// Every piece of it is built to **tile vertically without a seam**, because this
-    /// surface is one segment of a taller section and a horizontal edge anywhere
-    /// except the section's real ends would draw a bright line across every row
-    /// boundary:
-    ///   - the sheen runs leading→trailing, so each segment paints an identical
-    ///     gradient and the column reads as continuous;
-    ///   - the rim is two vertical hairlines, which butt onto the next segment's
-    ///     exactly;
-    ///   - the rounded cap is stroked only on the segment that actually owns that
-    ///     end, and masked to the corner band so its straight side never shows.
-    @ViewBuilder
-    private func gloss(_ shape: UnevenRoundedRectangle) -> some View {
-        let rim = Color.white.opacity(colorScheme == .dark ? 0.32 : 0.68)
-        ZStack {
-            // Two stops, not one ramp: a bright band that falls off fast reads as a
-            // light source glancing off a front face. A slow even ramp reads as a
-            // tinted panel.
-            LinearGradient(
-                stops: [
-                    .init(color: .white.opacity(colorScheme == .dark ? 0.19 : 0.32), location: 0),
-                    .init(color: .white.opacity(colorScheme == .dark ? 0.05 : 0.10), location: 0.28),
-                    .init(color: .white.opacity(0), location: 0.75)
-                ],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-            .clipShape(shape)
-
-            HStack(spacing: 0) {
-                Rectangle().fill(rim).frame(width: 0.66)
-                Spacer(minLength: 0)
-                Rectangle().fill(rim).frame(width: 0.66)
-            }
-            .clipShape(shape)
-
-            if isFirst {
-                shape.strokeBorder(rim, lineWidth: 0.66)
-                    .mask(alignment: .top) {
-                        Rectangle().frame(height: AppRadius.card)
-                    }
-            }
-            if isLast {
-                shape.strokeBorder(rim.opacity(0.5), lineWidth: 0.66)
-                    .mask(alignment: .bottom) {
-                        Rectangle().frame(height: AppRadius.card)
-                    }
-            }
-        }
-        .allowsHitTesting(false)
-    }
-
     var body: some View {
         let shape = sectionShape(isFirst: isFirst, isLast: isLast)
         Group {
             if prefersOpaque {
                 shape.fill(Color(uiColor: .secondarySystemGroupedBackground))
             } else {
-                // `.ultraThin`, not `.regular`. This is the surface that has to read
-                // as glass, and the thinner grade lets more of `AppBackdrop`'s colour
-                // fields through — which is the whole difference between "translucent"
-                // and "grey".
-                // The material is held back from full strength on purpose. At 100 %
-                // even `.ultraThin` is opaque enough to hide the backdrop's colour
-                // fields, which are the only reason this surface reads as glass and
-                // not as a grey box. Letting it sit at ~three-quarters lets the field
-                // behind a street tint the street.
-                shape.fill(.ultraThinMaterial)
-                    .opacity(colorScheme == .dark ? 0.74 : 0.88)
-                    .overlay { gloss(shape) }
+                // Use the same regular Liquid Glass as Archive's `contentCard`.
+                // Keeping one material definition across content screens prevents
+                // the list from looking like a translucent overlay while Archive
+                // looks like the intended glass surface.
+                Color.clear
+                    .compatGlass(interactive: false, in: shape)
+                    .overlay {
+                        shape.strokeBorder(
+                            .white.opacity(colorScheme == .dark ? 0.10 : 0.55),
+                            lineWidth: 0.66
+                        )
+                    }
             }
         }
         // Structural list updates are intentionally atomic. Animating these radii
