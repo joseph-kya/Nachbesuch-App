@@ -150,13 +150,9 @@ extension View {
 /// cards used to read as plain white rectangles. That refraction is the backdrop's
 /// entire job — it is not a design surface.
 ///
-/// So: **one** gradient, in the accent alone. It used to be three layers — a linear
-/// wash that ran accent→clear→*blue*, plus a radial glow in the corner. The blue was
-/// a second colour nobody had chosen and the app never used elsewhere; the radial
-/// was a highlight over a scroll view whose content slides straight through it. Two
-/// of the three answered no question at all, and the cards look the same without
-/// them. Deliberately faint: the first attempt at 0.16 turned the whole screen pink,
-/// because an opacity that reads as subtle on a neutral accent does not on red.
+/// The wash stays monochrome and deliberately faint: a second hue reads as a second
+/// theme, while a strong accent turns the entire field pink instead of supporting the
+/// content.
 struct AppBackdrop: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appAccent) private var accent
@@ -169,23 +165,17 @@ struct AppBackdrop: View {
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
-            // Liquid Glass is a lens. A lens over a flat field shows a flat field —
-            // which is why the grouped list read as slabs of grey no matter what
-            // material was under it: `systemGroupedBackground` plus a 10 % wash is
-            // very nearly one colour, and there was nothing for the glass to bend.
-            //
-            // These two soft fields are what the surfaces above actually refract.
-            // They are deliberately far apart and very low contrast: enough
-            // luminance variation for an edge to catch and for a highlight to travel
-            // as the list scrolls, not enough to read as decoration in their own
-            // right.
+            // Two soft fields in the selected accent give glass something subtle to
+            // refract. Keeping both fields monochrome avoids the accidental red/blue
+            // split that made the app feel like two unrelated themes, while the low
+            // contrast keeps the backdrop quiet behind field data.
             GeometryReader { proxy in
                 let side = max(proxy.size.width, proxy.size.height)
                 ZStack {
-                    field(accent, opacity: colorScheme == .dark ? 0.52 : 0.22)
+                    field(accent, opacity: colorScheme == .dark ? 0.18 : 0.08)
                         .frame(width: side * 0.95, height: side * 0.95)
                         .offset(x: -side * 0.28, y: -side * 0.20)
-                    field(.blue, opacity: colorScheme == .dark ? 0.36 : 0.14)
+                    field(accent, opacity: colorScheme == .dark ? 0.10 : 0.045)
                         .frame(width: side * 0.85, height: side * 0.85)
                         .offset(x: side * 0.34, y: side * 0.30)
                 }
