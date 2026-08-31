@@ -119,132 +119,46 @@ struct ListScreen: View {
 
     var body: some View {
         NavigationStack {
-            // Container spacing must stay **below** the gap between the shapes it
-            // holds. At 10 pt against an 8 pt row gap every row fused into one long
-            // white slab — the list stopped looking like cards at all.
-            CompatGlassContainer(spacing: 2) {
-                List {
-                    if sections.isEmpty {
-                        emptyState
-                            .padding(AppSpacing.regular)
-                            .navigationGlass(cornerRadius: AppRadius.chrome)
-                            .listRowInsets(.init(top: 20, leading: 16, bottom: 20, trailing: 16))
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                            .frame(maxWidth: .infinity, minHeight: 280)
-                    } else {
-                        ForEach(sections) { section in
-                            let isExpanded = !collapsedSections.contains(section.id)
-                            // The street header is a real list row. A native `Section`
-                            // header has its own implicit leading/trailing margins, so
-                            // its glass surface was visibly narrower than the address
-                            // rows even with zero row insets. Keeping every segment in
-                            // the same row geometry lets the material, rim and
-                            // separators form one continuous card.
-                            Button {
-                                toggleSection(section.id)
-                            } label: {
-                                StreetHeader(section: section, isExpanded: isExpanded)
-                                    .padding(.horizontal, AppLayout.rowInset)
-                                    .padding(.vertical, 12)
-                                    .rowSeparator(isExpanded)
-                                    .padding(.top, AppLayout.sectionGap)
-                                    .padding(.horizontal, AppSpacing.regular)
-                            }
-                            .buttonStyle(
-                                GroupedRowStyle(
-                                    isFirst: true,
-                                    isLast: !isExpanded,
-                                    topGap: AppLayout.sectionGap
+            ScrollView {
+                // One glass element per street, not per row — the same grade as
+                // Archive's `contentCard`. A dozen glass samples stacked as
+                // `listRowBackground` behind every address blurred the house numbers;
+                // a single card per street keeps the material glossy and the text sharp.
+                CompatGlassContainer(spacing: 2) {
+                    // VStack (not Lazy) — Lazy defers layout of off-screen cards,
+                    // so the card below had no position to animate from on first
+                    // collapse and jumped, then worked after scrolling realized it.
+                    VStack(spacing: AppSpacing.regular) {
+                        if sections.isEmpty {
+                            emptyState
+                                .contentCard(cornerRadius: AppRadius.card)
+                                .frame(maxWidth: .infinity, minHeight: 280)
+                        } else {
+                            ForEach(sections) { section in
+                                StreetCard(
+                                    section: section,
+                                    isExpanded: !collapsedSections.contains(section.id),
+                                    now: clock,
+                                    zoom: zoom,
+                                    onToggle: { toggleSection(section.id) },
+                                    onSelect: { id in selectedHouse = HouseSelection(id: id) }
                                 )
-                            )
-                            .accessibilityLabel("Straße \(section.title)")
-                            .accessibilityValue(
-                                section.openCount > 0
-                                    ? "\(section.houseCount) Adressen, \(section.openCount) von \(section.unitCount) Türen offen"
-                                    : "\(section.houseCount) Adressen, fertig"
-                            )
-                            .accessibilityHint(
-                                isExpanded
-                                    ? "Blendet alle Adressen dieser Straße aus"
-                                    : "Blendet alle Adressen dieser Straße ein"
-                            )
-                            .listRowInsets(EdgeInsets())
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(
-                                SectionSurface(
-                                    isFirst: true,
-                                    isLast: !isExpanded,
-                                    topGap: AppLayout.sectionGap
-                                )
-                            )
-
-                            if isExpanded {
-                                ForEach(Array(section.rows.enumerated()), id: \.element.id) { index, row in
-                                    let isLast = index == section.rows.count - 1
-                                    Button { selectedHouse = HouseSelection(id: row.id) } label: {
-                                        HouseRow(row: row, now: clock)
-                                            .equatable()
-                                            .padding(.horizontal, AppLayout.rowInset)
-                                            .padding(.vertical, 11)
-                                            .rowSeparator(!isLast)
-                                            .padding(.horizontal, AppSpacing.regular)
-                                    }
-                                    .buttonStyle(GroupedRowStyle(isLast: isLast))
-                                    .matchedTransitionSource(id: row.id, in: zoom)
-                                    .listRowInsets(EdgeInsets())
-                                    .listRowSeparator(.hidden)
-                                    .listRowBackground(
-                                        SectionSurface(isFirst: false, isLast: isLast)
-                                    )
-                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                        Button {
-                                            applyQuickStatus(.joined, to: row)
-                                        } label: {
-                                            Label("Dabei", systemImage: "heart.fill")
-                                        }
-                                        .tint(VisitOutcome.joined.tint)
-
-                                        Button {
-                                            applyQuickStatus(.notHome, to: row)
-                                        } label: {
-                                            Label("Niemand da", systemImage: "arrow.clockwise")
-                                        }
-                                        .tint(VisitOutcome.notHome.tint)
-
-                                        Button {
-                                            revisitTarget = row
-                                        } label: {
-                                            Label(
-                                                VisitOutcome.later.title,
-                                                systemImage: VisitOutcome.later.symbolName
-                                            )
-                                        }
-                                        .tint(VisitOutcome.later.tint)
-                                    }
-                                    .accessibilityAction(named: "Als „Niemand da“ markieren") {
-                                        applyQuickStatus(.notHome, to: row)
-                                    }
-                                    .accessibilityAction(named: "Auf später verschieben") {
-                                        revisitTarget = row
-                                    }
+                                .transaction { t in
+                                    // Don't animate the initial populate — only user toggles.
+                                    if sections.isEmpty { t.disablesAnimations = true }
                                 }
                             }
                         }
                     }
+                    .padding(.top, AppSpacing.tight)
+                    .padding(.bottom, AppSpacing.loose + AppChrome.tabBarClearance)
+                    .padding(.horizontal, AppSpacing.regular)
+                    // Single source for height + sibling slide, same curve as card.
+                    .animation(.smooth(duration: 0.36, extraBounce: 0).speed(reduceMotion ? 1.8 : 1), value: collapsedSections)
                 }
-                .listStyle(.plain)
-                .listSectionSpacing(0)
-                .environment(\.defaultMinListHeaderHeight, 0)
-                .scrollContentBackground(.hidden)
-                // `.loose` alone left the last address under the floating tab bar.
-                .contentMargins(
-                    .bottom,
-                    AppSpacing.loose + AppChrome.tabBarClearance,
-                    for: .scrollContent
-                )
-                .compatSoftScrollEdges()
             }
+            .scrollDismissesKeyboard(.interactively)
+            .compatSoftScrollEdges()
             .background { AppBackdrop() }
             .scrollDismissesKeyboard(.interactively)
             .searchable(text: $searchText, prompt: "Adresse, Notiz oder Tür")
@@ -492,19 +406,14 @@ struct ListScreen: View {
     }
 
     private func toggleSection(_ id: String) {
-        // SwiftUI's UIKit-backed List animates conditional row removal with recycled
-        // snapshots. That produces ghost rows and a delayed fold, especially when a
-        // street has many addresses. Keep the structural change atomic; the chevron,
-        // progress bar and completion mark still animate locally via their own value
-        // animations, so the interaction remains responsive without visual artifacts.
-        var transaction = Transaction()
-        transaction.animation = nil
-        withTransaction(transaction) {
-            if collapsedSections.contains(id) {
-                collapsedSections.remove(id)
-            } else {
-                collapsedSections.insert(id)
-            }
+        // No global withAnimation — StreetCard animates its own isExpanded via
+        // `.animation(value:isExpanded)`. A global transaction made every card
+        // with an implicit animation repaint, so a tap on one street made untouched
+        // streets shimmer and LazyVStack rows repop.
+        if collapsedSections.contains(id) {
+            collapsedSections.remove(id)
+        } else {
+            collapsedSections.insert(id)
         }
     }
 
@@ -519,18 +428,11 @@ struct ListScreen: View {
         }
     }
 
-    /// Same motion as one street, applied to all of them. Only the rows actually on
-    /// screen animate — a `List` does not render the other 250 — so this costs the
-    /// same as collapsing the one street the user is looking at.
     private func setAllStreets(expanded: Bool) {
-        var transaction = Transaction()
-        transaction.animation = nil
-        withTransaction(transaction) {
-            if expanded {
-                collapsedSections.removeAll()
-            } else {
-                collapsedSections.formUnion(sections.map(\.id))
-            }
+        if expanded {
+            collapsedSections.removeAll()
+        } else {
+            collapsedSections.formUnion(sections.map(\.id))
         }
     }
 
@@ -683,6 +585,79 @@ struct ListScreen: View {
                 Text(filter.emptyMessage)
             }
         }
+    }
+}
+
+// MARK: - Street card
+
+/// One street and its addresses, drawn as a single glass card — the same
+/// material as Archive's `BalanceSection` and `GebietRow`. One `contentCard`
+/// per street keeps the material glossy and the text razor sharp.
+private struct StreetCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let section: StreetSection
+    let isExpanded: Bool
+    let now: Date
+    var zoom: Namespace.ID
+    let onToggle: () -> Void
+    let onSelect: (UUID) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Button(action: onToggle) {
+                StreetHeader(section: section, isExpanded: isExpanded)
+                    .padding(.horizontal, AppLayout.rowInset)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Straße \(section.title)")
+            .accessibilityValue(
+                section.openCount > 0
+                    ? "\(section.houseCount) Adressen, \(section.openCount) von \(section.unitCount) Türen offen"
+                    : "\(section.houseCount) Adressen, fertig"
+            )
+            .accessibilityHint(isExpanded ? "Blendet alle Adressen dieser Straße aus" : "Blendet alle Adressen dieser Straße ein")
+            .contentShape(.rect)
+
+            if isExpanded {
+                Divider()
+                    .padding(.leading, AppLayout.textInset)
+                    .transition(.opacity)
+                ForEach(Array(section.rows.enumerated()), id: \.element.id) { index, row in
+                    let isLast = index == section.rows.count - 1
+                    Button { onSelect(row.id) } label: {
+                        HouseRow(row: row, now: now)
+                            .equatable()
+                            .padding(.horizontal, AppLayout.rowInset)
+                            .padding(.vertical, 11)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(MinimalRowStyle())
+                    .matchedTransitionSource(id: row.id, in: zoom)
+                    .transition(.opacity)
+                    if !isLast {
+                        Divider()
+                            .padding(.leading, AppLayout.textInset)
+                            .transition(.opacity)
+                    }
+                }
+            }
+        }
+        .contentCard(cornerRadius: AppRadius.card)
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous))
+        .clipped()
+        .animation(.smooth(duration: 0.36, extraBounce: 0).speed(reduceMotion ? 1.8 : 1), value: isExpanded)
+    }
+}
+
+/// Minimal press feedback — no tinted pills, just a feather-light highlight.
+/// Keeps the card's glass intact and the motion cool rather than bouncy.
+private struct MinimalRowStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(Color.primary.opacity(configuration.isPressed ? 0.06 : 0))
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 }
 
@@ -1067,7 +1042,6 @@ struct StatusLegendSheet: View {
                     }
                 }
                 Section("Gesten") {
-                    Label("Nach links wischen setzt einen Schnellstatus", systemImage: "hand.draw")
                     Label("Tippen öffnet die Details", systemImage: "hand.tap")
                 }
             }

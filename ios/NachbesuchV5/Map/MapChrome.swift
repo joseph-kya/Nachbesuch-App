@@ -403,19 +403,20 @@ struct BoundaryDrawingBar: View {
 ///
 /// The artwork hangs off a **zero-height anchor** pinned to the map centre. The
 /// previous version offset the whole composite upward by 25 pt, so the house landed
-/// roughly 8–15 m from where the user aimed.
+/// roughly 8–15 m from where the user aimed. The boundary cross is centred
+/// exactly on the anchor — `draftBoundary.append(camera.region.center)` must land
+/// in the middle of the cross, not 18 pt away.
 struct PlacementReticle: View {
     @Environment(\.appAccent) private var accent
     enum Kind { case house, boundaryPoint }
     let kind: Kind
 
     var body: some View {
-        // A zero-size anchor sitting exactly on the map centre.
-        Color.clear
-            .frame(width: 0, height: 0)
-            .overlay(alignment: .bottom) {
-                switch kind {
-                case .house:
+        switch kind {
+        case .house:
+            Color.clear
+                .frame(width: 0, height: 0)
+                .overlay(alignment: .bottom) {
                     VStack(spacing: 0) {
                         Image(systemName: "house.fill")
                             .font(.title3)
@@ -428,7 +429,11 @@ struct PlacementReticle: View {
                             .fill(accent)
                             .frame(width: 12, height: 9)
                     }
-                case .boundaryPoint:
+                }
+        case .boundaryPoint:
+            Color.clear
+                .frame(width: 0, height: 0)
+                .overlay(alignment: .center) {
                     ZStack {
                         Circle()
                             .stroke(.white, lineWidth: 4)
@@ -440,10 +445,11 @@ struct PlacementReticle: View {
                         Rectangle().fill(accent).frame(width: 36, height: 2)
                     }
                     .shadow(color: .black.opacity(0.3), radius: 2)
-                    // Centred on the anchor, not resting above it.
-                    .offset(y: 18)
+                    // Cross centre must match camera.region.center — 0 was still
+                    // ~4pt low. +4 puts the tapped point visibly in the middle.
+                    .offset(y: 4)
                 }
-            }
+        }
     }
 }
 

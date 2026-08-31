@@ -476,7 +476,9 @@ struct ArchiveScreen: View {
             filter = value
             results = nextResults
         }
-        withAnimation(.appSettle(reduceMotion: reduceMotion)) {
+        // Scroll is the only animated part here — the card swap itself is frozen
+        // to avoid a glass snapshot. Keep the scroll silky, not snappy.
+        withAnimation(.smooth(duration: 0.38, extraBounce: 0).speed(reduceMotion ? 1.8 : 1)) {
             returnToBalance(proxy)
         }
     }
@@ -487,12 +489,11 @@ struct ArchiveScreen: View {
     /// The card around that subtree survives the swap, so — unlike the filter above —
     /// there is no glass shape being inserted or removed here and nothing to leave a
     /// snapshot behind. What is left is one card resizing while its contents cross-fade
-    /// and its numbers roll, which is exactly what `BalanceSection` now animates. The
-    /// scroll movement is folded into the same transaction so the list and the card
-    /// settle together instead of racing.
+    /// and its numbers roll. One smooth transaction for both — card and scroll
+    /// settle together, no glass wash, no stutter.
     private func selectGebiet(_ id: UUID, proxy: ScrollViewProxy) {
         guard selectedGebietID != id else { return }
-        withAnimation(.appSettle(reduceMotion: reduceMotion)) {
+        withAnimation(.smooth(duration: 0.42, extraBounce: 0).speed(reduceMotion ? 1.8 : 1)) {
             selectedGebietID = id
             returnToBalance(proxy)
         }
@@ -579,10 +580,22 @@ struct ArchiveScreen: View {
         for house in dependents {
             await ReminderService.cancelAllRevisits(house: house.id)
         }
-        // Deliberately no replacement territory. The old code fabricated one under a
-        // third name whenever the last was deleted, so the user could never reach the
-        // empty state they had explicitly asked for.
-        if selectedGebietID == id { selectedGebietID = gebiete.first { $0.id != id }?.id }
+        // Dismiss any stale sheet/confirmation that still points at the deleted Gebiet.
+        if case .edit(let editID) = route, editID == id { route = nil }
+        if case .export(let expID) = route, expID == id { route = nil }
+        if case .delete(let delID, _) = confirmation, delID == id { confirmation = nil }
+        // Select next Gebiet; if none remain, open the selector directly instead of
+        // leaving the map's "Gebiet bearbeiten/löschen" alert pointing at a dead ID.
+        let remaining = gebiete.filter { $0.id != id }
+        if selectedGebietID == id {
+            if let next = remaining.first?.id {
+                selectedGebietID = next
+            } else {
+                selectedGebietID = nil
+                // No Gebiete left — go straight to the selector.
+                route = .create
+            }
+        }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
@@ -787,7 +800,8 @@ struct GebietRow: View, Equatable {
         // Only the selection is animated here. Keying the whole model would make a
         // row rebuilt by a search keystroke animate its way in, which is not a state
         // change the user made and reads as the list twitching.
-        .animation(.appSettle(reduceMotion: reduceMotion), value: model.isActive)
+        // Snappy, not smooth — long smooth leaves the glass washy.
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: model.isActive)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(model.name)
         .accessibilityValue(

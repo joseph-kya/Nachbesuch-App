@@ -31,7 +31,9 @@ final class MapCameraStore {
     /// street with house numbers legible instead of staring at a whole district.
     static let firstLaunchSpan = MKCoordinateSpan(latitudeDelta: 0.0032, longitudeDelta: 0.0032)
     /// Zoom used when the user explicitly asks to be recentred.
-    static let recenterSpan = MKCoordinateSpan(latitudeDelta: 0.0045, longitudeDelta: 0.0045)
+    /// Tighter again (0.0022 → 0.0016) — ~125 m across, house numbers fill the
+    /// screen, still wide enough to keep orientation.
+    static let recenterSpan = MKCoordinateSpan(latitudeDelta: 0.0016, longitudeDelta: 0.0016)
 
     private let defaults: UserDefaults
     private var territoryID: UUID?

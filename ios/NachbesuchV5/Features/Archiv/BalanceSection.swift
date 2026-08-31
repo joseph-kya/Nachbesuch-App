@@ -58,17 +58,10 @@ struct BalanceSection: View {
         // One card around the whole balance. The blocks inside are plain fills:
         // stacking glass inside glass just muddies both.
         .contentCard(cornerRadius: AppRadius.card)
-        // One key for the whole card, and it sits *outside* the card so the card's
-        // own height is part of what animates — otherwise the contents cross-fade
-        // inside a box that has already snapped to its new size.
-        //
-        // One key rather than several: every number here comes from the same tally,
-        // so keying each digit separately would have them roll over in slightly
-        // different frames instead of reading as one measurement being retaken. And
-        // one `.animation` rather than several stacked, because `.animation(_:value:)`
-        // does not merely animate its key — it overrides the transaction for the whole
-        // subtree, so a second one silently wins over the first.
-        .animation(.appSettle(reduceMotion: reduceMotion), value: key)
+        // Height and content are driven by one key: the card resizes while numbers
+        // roll. Keep it seamless — one smooth transaction for card + scroll, no
+        // separate scale wash. Disable implicit scale, fade only.
+        .animation(.smooth(duration: 0.38, extraBounce: 0).speed(reduceMotion ? 1.8 : 1), value: key)
     }
 
     /// Everything that changes the shape or the numbers of this card: which territory

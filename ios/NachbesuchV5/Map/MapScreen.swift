@@ -245,22 +245,16 @@ struct MapScreen: View {
     /// covered. The HIG requires 7 pt at the sides and 10 pt above/below the Apple
     /// logo and legal link — obscuring them is an App Review rejection.
     ///
-    /// **Measured, not assumed.** These were hardcoded at 132/108, which is only
-    /// correct at the default text size. In normal browsing, the location button
-    /// sits on the right and must not push the left-aligned Apple attribution up by
-    /// its full height. MapKit adds the tab bar's safe-area clearance on top of the
-    /// margin, so a 96 pt lane places the attribution directly above the full-width
-    /// action bar. At accessibility sizes the summary card is several times taller
-    /// and the action bar wraps, so MapKit went on positioning the attribution as
-    /// though the chrome were 132 pt tall and the "Rechtl. Informationen" link ended
-    /// up underneath the floating buttons — the exact rejection this comment warns
-    /// about. The fallbacks are the old constants, used only for the frames before
-    /// the chrome has been measured.
+    /// Bottom was `max(bottomChromeHeight+6)` → logo far above chrome (124pt
+    /// high), then `10` → logo under the `…`/`Haus hinzufügen` pills. Chrome has
+    /// 16pt horizontal padding, so logo at x=7 sits beside the glass. Keep it
+    /// just above the pills/tab-bar with a tight gap, not floating high nor
+    /// hidden.
     private var chromeInsets: UIEdgeInsets {
         UIEdgeInsets(
-            top: max(topChromeHeight, 132),
+            top: max(topChromeHeight + 6, 24),
             left: 7,
-            bottom: max(bottomChromeHeight, 96),
+            bottom: 64,
             right: 7
         )
     }
@@ -318,7 +312,7 @@ struct MapScreen: View {
         // The summary bar and the selection bar share a glass id, so switching modes
         // reshapes one panel rather than dissolving two unrelated ones.
         .compatGlassTransition(.matchedGeometry, reduceMotion: reduceMotion)
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: topChromeLayout)
+        .animation(.smooth(duration: 0.32, extraBounce: 0).speed(reduceMotion ? 1.8 : 1), value: topChromeLayout)
     }
 
     @ViewBuilder
@@ -371,7 +365,7 @@ struct MapScreen: View {
             bottomChromeHeight = height
         }
         .compatGlassTransition(.matchedGeometry, reduceMotion: reduceMotion)
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: bottomChromeLayout)
+        .animation(.smooth(duration: 0.32, extraBounce: 0).speed(reduceMotion ? 1.8 : 1), value: bottomChromeLayout)
     }
 
     /// Deliberately short.
@@ -541,6 +535,7 @@ struct MapScreen: View {
         draftBoundary = []
         selectedHouseIDs = nil
         sheetRoute = nil
+        confirmation = nil
         prepared = .empty
         housesByID = [:]
         lastPipelineKey = nil
@@ -586,7 +581,7 @@ struct MapScreen: View {
            fix.timestamp.timeIntervalSinceNow > -600 {
             let target = MKCoordinateRegion(center: fix.coordinate, span: MapCameraStore.recenterSpan)
             camera.record(target)
-            cameraCommand = .region(target, animated: false)
+            cameraCommand = .region(target, animated: !reduceMotion)
             isLocating = false
             location.startStreaming()
             UISelectionFeedbackGenerator().selectionChanged()
@@ -605,7 +600,7 @@ struct MapScreen: View {
             cameraCommand = .region(
                 center: coordinate,
                 span: MapCameraStore.recenterSpan,
-                animated: false
+                animated: !reduceMotion
             )
             UISelectionFeedbackGenerator().selectionChanged()
         }
