@@ -445,7 +445,7 @@ struct PlacementReticle: View {
                         Rectangle().fill(accent).frame(width: 36, height: 2)
                     }
                     .shadow(color: .black.opacity(0.3), radius: 2)
-                    .offset(y: 18)
+                    .offset(y: 22)
                 }
         }
     }
