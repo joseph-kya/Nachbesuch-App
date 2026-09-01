@@ -1,17 +1,63 @@
 # Status
 
-Last updated: 2026-08-30T23:21:00+02:00 · Tests: iOS 89 passing, 1 diagnostic
-PDF test skipped, 0 fehlgeschlagen on iOS 26.5 and iOS 18.5;
+Last updated: 2026-09-01T23:10:00+02:00 · Tests: iOS suite green, 1 diagnostic
+PDF test skipped, 0 fehlgeschlagen on iOS 26.5 **and** iOS 18.5;
 Android domain + data passing · `refactor/minimal-ui` und `salvage/offene-arbeit`
 sind auf `main` und auf `origin`
 
 ## In flight
+- Der iOS-18-Durchgang ist visuell geprüft (Karte, Liste, Archiv, Exportblatt,
+  hell und dunkel, iPhone 11 / iOS 18.5). Zwei Dinge fehlen noch, und beide
+  brauchen einen Finger: die **Ausklapp-Animation** einer Straße und der
+  Wechsel in den Platzierungsmodus auf der Karte. Der geschlossene Zustand
+  selbst ist geprüft (`NACHBESUCH_COLLAPSED=all`); die Bewegung dazwischen nicht.
+  Auf diesem Rechner hat weder die Simulator-Integration noch AppleScript
+  Bedienungsrechte, also gab es keine Möglichkeit zu tippen.
 - Archiv und Detailblatt brauchen weiterhin einen vollständigen manuellen
   Golden-Path-Durchgang. Die Liste wurde auf iOS 26.5 mit 180 gesetzten Häusern
   visuell geprüft und bedient; Öffnen/Schließen der Straßen, die gemeinsame
   Glasfläche und die Accessibility-Zustände funktionieren.
 
 ## Done
+- [x] iOS 18 · zwei Ebenen statt einer heruntergeschraubten · Die iOS-18-Fassung
+  war iOS 26 mit abgeschalteter Renderpipeline: jede Glas-API hatte darunter ein
+  „Material-Äquivalent", und das Ergebnis war genau das, was
+  `IOS18_UI_AUDIT_AND_REMEDIATION.md` beschreibt — ein runder Knopf in einer
+  zweiten, anders geformten Kiste (Systemstil **plus** eigene Materialkapsel
+  **plus** eigener Rahmen um denselben Knopf), eine Tableiste, die sich in der
+  Karte auflöst, und Material auf Material bis zum Matsch im Dunkelmodus.
+  `LegacyCompat.swift` ist jetzt ein **Zweig**, keine Notlösung: eine Regel, und
+  jeder Wrapper hält sie — *eine* View besitzt die Form, *eine* die Füllung,
+  *eine* den Rahmen, *eine* den Druckzustand, *eine* die Trefferfläche.
+  Konkret: undurchsichtige Flächen statt Materialien (`CompatSurfaceRole`
+  unterscheidet Karte, Inhalt und „sitzt auf einer Karte"), die Systemstile
+  `.bordered`/`.borderedProminent` allein wo sie reichen und ein eigener Stil nur
+  dort wo sie es nicht tun (Kartenknöpfe — eine getönte Füllung bei 15 % ist über
+  Kartenkacheln nichts), eine undurchsichtige System-Tableiste
+  (`LegacyBarAppearance`), Radien auf iOS-18-Maß (32 pt auf einer flachen Karte
+  ist kein Ruhe-, sondern ein Klumpengefühl: 16), ein Hintergrund ohne
+  Verlaufsfeld und ohne `blur(60)`, und ein Statuschip-Ton, der im Dunkelmodus
+  kräftiger füllt, damit Rot auf Rot lesbar bleibt. Der Hilfeknopf steht auf
+  iOS 18 fest neben den Filtern statt rechts aus ihnen herauszuscrollen; die
+  Chipreihe blendet nach rechts aus, statt ein Wort abzuschneiden.
+  **Die iOS-26-Fassung ist unverändert** — gegengeprüft mit Aufnahmen beider
+  Laufzeiten aus demselben Bestand.
+- [x] Der Absturz auf dem iPhone 11 · Speicher, nicht Logik · Die App schloss
+  sich beim Öffnen von Liste oder Archiv und war im Simulator nicht
+  reproduzierbar — die Signatur von Jetsam, denn ein Simulator hat keine
+  Speichergrenze und leiht sich die des Macs. Drei vollständige
+  `@Query`-Abfragen über *alle* Häuser lagen gleichzeitig im Speicher:
+  `RootView` (dauerhaft, für eine Revisionszeichenkette und einen Durchgang
+  durch die Türen), `ArchiveScreen` (ungefiltert, also jedes Gebiet, solange der
+  Tab montiert ist — und alle drei Tabs bleiben absichtlich montiert) und
+  `ListScreen` (das aktive Gebiet). Dazu baute die Liste ihre Zeilen in einem
+  `VStack`: bei 1500 Adressen also 1500 Zeilen, Trenner, Knöpfe und
+  `matchedTransitionSource` vor dem ersten Bild. Beide Abfragen sind durch
+  gebündelte Lesevorgänge über einen eigenen `ModelContext` ersetzt, der mit dem
+  Aufruf endet, die Liste ist `LazyVStack`, und das Archiv schlägt Gebiete über
+  ein Dictionary statt über einen linearen Durchlauf je Zeile nach.
+  Gemessen mit 1500 Häusern auf iPhone 11 / iOS 18.5, Debug: **650 MB → 270–380 MB**,
+  und vor allem wächst die Zahl der gebauten Zeilen nicht mehr mit dem Gebiet.
 - [x] `THE UPGRADE` reliability pass · damaged/empty/readable house data now has
   one shared meaning across map, archive, balance and export; damaged exports
   fail closed. Raw replacements validate before overwrite, backup fetches fail

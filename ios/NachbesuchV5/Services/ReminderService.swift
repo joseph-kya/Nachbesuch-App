@@ -113,6 +113,14 @@ nonisolated enum ReminderService {
     /// handle an error type.
     @discardableResult
     nonisolated static func ensureAuthorized() async -> Bool {
+        #if DEBUG
+        // The system permission alert covers the screen under test and cannot be
+        // dismissed from `simctl`, so visual review runs never got past it. Same
+        // opt-in DEBUG harness convention as `NACHBESUCH_LEGACY_CHROME`.
+        if ProcessInfo.processInfo.environment["NACHBESUCH_NO_NOTIFICATIONS"] != nil {
+            return false
+        }
+        #endif
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         switch settings.authorizationStatus {

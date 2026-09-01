@@ -13,15 +13,23 @@ import SwiftUI
 /// these shared no centre and no scale, so the list read as a pile of unrelated
 /// rounded things. A street and its addresses are now one container with one
 /// radius, and the shapes inside it are gone.
+///
+/// **Two scales, because there are two designs.** The values below are iOS 26's:
+/// Liquid Glass is a thick, lensing material and a generous radius is what keeps it
+/// from looking like a sheet of plastic. iOS 18 draws the same shapes as flat opaque
+/// fills, and a 32 pt radius on a full-width flat card is not calm, it is a blob —
+/// it stops reading as a card and starts reading as a lozenge with text in it. Every
+/// iOS 18 radius here is the corresponding system value: 10 for controls, 16 for
+/// grouped cards, matching what `insetGrouped` and iOS 18 sheets draw for themselves.
 enum AppRadius {
     /// Chips, badges, inline pills.
-    static let small: CGFloat = 12
+    static var small: CGFloat { LegacyChrome.isActive ? 8 : 12 }
     /// Buttons and segmented controls.
-    static let control: CGFloat = 18
+    static var control: CGFloat { LegacyChrome.isActive ? 10 : 18 }
     /// Cards and grouped sections in the content layer.
-    static let card: CGFloat = 32
+    static var card: CGFloat { LegacyChrome.isActive ? 16 : 32 }
     /// Floating panels over the map.
-    static let chrome: CGFloat = 32
+    static var chrome: CGFloat { LegacyChrome.isActive ? 16 : 32 }
 }
 
 /// The leading columns a grouped list shares.

@@ -12,9 +12,6 @@ struct ArchiveScreen: View {
     @Environment(AppNoticeCenter.self) private var notices
 
     @Query(sort: \Gebiet.day1Date, order: .reverse) private var gebiete: [Gebiet]
-    /// Only the columns the index needs. The old query materialised every house in
-    /// the database, blobs included, on every visit to this tab.
-    @Query private var houses: [House]
 
     @Binding var selectedGebietID: UUID?
     @Binding var scope: DayScope
@@ -42,6 +39,18 @@ struct ArchiveScreen: View {
     /// that lands seconds late, and the inconsistency is faulting: the scan is cheap
     /// once the objects are in memory and expensive when they are not.
     @State private var dataVersion = 0
+
+    /// How many houses exist, without any of them being resident.
+    ///
+    /// The comment above the query this replaces claimed it fetched "only the columns
+    /// the index needs"; it was a bare `@Query private var houses: [House]`, which is
+    /// every house in the database — every territory, not just the open one — as live
+    /// objects held for as long as the tab is mounted, and all three tabs stay mounted
+    /// on purpose. Together with the identical set in `RootView` and the territory's
+    /// own set in `ListScreen`, opening this tab is what pushed an iPhone 11 over its
+    /// jetsam limit. The count is all the invalidation key ever wanted; the rows
+    /// themselves are read in batches by `rebuildIndex`, off this context, and dropped.
+    @State private var houseCount = 0
 
 
     enum ArchiveFilter: String, CaseIterable, Identifiable {
@@ -92,13 +101,24 @@ struct ArchiveScreen: View {
     private var indexKey: IndexKey {
         IndexKey(
             gebietCount: gebiete.count,
-            houseCount: houses.count,
+            houseCount: houseCount,
             version: dataVersion
         )
     }
 
     private var activeGebiet: Gebiet? {
         gebiete.first { $0.id == selectedGebietID } ?? gebiete.first
+    }
+
+    /// Territories by id, built once per body pass.
+    ///
+    /// `daySections` and `gebietCard` both resolved a result back to its territory
+    /// with `gebiete.first(where:)`. That is a linear scan per row, inside a computed
+    /// property that runs on every body evaluation — so a keystroke in the search
+    /// field cost one scan per visible card, and each scan faults the territory's
+    /// properties. One dictionary answers all of them.
+    private var gebietByID: [UUID: Gebiet] {
+        Dictionary(gebiete.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     var body: some View {
@@ -119,6 +139,9 @@ struct ArchiveScreen: View {
                     onCompletion: handleImportSelection
                 )
         }
+        .task {
+            refreshHouseCount()
+        }
         .task(id: indexKey) {
             guard isActive || index.isEmpty else { return }
             await rebuildIndex()
@@ -131,6 +154,7 @@ struct ArchiveScreen: View {
         .onChange(of: debouncedQuery) { _, _ in recomputeResults() }
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
             dataVersion &+= 1
+            refreshHouseCount()
         }
     }
 
@@ -173,11 +197,12 @@ struct ArchiveScreen: View {
                     .padding(.horizontal, AppSpacing.regular)
                     }
 
+                    let byID = gebietByID
                     ForEach(daySections) { section in
                         LazyVStack(alignment: .leading, spacing: AppSpacing.snug) {
                             ArchiveSectionLabel(title: section.title)
                             ForEach(section.items) { item in
-                                gebietCard(item, proxy: proxy)
+                                gebietCard(item, in: byID, proxy: proxy)
                             }
                         }
                         .padding(.horizontal, AppSpacing.regular)
@@ -287,8 +312,9 @@ struct ArchiveScreen: View {
 
         var order: [Date] = []
         var grouped: [Date: [ArchiveSearchResult]] = [:]
+        let byID = gebietByID
         for result in results {
-            guard let gebiet = gebiete.first(where: { $0.id == result.gebietID }) else { continue }
+            guard let gebiet = byID[result.gebietID] else { continue }
             for date in gebiet.assignedDates {
                 if grouped[date] == nil { order.append(date) }
                 grouped[date, default: []].append(result)
@@ -314,8 +340,8 @@ struct ArchiveScreen: View {
     // MARK: Row
 
     @ViewBuilder
-    private func gebietCard(_ item: ArchiveSearchResult, proxy: ScrollViewProxy) -> some View {
-        if let gebiet = gebiete.first(where: { $0.id == item.gebietID }) {
+    private func gebietCard(_ item: ArchiveSearchResult, in byID: [UUID: Gebiet], proxy: ScrollViewProxy) -> some View {
+        if let gebiet = byID[item.gebietID] {
             let entry = index.entry(for: gebiet.id)
             ZStack(alignment: .topTrailing) {
                 Button {
@@ -346,9 +372,22 @@ struct ArchiveScreen: View {
                     // Always present, only its opacity moves. Inserting and removing
                     // the shape made the wash pop on and off; a fill that is animatable
                     // lets the old and the new card trade the highlight in one motion.
+                    // On iOS 26 the wash sits under glass and reads as a tint. On an
+                    // opaque iOS 18 card it is a flat pink rectangle the size of the
+                    // record — the "large translucent red field" the audit rejects,
+                    // and on this screen red already means "offen". iOS 18 leans on
+                    // the accent rail and the "Aktiv" label the row already draws,
+                    // with the wash at a quarter strength so the card is still
+                    // distinguishable in greyscale by luminance alone.
                     .overlay {
                         RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
-                            .fill(accent.opacity(gebiet.id == activeGebiet?.id ? 0.08 : 0))
+                            .fill(
+                                accent.opacity(
+                                    gebiet.id == activeGebiet?.id
+                                        ? (LegacyChrome.isActive ? 0.02 : 0.08)
+                                        : 0
+                                )
+                            )
                             .allowsHitTesting(false)
                     }
                 }
@@ -377,7 +416,7 @@ struct ArchiveScreen: View {
                         .font(.subheadline.weight(.bold))
                         .frame(width: 32, height: 32)
                 }
-                .compatGlassButton()
+                .compatGlassButton(shape: .circle, role: .card)
                 .buttonBorderShape(.circle)
                 // `.padding(10)` sat here on its own. Padding *outside* a styled
                 // button is margin, not target: it moves the control inwards and
@@ -429,13 +468,25 @@ struct ArchiveScreen: View {
                 isTwoDay: $0.isTwoDay
             )
         }
-        let houseSeeds = houses.map {
-            ArchiveIndexBuilder.HouseSeed(
-                gebietID: $0.territoryID,
-                address: $0.address,
-                note: $0.note,
-                unitsData: $0.unitsData
-            )
+        var houseSeeds: [ArchiveIndexBuilder.HouseSeed] = []
+        do {
+            // A scratch context so the fetched houses are not registered with the
+            // view's context and left resident behind the tab. Batched so the peak is
+            // a batch, not the store. The seeds themselves are plain values.
+            let scratch = ModelContext(modelContext.container)
+            try scratch.enumerate(FetchDescriptor<House>(), batchSize: 200) { house in
+                houseSeeds.append(
+                    ArchiveIndexBuilder.HouseSeed(
+                        gebietID: house.territoryID,
+                        address: house.address,
+                        note: house.note,
+                        unitsData: house.unitsData
+                    )
+                )
+            }
+        } catch {
+            notices.report(error, context: "Archiv konnte nicht gelesen werden")
+            return
         }
         let built = await Task.detached(priority: .userInitiated) {
             ArchiveIndexBuilder.build(gebiete: gebietSeeds, houses: houseSeeds)
@@ -443,6 +494,33 @@ struct ArchiveScreen: View {
         guard !Task.isCancelled else { return }
         index = built
         recomputeResults()
+    }
+
+    /// Keeps `indexKey` honest without keeping the rows.
+    private func refreshHouseCount() {
+        houseCount = (try? modelContext.fetchCount(FetchDescriptor<House>())) ?? houseCount
+    }
+
+    /// The houses of one territory, fetched for the moment they are needed.
+    ///
+    /// Export and backup are the only things on this screen that want real houses.
+    /// Both are one-shot actions, so they fetch, use and release rather than being
+    /// served from a set held open for the whole session.
+    private func houses(in gebietID: UUID?) -> [House] {
+        let descriptor: FetchDescriptor<House>
+        if let gebietID {
+            descriptor = FetchDescriptor<House>(
+                predicate: #Predicate { $0.gebietID == gebietID || $0.dayID == gebietID }
+            )
+        } else {
+            descriptor = FetchDescriptor<House>()
+        }
+        do {
+            return try modelContext.fetch(descriptor)
+        } catch {
+            notices.report(error, context: "Häuser konnten nicht gelesen werden")
+            return []
+        }
     }
 
     /// Memoized: the search used to run inside `body`, so it re-executed against an
@@ -522,7 +600,7 @@ struct ArchiveScreen: View {
             if let gebiet = gebiete.first(where: { $0.id == id }) {
                 ExportSheet(
                     gebiet: gebiet,
-                    houses: houses.filter { $0.territoryID == id },
+                    houses: houses(in: id),
                     scope: .combined
                 )
                 .presentationDetents([.medium, .large])
@@ -603,7 +681,7 @@ struct ArchiveScreen: View {
         isWorking = true
         defer { isWorking = false }
         do {
-            let url = try await BackupService.makeBackup(gebiete: gebiete, houses: houses)
+            let url = try await BackupService.makeBackup(gebiete: gebiete, houses: houses(in: nil))
             route = .share(url)
         } catch {
             notices.report(error, context: "Backup konnte nicht erstellt werden")
@@ -768,7 +846,7 @@ struct GebietRow: View, Equatable {
                             .font(.caption2.weight(.bold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(.orange.opacity(0.16), in: Capsule())
+                            .background(StatusChipFill(.orange), in: Capsule())
                     }
                     Spacer(minLength: 0)
                 }

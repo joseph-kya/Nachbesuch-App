@@ -39,6 +39,39 @@ struct FilterBar: View {
     private var selectedID: String? { chips.first(where: \.isSelected)?.id }
 
     var body: some View {
+        // Help is pinned beside the chips on iOS 18 and rides along inside them on
+        // iOS 26, and that split is not cosmetic.
+        //
+        // It was the last item *inside* the scroll view, which made it two things it
+        // is not: a filter, and optional — with five chips it scrolled off the right
+        // edge and stopped existing for anyone who did not think to swipe a row of
+        // filters. That is the audit's §6.16, and pinning it fixes it.
+        //
+        // iOS 26 keeps it inside. There the chips and the help button share one
+        // `GlassEffectContainer` so the shapes merge and render in one pass, and the
+        // row carries its own scroll edge effect; lifting one member out of the
+        // container leaves the effect's boundary drawn as a visible rectangle beside
+        // it. The row is also one chip shorter of overflowing there, because the
+        // minimised search bar does not take a line of its own.
+        Group {
+            if LegacyChrome.isActive {
+                HStack(spacing: AppSpacing.tight) {
+                    chipScroller
+                    helpButton
+                        .padding(.trailing, AppSpacing.regular)
+                }
+            } else {
+                chipScroller
+            }
+        }
+        .compatGlassTransition(.matchedGeometry, reduceMotion: reduceMotion)
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: selectedID)
+        // One haptic per selection. Attaching the trigger to every chip produced
+        // two taps (old selection off, new selection on).
+        .sensoryFeedback(.selection, trigger: selectedID)
+    }
+
+    private var chipScroller: some View {
         ScrollView(.horizontal) {
             // Container spacing matches the stack's, so the chips stay distinct at
             // rest and only blend while the selection moves between them.
@@ -47,16 +80,8 @@ struct FilterBar: View {
                     ForEach(chips) { chip in
                         chipButton(chip)
                     }
-                    if let onHelp {
-                        Button(action: onHelp) {
-                            Image(systemName: "questionmark")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(width: 20, height: 20)
-                        }
-                        .compatGlassButton()
-                        .buttonBorderShape(.circle)
-                        .compatGlassID("filter.help", in: glass)
-                        .accessibilityLabel("Erklärung der Status-Symbole")
+                    if !LegacyChrome.isActive {
+                        helpButton
                     }
                 }
                 .padding(.horizontal, 2)
@@ -66,13 +91,33 @@ struct FilterBar: View {
             }
         }
         .scrollIndicators(.hidden)
-        .scrollClipDisabled()
-        .contentMargins(.horizontal, AppSpacing.regular, for: .scrollContent)
-        .compatGlassTransition(.matchedGeometry, reduceMotion: reduceMotion)
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: selectedID)
-        // One haptic per selection. Attaching the trigger to every chip produced
-        // two taps (old selection off, new selection on).
-        .sensoryFeedback(.selection, trigger: selectedID)
+        // Only on iOS 26, and only because Liquid Glass grows past its own bounds
+        // under a press. On iOS 18 nothing grows, and leaving clipping off there let
+        // the last chip paint straight over the pinned help button.
+        .scrollClipDisabled(!LegacyChrome.isActive)
+        .contentMargins(.leading, AppSpacing.regular, for: .scrollContent)
+        .contentMargins(.trailing, AppSpacing.tight, for: .scrollContent)
+        .modifier(ChipScrollEdge())
+    }
+
+    @ViewBuilder
+    private var helpButton: some View {
+        if let onHelp {
+            Button(action: onHelp) {
+                Image(systemName: "questionmark")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(width: 20, height: 20)
+            }
+            .compatGlassButton(shape: .circle)
+            .buttonBorderShape(.circle)
+            // The same neutral tint the unselected chips take. Left on the app accent
+            // it came out as a pink disc beside them — which on this bar reads as a
+            // sixth, permanently-highlighted filter rather than as the one control
+            // here that is not a filter at all.
+            .tint(.primary)
+            .compatGlassID("filter.help", in: glass)
+            .accessibilityLabel("Erklärung der Status-Symbole")
+        }
     }
 
     @ViewBuilder
@@ -110,6 +155,33 @@ struct FilterBar: View {
             .accessibilityLabel("\(contextLabel): \(chip.title)")
             .accessibilityValue(chip.count.map { "\($0)" } ?? "")
             .accessibilityAddTraits(chip.isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// Tells the eye there is more to the right.
+///
+/// iOS 26 gets this from the scroll edge effect. iOS 18 has none, so a chip was
+/// simply chopped off at the boundary with no way to tell a clipped label from the
+/// end of the row; below iOS 26 the trailing edge fades instead of cutting. Applied
+/// only where it is missing — a mask is an offscreen pass, and there is no reason to
+/// pay for one twice.
+private struct ChipScrollEdge: ViewModifier {
+    func body(content: Content) -> some View {
+        if LegacyChrome.isActive {
+            content.mask {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black, location: 0.93),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            }
+        } else {
+            content
+        }
     }
 }
 

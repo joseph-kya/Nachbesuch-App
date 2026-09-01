@@ -174,7 +174,7 @@ struct MapActionBar<Menu: View>: View {
         HStack(spacing: AppSpacing.snug) {
             if isPlacing {
                 Button("Abbrechen", action: onCancelPlacement)
-                    .compatGlassButton()
+                    .compatGlassButton(role: .map)
                     .controlSize(.large)
                     .compatGlassID("map.secondary", in: namespace)
             } else {
@@ -185,7 +185,7 @@ struct MapActionBar<Menu: View>: View {
                         .font(.headline)
                         .frame(width: 24, height: 24)
                 }
-                .compatGlassButton()
+                .compatGlassButton(shape: .circle, role: .map)
                 .controlSize(.large)
                 .compatGlassID("map.secondary", in: namespace)
                 .accessibilityLabel("Kartenoptionen")
@@ -242,7 +242,7 @@ struct LocateButton: View {
                 .symbolEffect(.pulse, isActive: isBusy && !reduceMotion)
                 .contentTransition(.symbolEffect(.replace))
         }
-        .compatGlassButton()
+        .compatGlassButton(shape: .circle, role: .map)
         .controlSize(.large)
         .buttonBorderShape(.circle)
         .tint(isFollowing ? accent : nil)
@@ -354,7 +354,7 @@ struct BoundaryDrawingBar: View {
                 Button(action: onCancel) {
                     Image(systemName: "xmark").frame(width: 24, height: 24)
                 }
-                .compatGlassButton()
+                .compatGlassButton(shape: .circle, role: .map)
                 .controlSize(.large)
                 .buttonBorderShape(.circle)
                 .compatGlassID("map.drawCancel", in: namespace)
@@ -363,7 +363,7 @@ struct BoundaryDrawingBar: View {
                 Button(action: onUndo) {
                     Image(systemName: "arrow.uturn.backward").frame(width: 24, height: 24)
                 }
-                .compatGlassButton()
+                .compatGlassButton(shape: .circle, role: .map)
                 .controlSize(.large)
                 .buttonBorderShape(.circle)
                 .disabled(pointCount == 0)
@@ -634,7 +634,7 @@ struct TerritoryButton: View {
                 .font(.system(size: 17, weight: .semibold))
                 .frame(width: 26, height: 26)
         }
-        .compatGlassButton()
+        .compatGlassButton(shape: .circle, role: .map)
         .controlSize(.large)
         .buttonBorderShape(.circle)
         .compatGlassID("map.territory", in: namespace)

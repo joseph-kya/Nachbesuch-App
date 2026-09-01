@@ -17,6 +17,10 @@ struct NachbesuchApp: App {
         // Must be set before any scene connects, or a reminder arriving in the
         // first seconds of a launch is swallowed.
         ReminderPresenter.install()
+        // Same timing requirement: `UITabBar.appearance()` is read when the bar is
+        // first created, so a scene that connects before this call keeps the
+        // transparent default. No-op on iOS 26.
+        LegacyBarAppearance.applyIfNeeded()
     }
 
     var body: some Scene {

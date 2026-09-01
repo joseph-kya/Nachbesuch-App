@@ -32,14 +32,19 @@ struct OutcomeButton: View {
             .padding(.horizontal, 8)
             .background {
                 RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                    .fill(isSelected ? outcome.tint.opacity(0.18) : Color(uiColor: .tertiarySystemFill))
+                    .fill(isSelected ? AnyShapeStyle(StatusChipFill(outcome.tint)) : AnyShapeStyle(Color(uiColor: .tertiarySystemFill)))
             }
             .overlay {
                 RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
                     .strokeBorder(isSelected ? outcome.tint : .clear, lineWidth: 2)
             }
         }
-        .buttonStyle(.plain)
+        // Not `.plain`: `.plain` applies no styling at all to a custom label, so
+        // these tiles had no pressed state — the only feedback was the model write
+        // landing, which on a slow save is well after the thumb has left the glass.
+        // `PressableRowStyle` is the app's one definition of that feedback, and it
+        // owns the press while the label owns the shape and the fill.
+        .buttonStyle(PressableRowStyle())
         .animation(.appFeedback(reduceMotion: reduceMotion), value: isSelected)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(outcome.title)
@@ -86,14 +91,19 @@ struct LaterButton: View {
             .padding(.horizontal, 12)
             .background {
                 RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                    .fill(isSelected ? outcome.tint.opacity(0.18) : Color(uiColor: .tertiarySystemFill))
+                    .fill(isSelected ? AnyShapeStyle(StatusChipFill(outcome.tint)) : AnyShapeStyle(Color(uiColor: .tertiarySystemFill)))
             }
             .overlay {
                 RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
                     .strokeBorder(isSelected ? outcome.tint : .clear, lineWidth: 2)
             }
         }
-        .buttonStyle(.plain)
+        // Not `.plain`: `.plain` applies no styling at all to a custom label, so
+        // these tiles had no pressed state — the only feedback was the model write
+        // landing, which on a slow save is well after the thumb has left the glass.
+        // `PressableRowStyle` is the app's one definition of that feedback, and it
+        // owns the press while the label owns the shape and the fill.
+        .buttonStyle(PressableRowStyle())
         .animation(.appFeedback(reduceMotion: reduceMotion), value: isSelected)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(outcome.title)

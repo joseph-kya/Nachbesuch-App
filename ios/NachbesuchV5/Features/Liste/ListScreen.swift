@@ -125,10 +125,21 @@ struct ListScreen: View {
                 // `listRowBackground` behind every address blurred the house numbers;
                 // a single card per street keeps the material glossy and the text sharp.
                 CompatGlassContainer(spacing: 2) {
-                    // VStack (not Lazy) — Lazy defers layout of off-screen cards,
-                    // so the card below had no position to animate from on first
-                    // collapse and jumped, then worked after scrolling realized it.
-                    VStack(spacing: AppSpacing.regular) {
+                    // Lazy, and this is the screen's crash fix rather than a tuning
+                    // choice. A plain `VStack` builds every child immediately, so
+                    // opening this tab on a real territory built a `StreetCard` for
+                    // every street *and* a `HouseRow`, a divider, a button and a
+                    // `matchedTransitionSource` for all 1500 addresses before the
+                    // first frame. On an iPhone 11 that is the jetsam the user sees
+                    // as the app closing; on a simulator it is merely slow, which is
+                    // why it never reproduced there.
+                    //
+                    // The note this replaces was right that the first collapse used
+                    // to jump — but the cause was a card below with no laid-out
+                    // position, and `LazyVStack` keeps a buffer well past the
+                    // viewport. The collapse is animated by the container below and
+                    // was re-checked on the iOS 18 runtime.
+                    LazyVStack(spacing: AppSpacing.regular) {
                         if sections.isEmpty {
                             emptyState
                                 .contentCard(cornerRadius: AppRadius.card)
@@ -276,6 +287,21 @@ struct ListScreen: View {
             }
             #endif
         }
+        #if DEBUG
+        // Collapsing a street needs a tap, and a screenshot harness has no thumb —
+        // so the one layout that only exists while a street is closed (a section
+        // whose header is also its last row, and therefore rounded on all four
+        // corners) could not be reviewed at all. Same opt-in convention as
+        // `NACHBESUCH_SEED` and `NACHBESUCH_SHEET`.
+        //
+        //     SIMCTL_CHILD_NACHBESUCH_COLLAPSED=all xcrun simctl launch booted at.volkshilfe.nachbesuch.v5
+        .onChange(of: sections.isEmpty) { _, isEmpty in
+            guard !isEmpty,
+                  ProcessInfo.processInfo.environment["NACHBESUCH_COLLAPSED"] == "all"
+            else { return }
+            setAllStreets(expanded: false)
+        }
+        #endif
         .task(id: corpusKey) {
             guard isActive || rows.isEmpty else { return }
             await rebuildCorpus()
@@ -738,7 +764,7 @@ private struct HouseRow: View, Equatable {
                     .foregroundStyle(.red)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
-                    .background(.red.opacity(0.12), in: Capsule())
+                    .background(StatusChipFill(.red), in: Capsule())
             }
 
             Image(systemName: "chevron.forward")
@@ -782,7 +808,7 @@ private struct HouseRow: View, Equatable {
         .lineLimit(1)
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
-        .background(tint(for: glance.urgency).opacity(0.14), in: Capsule())
+        .background(StatusChipFill(tint(for: glance.urgency)), in: Capsule())
         .padding(.top, 2)
     }
 

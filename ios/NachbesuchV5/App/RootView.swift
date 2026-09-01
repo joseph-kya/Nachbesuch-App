@@ -12,7 +12,22 @@ struct RootView: View {
 
     @Query(sort: \Gebiet.day1Date, order: .reverse) private var gebiete: [Gebiet]
     @Query(sort: \CampaignDay.date, order: .reverse) private var legacyDays: [CampaignDay]
-    @Query(sort: \House.updatedAt, order: .reverse) private var allHouses: [House]
+
+    /// Counts a commit rather than watching the houses.
+    ///
+    /// This used to be `@Query(sort: \House.updatedAt) private var allHouses: [House]`
+    /// — every house in the database, materialised as live `@Model` objects, held for
+    /// the entire lifetime of the app because `RootView` never goes away. It existed
+    /// for two things: a revision string, and one pass over the doors when reminders
+    /// are reconciled.
+    ///
+    /// Neither needs the objects to be resident. `ArchiveScreen` and `ListScreen` each
+    /// held a set of their own on top of this one, so a territory of 1500 addresses
+    /// was resident three times over. On an iPhone 11 that is the jetsam that reads to
+    /// the user as "the app closes when I open the Liste or Archiv tab" — and it does
+    /// not reproduce in a simulator, which has no jetsam limit and borrows the Mac's
+    /// memory. The reconciliation now fetches what it needs, uses it, and lets it go.
+    @State private var saveRevision = 0
 
     @AppStorage("migration.legacyDaysToGebiete.v3") private var didMigrateLegacyDays = false
     /// Distinguishes "brand new install" from "the user deliberately deleted
@@ -142,36 +157,56 @@ struct RootView: View {
                 Task { await reconcileReminders() }
             }
         }
-        .task(id: reminderRevision) {
-            guard scenePhase == .active else { return }
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+            saveRevision &+= 1
+        }
+        .task(id: saveRevision) {
+            guard scenePhase == .active, saveRevision > 0 else { return }
+            // Coalesce a burst of writes — a bulk import commits many times in a
+            // row, and reconciling after each one re-reads the whole store.
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
             await reconcileReminders()
         }
     }
 
-    private var reminderRevision: String {
-        "\(allHouses.count)-\(allHouses.first?.updatedAt.timeIntervalSinceReferenceDate ?? 0)"
-    }
-
+    /// Rebuilds the promised reminders from the stored doors.
+    ///
+    /// Fetches inside the function instead of reading a resident `@Query`: the houses
+    /// are needed for one pass and are released as soon as it ends, which is the whole
+    /// point — see `saveRevision`.
     private func reconcileReminders() async {
         var candidates: [RevisitReminderCandidate] = []
-        for house in allHouses {
-            guard let doors = house.decodedUnits() else { continue }
-            for door in doors {
-                if door.outcome == .later, let date = door.revisitAt {
-                    candidates.append(.init(
-                        houseID: house.id, doorID: door.id, day: 1,
-                        address: house.address, doorLabel: door.label,
-                        isApartmentBuilding: house.isApartmentBuilding, date: date
-                    ))
-                }
-                if door.day2Outcome == .later, let date = door.day2RevisitAt {
-                    candidates.append(.init(
-                        houseID: house.id, doorID: door.id, day: 2,
-                        address: house.address, doorLabel: door.label,
-                        isApartmentBuilding: house.isApartmentBuilding, date: date
-                    ))
+        do {
+            // A scratch context, not `modelContext`. A fetch registers every object it
+            // returns with the context that made it, and the view's context lives as
+            // long as the app — so reading the whole store through it would leave the
+            // whole store resident, which is the problem this is getting away from.
+            // This context is local, and it and its objects go when the call returns.
+            let scratch = ModelContext(modelContext.container)
+            // In batches, so the peak is a batch rather than the territory.
+            try scratch.enumerate(FetchDescriptor<House>(), batchSize: 200) { house in
+                guard let doors = house.decodedUnits() else { return }
+                for door in doors {
+                    if door.outcome == .later, let date = door.revisitAt {
+                        candidates.append(.init(
+                            houseID: house.id, doorID: door.id, day: 1,
+                            address: house.address, doorLabel: door.label,
+                            isApartmentBuilding: house.isApartmentBuilding, date: date
+                        ))
+                    }
+                    if door.day2Outcome == .later, let date = door.day2RevisitAt {
+                        candidates.append(.init(
+                            houseID: house.id, doorID: door.id, day: 2,
+                            address: house.address, doorLabel: door.label,
+                            isApartmentBuilding: house.isApartmentBuilding, date: date
+                        ))
+                    }
                 }
             }
+        } catch {
+            notices.report(error, context: "Erinnerungen konnten nicht abgeglichen werden")
+            return
         }
         let result = await ReminderService.reconcile(candidates)
         unscheduledRevisits = result.unscheduled + result.failed

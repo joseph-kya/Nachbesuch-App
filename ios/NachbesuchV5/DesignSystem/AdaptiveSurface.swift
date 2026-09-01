@@ -14,6 +14,10 @@ struct MapChromeModifier: ViewModifier {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let cornerRadius: CGFloat
     let isInteractive: Bool
+    /// Which backdrop this panel has to stay legible against. On iOS 26 glass adapts
+    /// on its own; on iOS 18 a surface over MapKit needs a stronger fill than one
+    /// over a grouped background — see `CompatSurfaceRole`.
+    let role: CompatSurfaceRole
 
     /// `accessibilityReduceTransparency` is read-only and the simulator cannot
     /// toggle it, so the harness forces the opaque path to verify it renders.
@@ -32,10 +36,15 @@ struct MapChromeModifier: ViewModifier {
         if prefersOpaque {
             content
                 .background(Color(uiColor: .secondarySystemBackground), in: shape)
-                .overlay { shape.strokeBorder(.separator.opacity(0.4), lineWidth: 0.5) }
+                .overlay { shape.strokeBorder(Color(uiColor: .separator), lineWidth: 0.5) }
                 .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
         } else {
-            content.compatGlass(interactive: isInteractive, in: shape, legacyShadowRadius: 8)
+            content.compatGlass(
+                interactive: isInteractive,
+                in: shape,
+                role: role,
+                legacyShadowRadius: 8
+            )
         }
     }
 }
@@ -50,7 +59,13 @@ extension View {
         cornerRadius: CGFloat = AppRadius.chrome,
         interactive: Bool = false
     ) -> some View {
-        modifier(MapChromeModifier(cornerRadius: cornerRadius, isInteractive: interactive))
+        modifier(
+            MapChromeModifier(
+                cornerRadius: cornerRadius,
+                isInteractive: interactive,
+                role: .content
+            )
+        )
     }
 
     /// A floating panel over the map.
@@ -62,7 +77,13 @@ extension View {
         cornerRadius: CGFloat = AppRadius.chrome,
         interactive: Bool = false
     ) -> some View {
-        navigationGlass(cornerRadius: cornerRadius, interactive: interactive)
+        modifier(
+            MapChromeModifier(
+                cornerRadius: cornerRadius,
+                isInteractive: interactive,
+                role: .map
+            )
+        )
     }
 }
 
@@ -93,10 +114,16 @@ struct ContentCardModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        if prefersOpaque {
+        if prefersOpaque || LegacyChrome.isActive {
+            // iOS 18 takes the same path Reduce Transparency does, and for the same
+            // two reasons rather than as a concession. Legibility: a card is content,
+            // and a translucent content card over a tinted backdrop is the "muddy
+            // dark mode" and the "bright white stroke around every card" the audit
+            // reports. Cost: a material is a backdrop sample per card, and a long
+            // list on an iPhone 11 pays that per card per frame.
             content
                 .background(Color(uiColor: .secondarySystemGroupedBackground), in: shape)
-                .overlay { shape.strokeBorder(.separator.opacity(0.35), lineWidth: 0.5) }
+                .overlay { shape.strokeBorder(Color(uiColor: .separator), lineWidth: 0.5) }
         } else {
             content
                 .compatGlass(interactive: isInteractive, in: shape)
@@ -144,20 +171,37 @@ extension View {
     }
 }
 
-/// The tinted ground these screens put their glass on.
+/// The ground these screens stand on.
 ///
-/// Glass has nothing to refract over a flat system background, which is why the
-/// cards used to read as plain white rectangles. That refraction is the backdrop's
-/// entire job — it is not a design surface.
+/// **Two grounds, because there are two designs.**
 ///
-/// The wash stays monochrome and deliberately faint: a second hue reads as a second
-/// theme, while a strong accent turns the entire field pink instead of supporting the
-/// content.
+/// On iOS 26 the wash exists so the glass has something to refract; without it the
+/// cards read as plain white rectangles. That is its entire job — it is not a design
+/// surface, which is why it stays monochrome and very faint.
+///
+/// On iOS 18 there is no glass, so there is nothing for the wash to serve, and it
+/// stops being free. It was a full-screen `GeometryReader` drawing two radial
+/// gradients into a `blur(radius: 60)` — an offscreen render pass the size of the
+/// screen, recomposited behind a scrolling list, on a phone whose GPU is six years
+/// old. It also produced the "large translucent red field" the audit flags in dark
+/// mode, because a red accent at 18 % over black is a red field.
+///
+/// iOS 18 therefore gets what iOS 18 uses: the semantic grouped background, one
+/// fill, no blur, no accent.
 struct AppBackdrop: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appAccent) private var accent
 
     var body: some View {
+        if LegacyChrome.isActive {
+            Color(uiColor: .systemGroupedBackground)
+                .ignoresSafeArea()
+        } else {
+            glassGround
+        }
+    }
+
+    private var glassGround: some View {
         ZStack {
             Color(uiColor: .systemGroupedBackground)
             LinearGradient(
@@ -248,7 +292,7 @@ struct SectionSurface: View {
     var body: some View {
         let shape = sectionShape(isFirst: isFirst, isLast: isLast)
         Group {
-            if prefersOpaque {
+            if prefersOpaque || LegacyChrome.isActive {
                 shape.fill(Color(uiColor: .secondarySystemGroupedBackground))
             } else {
                 // Match Archive's regular material grade, but keep it strictly in
