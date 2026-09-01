@@ -21,7 +21,6 @@ struct MapScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(AppNoticeCenter.self) private var notices
 
-    @Query private var houses: [House]
     @Query private var allGebiete: [Gebiet]
 
     @Environment(LocationService.self) private var location
@@ -37,11 +36,18 @@ struct MapScreen: View {
 
     // Pin pipeline
     @State private var prepared = PreparedMapSnapshot.empty
-    @State private var housesByID: [UUID: House] = [:]
+
     @State private var structuralVersion = 0
     @State private var contentVersion = 0
     @State private var changedHouseIDs: Set<UUID> = []
-    @State private var lastPipelineKey: PipelineKey?
+    /// The newest `updatedAt` the pins were built from, so the next refresh can ask
+    /// for just the houses touched since instead of the whole territory.
+    @State private var pinsWatermark: Date?
+    @State private var appliedRefreshKey: RefreshKey?
+    @State private var hasLoadedPins = false
+    /// Bumped by a real SwiftData commit. This is the signal `pipelineKey` used to
+    /// hunt for by reading the query's count and newest timestamp inside `body`.
+    @State private var dataVersion = 0
 
     // Interaction
     @State private var mode: MapMode = .browsing
@@ -72,17 +78,6 @@ struct MapScreen: View {
         _scope = scope
         self.isActive = isActive
         _camera = State(initialValue: MapCameraStore(territoryID: gebiet?.id))
-        let territoryID = gebiet?.id
-        // Guard against `nil`: `gebietID == nil || dayID == nil` matched every
-        // orphaned house in the store, rendering them as pins on a territory-less
-        // map that "select all + delete" would then wipe.
-        _houses = Query(
-            filter: #Predicate<House> {
-                territoryID != nil && ($0.gebietID == territoryID || $0.dayID == territoryID)
-            },
-            sort: \House.updatedAt,
-            order: .reverse
-        )
     }
 
     private var poiPreset: POIPreset {
@@ -96,19 +91,37 @@ struct MapScreen: View {
     private var isSelecting: Bool { selectedHouseIDs != nil }
 
     var body: some View {
-        // The chrome anchors to `Color.clear`, which respects the safe area, rather
-        // than to the map stack, which does not. `MapHost` bleeds to the screen
-        // edges, and a bottom overlay on the stack it lives in therefore aligns to
-        // the *screen* bottom — under the tab bar. That was invisible on iOS 26,
-        // where the tab bar is a floating pill the map is meant to show through, and
-        // covered the Liste and Archiv items on iOS 18, where it is an opaque strip.
-        // Anchoring to the safe area puts "bottom" at the top of the tab bar on both.
-        Color.clear
-            .overlay {
-                mapStack
+        // The chrome must anchor to the **safe area** while `MapHost` bleeds to the
+        // screen edges: a bottom-aligned control that anchors to the screen sits
+        // under the tab bar, which was invisible on iOS 26 (a floating pill the map
+        // is meant to show through) and covered Liste and Archiv on iOS 18, where
+        // the bar is an opaque strip.
+        //
+        // This used to be spelled `Color.clear.overlay { mapStack }` plus two more
+        // overlays, and that spelling is what froze the app on iOS 18. An `.overlay`
+        // is sized from its base, so a base that respects the safe area with a child
+        // that ignores it leaves SwiftUI reconciling two different safe-area regions
+        // for one box; each `.safeAreaPadding` on the chrome added another. The
+        // resulting `InsetViewLayout` negotiation probes each child several times per
+        // level, so the cost multiplies with depth — and after a tab transition, when
+        // the proposals shift, one pass stops converging at all. The main thread then
+        // never returns from that single layout pass, which is the freeze: no crash,
+        // no runaway body, just a screen that stops.
+        //
+        // A `ZStack` is the idiom that expresses the same thing without the
+        // negotiation. It sizes to the proposal — the safe area — so the chrome
+        // stacked inside it lands exactly where the overlays used to, while
+        // `MapHost`'s own `ignoresSafeArea` still lets the tiles bleed past it. One
+        // region, one pass.
+        ZStack {
+            mapStack
+
+            VStack(spacing: 0) {
+                topChrome
+                Spacer(minLength: 0)
+                bottomChrome
             }
-            .overlay(alignment: .top) { topChrome }
-            .overlay(alignment: .bottom) { bottomChrome }
+        }
     }
 
     private var mapStack: some View {
@@ -173,8 +186,17 @@ struct MapScreen: View {
                 cameraCommand = nil
             }
         }
-        .task(id: pipelineKey) {
+        .task(id: RefreshTaskKey(refresh: refreshKey, isActive: isActive)) {
+            guard isActive, appliedRefreshKey != refreshKey else { return }
+            // A tab the user is only passing through must not start a 5,000-row read.
+            // Flicking across the bar cancels this dwell before any work begins, which
+            // is what stops rapid switching from queueing overlapping fetches.
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, isActive else { return }
             await refreshPins()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+            dataVersion &+= 1
         }
         .onChange(of: location.location) { _, newLocation in
             performInitialLocateIfNeeded(newLocation)
@@ -234,7 +256,10 @@ struct MapScreen: View {
     }
 
     private var showsGuide: Bool {
-        !hasSeenGuide && houses.isEmpty && mode == .browsing && gebiet != nil
+        // Deliberately the loaded snapshot, not a query. Reading a bulk `@Query` here
+        // put a full territory materialisation inside chrome evaluation.
+        hasLoadedPins && !hasSeenGuide && prepared.pinsByID.isEmpty
+            && mode == .browsing && gebiet != nil
     }
 
     private var showsTerritoryButton: Bool {
@@ -305,7 +330,7 @@ struct MapScreen: View {
             }
         }
         .padding(.horizontal, AppSpacing.regular)
-        .safeAreaPadding(.top, AppSpacing.tight)
+        .padding(.top, AppSpacing.tight)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
             topChromeHeight = height
         }
@@ -360,7 +385,7 @@ struct MapScreen: View {
             }
         }
         .padding(.horizontal, AppSpacing.regular)
-        .safeAreaPadding(.bottom, AppSpacing.snug)
+        .padding(.bottom, AppSpacing.snug)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
             bottomChromeHeight = height
         }
@@ -456,68 +481,102 @@ struct MapScreen: View {
 
     // MARK: - Pin pipeline
 
-    /// Identity of the data the pins are built from. A change here — and only here —
-    /// re-runs the pipeline.
-    private struct PipelineKey: Hashable {
+    /// What the pins are built from, expressed so that deciding whether to rebuild
+    /// costs nothing.
+    ///
+    /// The key it replaces ended in `houses.count` and `houses.first?.updatedAt`.
+    /// Both are reads of a bulk `@Query`, and the key was computed inside `body` —
+    /// so every redraw of this screen, including one caused merely by the tab
+    /// selection changing, materialised the whole territory on the main thread
+    /// before the new tab could draw. `dataVersion` is the same signal delivered by
+    /// `ModelContext.didSave` instead of hunted for.
+    private struct RefreshKey: Hashable {
         let territoryID: UUID?
         let scope: DayScope
-        let houseCount: Int
-        let newestUpdate: Date?
+        let version: Int
     }
 
-    private var pipelineKey: PipelineKey {
-        PipelineKey(
-            territoryID: gebiet?.id,
-            scope: scope,
-            houseCount: houses.count,
-            newestUpdate: houses.first?.updatedAt
-        )
+    /// `.task(id:)` restarts on any change to its id, so the id has to carry
+    /// `isActive` too — otherwise leaving and re-entering the tab cannot re-arm a
+    /// refresh that was skipped while the screen was in the background.
+    private struct RefreshTaskKey: Hashable {
+        let refresh: RefreshKey
+        let isActive: Bool
+    }
+
+    private var refreshKey: RefreshKey {
+        RefreshKey(territoryID: gebiet?.id, scope: scope, version: dataVersion)
     }
 
     private func refreshPins() async {
-        let key = pipelineKey
+        let requested = refreshKey
         let currentScope = scope
 
-        // Content-only change (a status was tapped): patch just those houses instead
-        // of decoding every blob in the territory again.
-        if let previous = lastPipelineKey,
-           previous.territoryID == key.territoryID,
-           previous.scope == key.scope,
-           previous.houseCount == key.houseCount,
-           let since = previous.newestUpdate,
-           key.newestUpdate != previous.newestUpdate {
-            // Sorted by updatedAt descending, so everything touched forms a prefix.
-            let changed = houses.prefix { $0.updatedAt > since }.map(RawMapHouse.init)
+        guard let territoryID = gebiet?.id else {
+            prepared = .empty
+            pinsWatermark = nil
+            hasLoadedPins = true
+            appliedRefreshKey = requested
+            return
+        }
+
+        let reader = HouseReadService(modelContainer: modelContext.container)
+
+        // Content-only change (a status was tapped): patch just the houses touched
+        // since the last build instead of decoding every blob in the territory.
+        // Without this a single door tap on a 5,000-house territory costs a full
+        // refetch and rebuild, which is the most common action in the field.
+        if let since = pinsWatermark,
+           let previous = appliedRefreshKey,
+           previous.territoryID == requested.territoryID,
+           previous.scope == requested.scope {
+            let changed: [RawMapHouse]
+            do {
+                changed = try await reader.mapSeeds(territoryID: territoryID, updatedAfter: since)
+            } catch is CancellationError {
+                return
+            } catch {
+                notices.report(error, context: "Karte konnte nicht gelesen werden")
+                return
+            }
+            guard !Task.isCancelled else { return }
             if !changed.isEmpty {
                 let base = prepared
-                let patched = await Task.detached(priority: .userInitiated) {
-                    MapPinSnapshotBuilder.patch(base, with: changed, scope: currentScope)
-                }.value
+                let patched = await offMainActor { MapPinSnapshotBuilder.patch(base, with: changed, scope: currentScope) }
                 guard !Task.isCancelled else { return }
                 prepared = patched
                 changedHouseIDs = Set(changed.map(\.id))
                 contentVersion &+= 1
-                lastPipelineKey = key
+                pinsWatermark = changed.compactMap(\.updatedAt).max() ?? since
+                appliedRefreshKey = requested
                 return
             }
-            // The prefix came back empty even though the key moved. Fall through to a
-            // full rebuild rather than advancing the key on a no-op, which used to
-            // leave the map permanently showing the pre-change status.
+            // Nothing actually changed. Advance the key so an identical request does
+            // not queue another read, but leave the snapshot alone.
+            appliedRefreshKey = requested
+            return
         }
 
-        let raw = houses.map(RawMapHouse.init)
-        let index = Dictionary(houses.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let snapshot = await Task.detached(priority: .userInitiated) {
-            MapPinSnapshotBuilder.build(from: raw, scope: currentScope)
-        }.value
+        let raw: [RawMapHouse]
+        do {
+            raw = try await reader.mapSeeds(territoryID: territoryID, updatedAfter: nil)
+        } catch is CancellationError {
+            return
+        } catch {
+            notices.report(error, context: "Karte konnte nicht gelesen werden")
+            return
+        }
+        guard !Task.isCancelled else { return }
+        let snapshot = await offMainActor { MapPinSnapshotBuilder.build(from: raw, scope: currentScope) }
         guard !Task.isCancelled else { return }
 
         prepared = snapshot
-        housesByID = index
         changedHouseIDs = []
         structuralVersion &+= 1
         contentVersion &+= 1
-        lastPipelineKey = key
+        pinsWatermark = raw.compactMap(\.updatedAt).max()
+        hasLoadedPins = true
+        appliedRefreshKey = requested
 
         if var selection = selectedHouseIDs {
             selection.formIntersection(snapshot.pinsByID.keys)
@@ -537,8 +596,9 @@ struct MapScreen: View {
         sheetRoute = nil
         confirmation = nil
         prepared = .empty
-        housesByID = [:]
-        lastPipelineKey = nil
+        pinsWatermark = nil
+        hasLoadedPins = false
+        appliedRefreshKey = nil
         structuralVersion &+= 1
         let restored = camera.selectTerritory(gebiet?.id)
         cameraCommand = .region(restored, animated: false)
@@ -688,7 +748,36 @@ struct MapScreen: View {
 
     private var selectedHouses: [House] {
         guard let selectedHouseIDs else { return [] }
-        return selectedHouseIDs.compactMap { housesByID[$0] }
+        return territoryHouses().filter { selectedHouseIDs.contains($0.id) }
+    }
+
+    /// One row, by id. Interaction paths need a real model to write through; they do
+    /// not need the territory resident to find it.
+    private func fetchHouse(_ id: UUID) -> House? {
+        var descriptor = FetchDescriptor<House>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        do {
+            return try modelContext.fetch(descriptor).first
+        } catch {
+            notices.report(error, context: "Haus konnte nicht gelesen werden")
+            return nil
+        }
+    }
+
+    /// The territory's real models, fetched for one operation that genuinely needs
+    /// them — bulk selection, the add sheet's duplicate check, the area importer.
+    /// The map itself holds immutable pin values, never live models.
+    private func territoryHouses() -> [House] {
+        guard let territoryID = gebiet?.id else { return [] }
+        let descriptor = FetchDescriptor<House>(predicate: #Predicate {
+            $0.gebietID == territoryID || $0.dayID == territoryID
+        })
+        do {
+            return try modelContext.fetch(descriptor)
+        } catch {
+            notices.report(error, context: "Häuser konnten nicht gelesen werden")
+            return []
+        }
     }
 
     private func deleteSelectedHouses() {
@@ -711,10 +800,7 @@ struct MapScreen: View {
             toggleSelection(id)
             return
         }
-        // O(1): the old code ran `houses.first(where:)` on five separate interaction
-        // paths, each a linear scan that could fault houses in from SwiftData.
-        guard let house = housesByID[id] else { return }
-        sheetRoute = .houseDetail(house.id)
+        sheetRoute = .houseDetail(id)
     }
 
     /// The day a status tap should be written to.
@@ -730,7 +816,7 @@ struct MapScreen: View {
     }
 
     private func setQuickOutcome(_ outcome: VisitOutcome, for id: UUID) {
-        guard let house = housesByID[id], let door = house.units.first else { return }
+        guard let house = fetchHouse(id), let door = house.units.first else { return }
         let day = writeDay(for: house)
         let current = door.result(on: day)
         house.setOutcome(current == outcome ? nil : outcome, for: door.id, day: day)
@@ -743,7 +829,7 @@ struct MapScreen: View {
 
     /// Books a return time for a single-door pin, from the long-press menu.
     private func setRevisitTime(_ date: Date, for id: UUID) {
-        guard let house = housesByID[id], let door = house.units.first else { return }
+        guard let house = fetchHouse(id), let door = house.units.first else { return }
         let day = writeDay(for: house)
         house.setOutcome(.later, for: door.id, day: day, revisitAt: date)
         let houseID = house.id
@@ -762,7 +848,7 @@ struct MapScreen: View {
     }
 
     private func markOpenDoors(for id: UUID) {
-        guard let house = housesByID[id] else { return }
+        guard let house = fetchHouse(id) else { return }
         guard house.setOutcomeForOpenDoors(.notHome, day: writeDay(for: house)) > 0 else { return }
         scheduleSave()
     }
@@ -784,7 +870,7 @@ struct MapScreen: View {
         // house-count change, queueing overlapping reverse-geocodes into Apple's
         // rate limiter.
         namingTask?.cancel()
-        let coordinates = houses.map(\.coordinate)
+        let coordinates = prepared.pinsByID.values.map(\.coordinate)
         namingTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
@@ -835,9 +921,7 @@ struct MapScreen: View {
 
         let destructive = UIMenu(options: .displayInline, children: [
             UIAction(title: "Pin löschen", image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
-                if let house = housesByID[id] {
-                    confirmation = .deleteHouse(id: id, address: house.address)
-                }
+                confirmation = .deleteHouse(id: id, address: pin.address)
             }
         ])
 
@@ -845,7 +929,7 @@ struct MapScreen: View {
     }
 
     private func contextPreview(for pin: MapPinSnapshot) -> UIViewController? {
-        guard let house = housesByID[pin.id], house.isApartmentBuilding else { return nil }
+        guard let house = fetchHouse(pin.id), house.isApartmentBuilding else { return nil }
         return UIHostingController(
             rootView: ApartmentStatusPreview(address: house.address, units: house.units, scope: scope)
         )
@@ -857,7 +941,7 @@ struct MapScreen: View {
     private func sheet(for route: MapRoute) -> some View {
         switch route {
         case .houseDetail(let id):
-            if let house = housesByID[id] {
+            if let house = fetchHouse(id) {
                 HouseDetailSheet(house: house, scope: scope, writeDay: writeDay(for: house))
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
@@ -866,7 +950,7 @@ struct MapScreen: View {
         case .revisitTime(let id, let address):
             RevisitTimeSheet(
                 subject: address,
-                existing: housesByID[id]?.summary(for: scope).nextRevisitAt
+                existing: fetchHouse(id)?.summary(for: scope).nextRevisitAt
             ) { date in
                 setRevisitTime(date, for: id)
             }
@@ -875,7 +959,7 @@ struct MapScreen: View {
             AddHouseSheet(
                 coordinate: coordinate,
                 gebietID: gebietID,
-                existingHouses: houses,
+                existingHouses: territoryHouses,
                 writeDay: gebiet.map { $0.writeScope().writeTargetDay } ?? 1
             ) { house in
                 dropHouseID = house.id
@@ -899,7 +983,7 @@ struct MapScreen: View {
                 AreaHouseImportSheet(
                     boundary: gebiet.boundaryCoordinates,
                     gebietID: gebiet.id,
-                    existingHouses: houses
+                    existingHouses: territoryHouses
                 ) {
                     scheduleAutoNaming(force: true)
                 }
@@ -918,7 +1002,7 @@ struct MapScreen: View {
             // Pins drawn on top of each other cannot be aimed at separately, so the
             // tap opens a list instead of guessing which one was meant.
             StackedPinsSheet(
-                houses: ids.compactMap { housesByID[$0] },
+                houses: ids.compactMap(fetchHouse),
                 scope: scope
             ) { id in
                 self.sheetRoute = .houseDetail(id)
@@ -935,7 +1019,7 @@ struct MapScreen: View {
                 title: Text("Haus löschen?"),
                 message: Text("„\(address)“ und alle Tür-Status werden aus diesem Gebiet gelöscht."),
                 primaryButton: .destructive(Text("Löschen")) {
-                    guard let house = housesByID[id] else { return }
+                    guard let house = fetchHouse(id) else { return }
                     modelContext.delete(house)
                     if modelContext.save(reporting: notices, context: "Haus konnte nicht gelöscht werden") {
                         Task { await ReminderService.cancelAllRevisits(house: id) }

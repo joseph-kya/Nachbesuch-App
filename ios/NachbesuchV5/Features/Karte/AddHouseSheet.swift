@@ -12,7 +12,12 @@ struct AddHouseSheet: View {
 
     let coordinate: CLLocationCoordinate2D
     let gebietID: UUID
-    let existingHouses: [House]
+    /// Fetched, not held. `.sheet(item:)` re-runs its content builder on every
+    /// evaluation of the presenting screen's body, so an array parameter meant the
+    /// caller re-read the whole territory each time anything on the map changed
+    /// while this sheet was open. A closure moves that read to the one `.task` below
+    /// that actually needs it, where it happens once.
+    let existingHouses: () -> [House]
     /// The campaign day an immediately-set status belongs to. Previously absent, so
     /// a house created on day 2 recorded its first result against day 1.
     let writeDay: Int
@@ -124,7 +129,7 @@ struct AddHouseSheet: View {
                 // Built BEFORE the geocode: the old order left the index nil for the
                 // whole network round trip, so a fast user could save a duplicate
                 // before duplicate detection had loaded.
-                duplicateIndex = HouseDuplicateIndex(houses: existingHouses, coordinate: coordinate)
+                duplicateIndex = HouseDuplicateIndex(houses: existingHouses(), coordinate: coordinate)
                 await loadSuggestedAddress()
             }
         }

@@ -144,17 +144,29 @@ nonisolated struct RawMapHouse: Sendable {
     let latitude: Double
     let longitude: Double
     let unitsData: Data
+    /// When this row was last written. Carried so the map can advance a watermark
+    /// and ask for only the houses touched since, rather than re-reading the
+    /// territory after every door tap.
+    let updatedAt: Date?
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
 
-    init(id: UUID, address: String, latitude: Double, longitude: Double, unitsData: Data) {
+    init(
+        id: UUID,
+        address: String,
+        latitude: Double,
+        longitude: Double,
+        unitsData: Data,
+        updatedAt: Date? = nil
+    ) {
         self.id = id
         self.address = address
         self.latitude = latitude
         self.longitude = longitude
         self.unitsData = unitsData
+        self.updatedAt = updatedAt
     }
 
     @MainActor
@@ -164,7 +176,8 @@ nonisolated struct RawMapHouse: Sendable {
             address: house.address,
             latitude: house.latitude,
             longitude: house.longitude,
-            unitsData: house.unitsData
+            unitsData: house.unitsData,
+            updatedAt: house.updatedAt
         )
     }
 }

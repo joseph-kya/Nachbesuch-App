@@ -70,11 +70,19 @@ final class MapCameraStore {
     }
 
     #if DEBUG
-    private static func debugOverrideSpan() -> Double? {
+    /// Read once. `ProcessInfo.environment` builds a fresh dictionary on every access,
+    /// and this was being called from `MapCameraStore.init` — which runs inside
+    /// `MapScreen.init`, which runs on every evaluation of `RootView.body`. A sample
+    /// of the frozen app spent a fifth of its time in `RootView.body` doing exactly
+    /// this. DEBUG-only, so it never reached the field build, but it slowed every
+    /// measurement taken to find the freeze.
+    private static let overrideSpan: Double? = {
         guard let span = ProcessInfo.processInfo.environment["NACHBESUCH_SPAN"]
             .flatMap(Double.init), span > 0 else { return nil }
         return span
-    }
+    }()
+
+    private static func debugOverrideSpan() -> Double? { overrideSpan }
     #endif
 
     /// True until the app has performed its single automatic centre-on-user.

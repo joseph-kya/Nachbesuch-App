@@ -11,7 +11,10 @@ struct AreaHouseImportSheet: View {
 
     let boundary: [CLLocationCoordinate2D]
     let gebietID: UUID
-    let existingHouses: [House]
+    /// A closure for the same reason as in `AddHouseSheet`: the presenting screen's
+    /// body can re-run while this sheet is open, and an array parameter re-read the
+    /// territory every time it did.
+    let existingHouses: () -> [House]
     let onFinished: () -> Void
 
     @State private var addresses: [ImportedAreaAddress] = []
@@ -107,7 +110,7 @@ struct AreaHouseImportSheet: View {
         // and race on the results.
         loadTask?.cancel()
         phase = .loading
-        let fingerprints = existingHouses.map {
+        let fingerprints = existingHouses().map {
             ExistingHouseFingerprint(address: $0.address, latitude: $0.latitude, longitude: $0.longitude)
         }
         loadTask = Task {

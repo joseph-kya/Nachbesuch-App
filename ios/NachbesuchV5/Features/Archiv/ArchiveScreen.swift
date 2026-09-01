@@ -51,6 +51,7 @@ struct ArchiveScreen: View {
     /// jetsam limit. The count is all the invalidation key ever wanted; the rows
     /// themselves are read in batches by `rebuildIndex`, off this context, and dropped.
     @State private var houseCount = 0
+    @State private var builtIndexKey: IndexKey?
 
 
     enum ArchiveFilter: String, CaseIterable, Identifiable {
@@ -106,6 +107,11 @@ struct ArchiveScreen: View {
         )
     }
 
+    private struct IndexTaskKey: Hashable {
+        let index: IndexKey
+        let isActive: Bool
+    }
+
     private var activeGebiet: Gebiet? {
         gebiete.first { $0.id == selectedGebietID } ?? gebiete.first
     }
@@ -142,8 +148,10 @@ struct ArchiveScreen: View {
         .task {
             refreshHouseCount()
         }
-        .task(id: indexKey) {
-            guard isActive || index.isEmpty else { return }
+        .task(id: IndexTaskKey(index: indexKey, isActive: isActive)) {
+            guard isActive, builtIndexKey != indexKey else { return }
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, isActive else { return }
             await rebuildIndex()
         }
         .task(id: searchText) {
@@ -457,6 +465,7 @@ struct ArchiveScreen: View {
     // MARK: Index
 
     private func rebuildIndex() async {
+        let key = indexKey
         let gebietSeeds = gebiete.map {
             ArchiveIndexBuilder.GebietSeed(
                 id: $0.id,
@@ -468,32 +477,26 @@ struct ArchiveScreen: View {
                 isTwoDay: $0.isTwoDay
             )
         }
-        var houseSeeds: [ArchiveIndexBuilder.HouseSeed] = []
+        let houseSeeds: [ArchiveIndexBuilder.HouseSeed]
         do {
-            // A scratch context so the fetched houses are not registered with the
-            // view's context and left resident behind the tab. Batched so the peak is
-            // a batch, not the store. The seeds themselves are plain values.
-            let scratch = ModelContext(modelContext.container)
-            try scratch.enumerate(FetchDescriptor<House>(), batchSize: 200) { house in
-                houseSeeds.append(
-                    ArchiveIndexBuilder.HouseSeed(
-                        gebietID: house.territoryID,
-                        address: house.address,
-                        note: house.note,
-                        unitsData: house.unitsData
-                    )
-                )
-            }
+            let reader = HouseReadService(modelContainer: modelContext.container)
+            houseSeeds = try await reader.archiveSeeds()
         } catch {
             notices.report(error, context: "Archiv konnte nicht gelesen werden")
             return
         }
-        let built = await Task.detached(priority: .userInitiated) {
+        let buildTask = Task.detached(priority: .userInitiated) {
             ArchiveIndexBuilder.build(gebiete: gebietSeeds, houses: houseSeeds)
-        }.value
+        }
+        let built = await withTaskCancellationHandler {
+            await buildTask.value
+        } onCancel: {
+            buildTask.cancel()
+        }
         guard !Task.isCancelled else { return }
         index = built
         recomputeResults()
+        builtIndexKey = key
     }
 
     /// Keeps `indexKey` honest without keeping the rows.

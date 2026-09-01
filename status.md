@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-09-01T23:10:00+02:00 · Tests: iOS suite green, 1 diagnostic
+Last updated: 2026-09-02T01:40:00+02:00 · Tests: iOS suite green, 1 diagnostic
 PDF test skipped, 0 fehlgeschlagen on iOS 26.5 **and** iOS 18.5;
 Android domain + data passing · `refactor/minimal-ui` und `salvage/offene-arbeit`
 sind auf `main` und auf `origin`
@@ -19,6 +19,33 @@ sind auf `main` und auf `origin`
   Glasfläche und die Accessibility-Zustände funktionieren.
 
 ## Done
+- [x] iOS 18 · das Einfrieren beim Tabwechsel · Zwei Ursachen, beide gemessen.
+  **Erstens das Layout.** Der Kartenschirm war als
+  `Color.clear.overlay { mapStack }` plus zwei weitere Overlays geschrieben, und
+  die Chrome-Leisten trugen `safeAreaPadding`. Ein Overlay wird von seiner Basis
+  vermessen — eine Basis, die den sicheren Bereich beachtet, mit einem Kind, das
+  ihn ignoriert, lässt SwiftUI also zwei verschiedene sichere Bereiche für
+  dieselbe Box ausverhandeln; jedes `safeAreaPadding` legte eine weitere Ebene
+  darauf. Die `InsetViewLayout`-Aushandlung prüft jedes Kind mehrfach pro Ebene,
+  der Aufwand vervielfacht sich also mit der Tiefe, und nach einem Tabwechsel
+  konvergiert ein Durchgang gar nicht mehr. Der Hauptthread kehrt aus diesem
+  **einen** Layoutdurchgang nie zurück — kein Absturz, keine Schleife im `body`,
+  nur ein Bildschirm, der stehen bleibt. Ein `ZStack` sagt dasselbe ohne die
+  Aushandlung. **Zweitens die Daten.** `MapScreen` hielt weiterhin eine
+  `@Query` über das ganze Gebiet, und `pipelineKey` las im `body` deren `count`
+  und `first?.updatedAt` — jedes Neuzeichnen, auch das bloße Wechseln der
+  Tab-Auswahl, materialisierte damit 5.000 Modelle auf dem Hauptthread. Karte,
+  Liste und Archiv lesen jetzt alle über `HouseReadService`, einen
+  `@ModelActor`, und geben unveränderliche Werte zurück; ein Statusklick holt
+  über eine Wasserlinie auf `updatedAt` nur die tatsächlich geänderten Häuser
+  statt das Gebiet neu zu lesen. Dazu: der Abgleich der Erinnerungen lief nach
+  **jedem** Speichern über den ganzen Bestand auf dem Hauptthread und liegt
+  jetzt ebenfalls auf dem Aktor, und die Duplikatprüfung der Blätter wird als
+  Closure übergeben, weil `.sheet(item:)` seinen Inhalt bei jedem `body` des
+  präsentierenden Schirms neu baut. Gemessen mit 5.000 Häusern auf
+  iPhone 11 / iOS 18.5: vorher genügte **ein** Wechsel weg von der Karte für
+  ~90 % CPU und +2,7 MB/s, dauerhaft. Jetzt fallen 200 Wechsel auf 0 % zurück,
+  der Speicher bleibt flach. Harness: `NACHBESUCH_TAB_STRESS`.
 - [x] iOS 18 · zwei Ebenen statt einer heruntergeschraubten · Die iOS-18-Fassung
   war iOS 26 mit abgeschalteter Renderpipeline: jede Glas-API hatte darunter ein
   „Material-Äquivalent", und das Ergebnis war genau das, was

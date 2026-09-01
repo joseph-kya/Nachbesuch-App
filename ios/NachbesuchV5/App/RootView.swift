@@ -116,17 +116,10 @@ struct RootView: View {
             (AppAppearance(rawValue: appearanceRaw) ?? .system).colorScheme
         )
         .compatTabBarMinimize()
-        // `safeAreaBar` rather than `overlay`: an overlaid banner swallows taps in
-        // the navigation bar behind it, and the bar variant additionally extends the
-        // scroll edge effect of any scroll view it insets.
-        .compatSafeAreaBar(edge: .top, spacing: 0) {
-            VStack(spacing: AppSpacing.tight) {
-                AppNoticeBanner()
-                if unscheduledRevisits > 0 {
-                    ReminderCapacityBanner(count: unscheduledRevisits)
-                }
-            }
-        }
+        // On iOS 18 an empty `safeAreaInset` around a TabView can enter a perpetual
+        // inset/layout negotiation after tab selection. Install the inset only while
+        // it has actual banner content.
+        .modifier(RootBannerModifier(unscheduledRevisits: unscheduledRevisits))
         .task {
             await migrateLegacyDaysIfNeeded()
             createFirstGebietIfNeeded()
@@ -139,6 +132,37 @@ struct RootView: View {
             ensureSelection()
             await reconcileReminders()
         }
+        #if DEBUG
+        // The regression harness for the iOS 18 freeze.
+        //
+        // Switching tabs by hand is exactly the gesture that used to lock the app up,
+        // and it is the one thing a screenshot run cannot do. This drives the tab bar
+        // instead, so the failure has a number attached to it: before the fix, one
+        // single switch away from a built map tab pinned the CPU at ~90 % and grew
+        // RSS by ~2.7 MB/s **for as long as the app was left running**. After it, 120
+        // switches settle back to 0 % with flat memory.
+        //
+        //     SIMCTL_CHILD_NACHBESUCH_TAB_STRESS=120 \
+        //     SIMCTL_CHILD_NACHBESUCH_TAB_STRESS_MS=350 \
+        //     xcrun simctl launch booted at.volkshilfe.nachbesuch.v5
+        //
+        // Then watch `ps -o %cpu=,rss= -p <pid>`: it has to fall to zero once the run
+        // ends. A freeze shows up as CPU that never comes down.
+        .task {
+            guard let raw = ProcessInfo.processInfo.environment["NACHBESUCH_TAB_STRESS"],
+                  let switches = Int(raw), switches > 0
+            else { return }
+            let interval = ProcessInfo.processInfo.environment["NACHBESUCH_TAB_STRESS_MS"]
+                .flatMap(Int.init) ?? 350
+            let sequence: [AppTab] = [.list, .archive, .map]
+            for index in 0..<switches {
+                try? await Task.sleep(for: .milliseconds(interval))
+                guard !Task.isCancelled else { return }
+                tab = sequence[index % sequence.count]
+            }
+            print("[TabStress] completed \(switches) switches")
+        }
+        #endif
         .onChange(of: gebiete.count) { _, _ in
             ensureSelection()
         }
@@ -172,38 +196,19 @@ struct RootView: View {
 
     /// Rebuilds the promised reminders from the stored doors.
     ///
-    /// Fetches inside the function instead of reading a resident `@Query`: the houses
-    /// are needed for one pass and are released as soon as it ends, which is the whole
-    /// point — see `saveRevision`.
+    /// Off the main actor, and that is the point. This used to be a `@Query` over
+    /// every house held for the app's whole lifetime; then a batched scratch-context
+    /// walk, which fixed the memory but left the work on the main thread — so a
+    /// single door tap in the field still bought a full decode of the store 600 ms
+    /// later, on the thread that draws. `HouseReadService` is a `@ModelActor`, so the
+    /// walk happens on its own executor and only the finished value array comes back.
     private func reconcileReminders() async {
-        var candidates: [RevisitReminderCandidate] = []
+        let candidates: [RevisitReminderCandidate]
         do {
-            // A scratch context, not `modelContext`. A fetch registers every object it
-            // returns with the context that made it, and the view's context lives as
-            // long as the app — so reading the whole store through it would leave the
-            // whole store resident, which is the problem this is getting away from.
-            // This context is local, and it and its objects go when the call returns.
-            let scratch = ModelContext(modelContext.container)
-            // In batches, so the peak is a batch rather than the territory.
-            try scratch.enumerate(FetchDescriptor<House>(), batchSize: 200) { house in
-                guard let doors = house.decodedUnits() else { return }
-                for door in doors {
-                    if door.outcome == .later, let date = door.revisitAt {
-                        candidates.append(.init(
-                            houseID: house.id, doorID: door.id, day: 1,
-                            address: house.address, doorLabel: door.label,
-                            isApartmentBuilding: house.isApartmentBuilding, date: date
-                        ))
-                    }
-                    if door.day2Outcome == .later, let date = door.day2RevisitAt {
-                        candidates.append(.init(
-                            houseID: house.id, doorID: door.id, day: 2,
-                            address: house.address, doorLabel: door.label,
-                            isApartmentBuilding: house.isApartmentBuilding, date: date
-                        ))
-                    }
-                }
-            }
+            let reader = HouseReadService(modelContainer: modelContext.container)
+            candidates = try await reader.revisitCandidates()
+        } catch is CancellationError {
+            return
         } catch {
             notices.report(error, context: "Erinnerungen konnten nicht abgeglichen werden")
             return
@@ -284,6 +289,27 @@ struct RootView: View {
         }
         if modelContext.save(reporting: notices, context: "Alte Tagesrunden konnten nicht übernommen werden") {
             didMigrateLegacyDays = true
+        }
+    }
+}
+
+private struct RootBannerModifier: ViewModifier {
+    @Environment(AppNoticeCenter.self) private var notices
+    let unscheduledRevisits: Int
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if notices.current != nil || unscheduledRevisits > 0 {
+            content.compatSafeAreaBar(edge: .top, spacing: 0) {
+                VStack(spacing: AppSpacing.tight) {
+                    AppNoticeBanner()
+                    if unscheduledRevisits > 0 {
+                        ReminderCapacityBanner(count: unscheduledRevisits)
+                    }
+                }
+            }
+        } else {
+            content
         }
     }
 }

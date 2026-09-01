@@ -13,8 +13,6 @@ struct ListScreen: View {
     @Environment(AppNoticeCenter.self) private var notices
     @Environment(LocationService.self) private var location
 
-    @Query private var houses: [House]
-
     let gebiet: Gebiet?
     @Binding var scope: DayScope
     let isActive: Bool
@@ -38,9 +36,22 @@ struct ListScreen: View {
     /// for the whole screen: `HouseRow` compares the *rendered* glance, so a tick
     /// that changes no wording re-renders nothing.
     @State private var clock = Date.now
+    /// The address whose sheet is open, held **by id**.
+    ///
+    /// A live `House` in `@State` looks convenient and costs a great deal: `@Model`
+    /// is observable, so the open row's every property change re-evaluates this
+    /// screen's whole body, and the object stays registered in the view's context
+    /// for as long as the state does — including after the sheet closes. The id is
+    /// resolved to a model once, when the sheet is built.
     @State private var selectedHouse: HouseSelection?
     @State private var showsLegend = false
     @State private var showsExport = false
+    /// The territory's houses, alive only while the export sheet is.
+    ///
+    /// `ExportSheet` needs real models. Holding them in `@State` past the sheet would
+    /// pin the whole territory in memory for the rest of the session — the exact leak
+    /// this screen's queries were taken out to stop — so `showsExport` clears it.
+    @State private var exportHouses: [House] = []
     /// The row waiting for a return time, once "Später" was swiped.
     @State private var revisitTarget: HouseRowModel?
     @State private var undo: UndoEntry?
@@ -58,6 +69,7 @@ struct ListScreen: View {
     /// that lands seconds late, and the inconsistency is faulting: the scan is cheap
     /// once the objects are in memory and expensive when they are not.
     @State private var dataVersion = 0
+    @State private var builtCorpusKey: CorpusKey?
 
     @Namespace private var zoom
 
@@ -74,14 +86,6 @@ struct ListScreen: View {
         self.gebiet = gebiet
         _scope = scope
         self.isActive = isActive
-        let territoryID = gebiet?.id
-        _houses = Query(
-            filter: #Predicate<House> {
-                territoryID != nil && ($0.gebietID == territoryID || $0.dayID == territoryID)
-            },
-            sort: \House.createdAt,
-            order: .reverse
-        )
     }
 
     private struct UndoEntry: Identifiable {
@@ -91,22 +95,49 @@ struct ListScreen: View {
         let label: String
     }
 
+    private struct UndoInsetModifier: ViewModifier {
+        let undo: UndoEntry?
+        let reduceMotion: Bool
+        let onUndo: (UndoEntry) -> Void
+
+        @ViewBuilder
+        func body(content: Content) -> some View {
+            // An empty safeAreaInset is not inert on iOS 18: after repeated TabView
+            // transitions it can keep renegotiating layout forever. No undo means no
+            // inset in the hierarchy at all.
+            if let undo {
+                content.compatSafeAreaBar(edge: .bottom, spacing: 0) {
+                    UndoBanner(label: undo.label) { onUndo(undo) }
+                        .padding(.horizontal, AppSpacing.regular)
+                        .padding(.bottom, AppSpacing.tight)
+                        .transition(.appBanner(edge: .bottom, reduceMotion: reduceMotion))
+                }
+            } else {
+                content
+            }
+        }
+    }
+
     private struct CorpusKey: Hashable {
         let territoryID: UUID?
         let scope: DayScope
-        let count: Int
         let version: Int
     }
 
-    /// Cheap by construction: two identifiers, a count the query already knows, and
-    /// a counter. Nothing here touches a model's properties.
+    /// Cheap by construction: identifiers and an explicit save counter only. The
+    /// former `houses.count` looked harmless but forced iOS 18 SwiftData to
+    /// materialise the entire query during every tab-selection body update.
     private var corpusKey: CorpusKey {
         CorpusKey(
             territoryID: gebiet?.id,
             scope: scope,
-            count: houses.count,
             version: dataVersion
         )
+    }
+
+    private struct CorpusTaskKey: Hashable {
+        let corpus: CorpusKey
+        let isActive: Bool
     }
 
     private var writeDay: Int {
@@ -119,59 +150,10 @@ struct ListScreen: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                // One glass element per street, not per row — the same grade as
-                // Archive's `contentCard`. A dozen glass samples stacked as
-                // `listRowBackground` behind every address blurred the house numbers;
-                // a single card per street keeps the material glossy and the text sharp.
-                CompatGlassContainer(spacing: 2) {
-                    // Lazy, and this is the screen's crash fix rather than a tuning
-                    // choice. A plain `VStack` builds every child immediately, so
-                    // opening this tab on a real territory built a `StreetCard` for
-                    // every street *and* a `HouseRow`, a divider, a button and a
-                    // `matchedTransitionSource` for all 1500 addresses before the
-                    // first frame. On an iPhone 11 that is the jetsam the user sees
-                    // as the app closing; on a simulator it is merely slow, which is
-                    // why it never reproduced there.
-                    //
-                    // The note this replaces was right that the first collapse used
-                    // to jump — but the cause was a card below with no laid-out
-                    // position, and `LazyVStack` keeps a buffer well past the
-                    // viewport. The collapse is animated by the container below and
-                    // was re-checked on the iOS 18 runtime.
-                    LazyVStack(spacing: AppSpacing.regular) {
-                        if sections.isEmpty {
-                            emptyState
-                                .contentCard(cornerRadius: AppRadius.card)
-                                .frame(maxWidth: .infinity, minHeight: 280)
-                        } else {
-                            ForEach(sections) { section in
-                                StreetCard(
-                                    section: section,
-                                    isExpanded: !collapsedSections.contains(section.id),
-                                    now: clock,
-                                    zoom: zoom,
-                                    onToggle: { toggleSection(section.id) },
-                                    onSelect: { id in selectedHouse = HouseSelection(id: id) }
-                                )
-                                .transaction { t in
-                                    // Don't animate the initial populate — only user toggles.
-                                    if sections.isEmpty { t.disablesAnimations = true }
-                                }
-                            }
-                        }
-                    }
-                    .padding(.top, AppSpacing.tight)
-                    .padding(.bottom, AppSpacing.loose + AppChrome.tabBarClearance)
-                    .padding(.horizontal, AppSpacing.regular)
-                    // Single source for height + sibling slide, same curve as card.
-                    .animation(.smooth(duration: 0.36, extraBounce: 0).speed(reduceMotion ? 1.8 : 1), value: collapsedSections)
-                }
-            }
+            listSurface
             .scrollDismissesKeyboard(.interactively)
             .compatSoftScrollEdges()
             .background { AppBackdrop() }
-            .scrollDismissesKeyboard(.interactively)
             .searchable(text: $searchText, prompt: "Adresse, Notiz oder Tür")
             .compatMinimizedSearch()
             .compatSafeAreaBar(edge: .top, spacing: 0) {
@@ -186,20 +168,13 @@ struct ListScreen: View {
                 )
                 .padding(.vertical, 6)
             }
-            // `safeAreaInset`, not `overlay`: an overlaid banner covered the bottom
-            // ~56 pt of the list, so the row the user had just changed became
-            // untappable for the whole undo window.
-            .compatSafeAreaBar(edge: .bottom, spacing: 0) {
-                ZStack {
-                    if let undo {
-                        UndoBanner(label: undo.label) { performUndo(undo) }
-                            .padding(.horizontal, AppSpacing.regular)
-                            .padding(.bottom, AppSpacing.tight)
-                            .transition(.appBanner(edge: .bottom, reduceMotion: reduceMotion))
-                    }
-                }
-                .animation(.appFeedback(reduceMotion: reduceMotion), value: undo?.id)
-            }
+            .modifier(
+                UndoInsetModifier(
+                    undo: undo,
+                    reduceMotion: reduceMotion,
+                    onUndo: performUndo
+                )
+            )
             .sensoryFeedback(.selection, trigger: collapsedSections)
             .navigationTitle("Nachbesuche")
             .navigationBarTitleDisplayMode(.inline)
@@ -240,7 +215,7 @@ struct ListScreen: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        showsExport = true
+                        prepareExport()
                     } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
@@ -249,7 +224,7 @@ struct ListScreen: View {
                 }
             }
             .sheet(item: $selectedHouse) { selection in
-                if let house = houses.first(where: { $0.id == selection.id }) {
+                if let house = fetchHouse(selection.id) {
                     HouseDetailSheet(house: house, scope: scope, writeDay: writeDay)
                         // The row grows into the sheet, and dragging it back down
                         // collapses it into the same row.
@@ -258,9 +233,9 @@ struct ListScreen: View {
                         .presentationDragIndicator(.visible)
                 }
             }
-            .sheet(isPresented: $showsExport) {
+            .sheet(isPresented: $showsExport, onDismiss: { exportHouses = [] }) {
                 if let gebiet {
-                    ExportSheet(gebiet: gebiet, houses: houses, scope: scope)
+                    ExportSheet(gebiet: gebiet, houses: exportHouses, scope: scope)
                         .presentationDetents([.medium, .large])
                         .presentationDragIndicator(.visible)
                 }
@@ -283,7 +258,7 @@ struct ListScreen: View {
             #if DEBUG
             // Lets the test harness open the export sheet without a tap.
             if ProcessInfo.processInfo.environment["NACHBESUCH_SHEET"] == "export" {
-                showsExport = true
+                prepareExport()
             }
             #endif
         }
@@ -302,8 +277,10 @@ struct ListScreen: View {
             setAllStreets(expanded: false)
         }
         #endif
-        .task(id: corpusKey) {
-            guard isActive || rows.isEmpty else { return }
+        .task(id: CorpusTaskKey(corpus: corpusKey, isActive: isActive)) {
+            guard isActive, builtCorpusKey != corpusKey else { return }
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, isActive else { return }
             await rebuildCorpus()
         }
         .task(id: searchText) {
@@ -351,28 +328,111 @@ struct ListScreen: View {
         }
     }
 
+    /// One glass card per street, lazily built.
+    ///
+    /// A native `List` was tried here for iOS 18, on the theory that the freeze came
+    /// from row count — every expanded `StreetCard` holds an eager `VStack`, so the
+    /// reasoning went, forty-four open streets means five thousand rows at once. The
+    /// measurement said otherwise: swapping this whole surface for a cell-reusing
+    /// `List` changed the frozen app's CPU by nothing at all (89.9 % → 96.3 %), because
+    /// the freeze was never in this screen. `LazyVStack` also does not build a card
+    /// that is nowhere near the viewport, so the five thousand rows were never built
+    /// either. The card layout is what the design settled on, so the card layout stays.
+    private var listSurface: some View {
+        ScrollView {
+            CompatGlassContainer(spacing: 2) {
+                LazyVStack(spacing: AppSpacing.regular) {
+                    if sections.isEmpty {
+                        emptyState
+                            .contentCard(cornerRadius: AppRadius.card)
+                            .frame(maxWidth: .infinity, minHeight: 280)
+                    } else {
+                        ForEach(sections) { section in
+                            StreetCard(
+                                section: section,
+                                isExpanded: !collapsedSections.contains(section.id),
+                                now: clock,
+                                zoom: zoom,
+                                onToggle: { toggleSection(section.id) },
+                                onSelect: openHouse
+                            )
+                        }
+                    }
+                }
+                .padding(.top, AppSpacing.tight)
+                .padding(.bottom, AppSpacing.loose + AppChrome.tabBarClearance)
+                .padding(.horizontal, AppSpacing.regular)
+                .animation(
+                    .smooth(duration: 0.36, extraBounce: 0)
+                        .speed(reduceMotion ? 1.8 : 1),
+                    value: collapsedSections
+                )
+            }
+        }
+    }
+
     // MARK: Corpus
 
     private func rebuildCorpus() async {
-        let seeds = houses.map {
-            HouseListBuilder.Seed(
-                id: $0.id,
-                address: $0.address,
-                note: $0.note,
-                createdAt: $0.createdAt,
-                unitsData: $0.unitsData,
-                latitude: $0.latitude,
-                longitude: $0.longitude
-            )
+        let key = corpusKey
+        guard let territoryID = gebiet?.id else {
+            rows = []
+            sections = []
+            counts = [:]
+            builtCorpusKey = key
+            return
         }
+        let reader = HouseReadService(modelContainer: modelContext.container)
+        let seeds: [HouseListBuilder.Seed]
+        do {
+            seeds = try await reader.listSeeds(territoryID: territoryID)
+        } catch {
+            notices.report(error, context: "Liste konnte nicht gelesen werden")
+            return
+        }
+        guard !Task.isCancelled else { return }
         let currentScope = scope
-        let built = await Task.detached(priority: .userInitiated) {
+        let buildTask = Task.detached(priority: .userInitiated) {
             HouseListBuilder.rows(from: seeds, scope: currentScope)
-        }.value
+        }
+        let built = await withTaskCancellationHandler {
+            await buildTask.value
+        } onCancel: {
+            buildTask.cancel()
+        }
         guard !Task.isCancelled else { return }
         rows = built
         counts = HouseListBuilder.counts(for: built)
         recomputeSections()
+        builtCorpusKey = key
+    }
+
+    private func fetchHouse(_ id: UUID) -> House? {
+        var descriptor = FetchDescriptor<House>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        do {
+            return try modelContext.fetch(descriptor).first
+        } catch {
+            notices.report(error, context: "Haus konnte nicht geöffnet werden")
+            return nil
+        }
+    }
+
+    private func openHouse(_ id: UUID) {
+        selectedHouse = HouseSelection(id: id)
+    }
+
+    private func prepareExport() {
+        guard let territoryID = gebiet?.id else { return }
+        let descriptor = FetchDescriptor<House>(predicate: #Predicate {
+            $0.gebietID == territoryID || $0.dayID == territoryID
+        })
+        do {
+            exportHouses = try modelContext.fetch(descriptor)
+            showsExport = true
+        } catch {
+            notices.report(error, context: "Export konnte nicht vorbereitet werden")
+        }
     }
 
     private func recomputeSections() {
@@ -488,7 +548,7 @@ struct ListScreen: View {
     // MARK: Status changes
 
     private func applyQuickStatus(_ outcome: VisitOutcome, to row: HouseRowModel, revisitAt: Date? = nil) {
-        guard let house = houses.first(where: { $0.id == row.id }),
+        guard let house = fetchHouse(row.id),
               let previous = house.decodedUnits() else { return }
 
         // The doors the write is about to touch, captured before it happens: after
@@ -557,7 +617,7 @@ struct ListScreen: View {
     private func performUndo(_ entry: UndoEntry) {
         undoTask?.cancel()
         undo = nil
-        guard let house = houses.first(where: { $0.id == entry.houseID }) else { return }
+        guard let house = fetchHouse(entry.houseID) else { return }
         house.restore(units: entry.previousUnits)
         // Undoing a "Später" must take the reminder with it, and re-book any time
         // the undone write had overwritten. Rebuilding the house's whole set is
