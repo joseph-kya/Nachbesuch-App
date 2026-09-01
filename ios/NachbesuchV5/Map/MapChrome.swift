@@ -445,9 +445,7 @@ struct PlacementReticle: View {
                         Rectangle().fill(accent).frame(width: 36, height: 2)
                     }
                     .shadow(color: .black.opacity(0.3), radius: 2)
-                    // Cross centre must match camera.region.center — 0 was still
-                    // ~4pt low. +4 puts the tapped point visibly in the middle.
-                    .offset(y: 4)
+                    .offset(y: 18)
                 }
         }
     }
