@@ -254,7 +254,7 @@ struct MapScreen: View {
         UIEdgeInsets(
             top: max(topChromeHeight + 6, 24),
             left: 7,
-            bottom: 64,
+            bottom: 70,
             right: 7
         )
     }
