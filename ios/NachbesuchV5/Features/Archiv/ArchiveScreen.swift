@@ -27,6 +27,10 @@ struct ArchiveScreen: View {
     @State private var backupURL: URL?
     @State private var showsImporter = false
     @State private var isWorking = false
+    /// The newest automatic safety backup, if one exists yet. Read on appear
+    /// and after every save — the launch backup may finish while this screen
+    /// is already open.
+    @State private var autoBackup: (date: Date, url: URL)?
     /// Bumped whenever SwiftData commits, so the index can be rebuilt on a real
     /// change without `body` paying to look for one.
     ///
@@ -147,6 +151,7 @@ struct ArchiveScreen: View {
         }
         .task {
             refreshHouseCount()
+            refreshAutoBackup()
         }
         .task(id: IndexTaskKey(index: indexKey, isActive: isActive)) {
             guard isActive, builtIndexKey != indexKey else { return }
@@ -163,6 +168,7 @@ struct ArchiveScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
             dataVersion &+= 1
             refreshHouseCount()
+            refreshAutoBackup()
         }
     }
 
@@ -279,6 +285,14 @@ struct ArchiveScreen: View {
                     }
                     Button { showsImporter = true } label: {
                         Label("Backup importieren", systemImage: "arrow.up.doc")
+                    }
+                    if let autoBackup {
+                        ShareLink(item: autoBackup.url) {
+                            Label(
+                                "Letzte automatische Sicherung: \(AutoBackupService.describe(date: autoBackup.date))",
+                                systemImage: "clock.arrow.circlepath"
+                            )
+                        }
                     }
                 }
             } label: {
@@ -502,6 +516,11 @@ struct ArchiveScreen: View {
     /// Keeps `indexKey` honest without keeping the rows.
     private func refreshHouseCount() {
         houseCount = (try? modelContext.fetchCount(FetchDescriptor<House>())) ?? houseCount
+    }
+
+    /// Picks up a launch backup that finished after this screen appeared.
+    private func refreshAutoBackup() {
+        autoBackup = AutoBackupService.latest()
     }
 
     /// The houses of one territory, fetched for the moment they are needed.

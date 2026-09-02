@@ -41,22 +41,24 @@ nonisolated struct BackupImportResult: Sendable {
     let skippedHouses: Int
 }
 
-// Legacy v1 format structures for backward compatibility
-private nonisolated struct LegacyAppBackup: Codable {
+// Legacy v1 format structures for backward compatibility.
+// Internal (not private) so the importer test can build a v1 fixture from
+// the exact structs the reader decodes — never a second description of them.
+nonisolated struct LegacyAppBackup: Codable {
     let formatVersion: Int
     let exportedAt: Date
     let days: [LegacyBackupDay]
     let houses: [LegacyBackupHouse]
 }
 
-private nonisolated struct LegacyBackupDay: Codable {
+nonisolated struct LegacyBackupDay: Codable {
     let id: UUID
     let date: Date
     let createdAt: Date
     let boundaryData: Data
 }
 
-private nonisolated struct LegacyBackupHouse: Codable {
+nonisolated struct LegacyBackupHouse: Codable {
     let id: UUID
     let address: String
     let note: String
@@ -73,7 +75,7 @@ private nonisolated struct LegacyBackupHouse: Codable {
 enum BackupService {
     /// Sendable raw copies: the JSON work (units decode/encode, container encoding,
     /// file writes) runs off the main thread so the UI never blocks on a backup.
-    private struct GebietSnapshot: Sendable {
+    nonisolated struct GebietSnapshot: Sendable {
         let id: UUID
         let name: String
         let districtOrCity: String
@@ -99,7 +101,7 @@ enum BackupService {
         }
     }
 
-    private struct HouseSnapshot: Sendable {
+    nonisolated struct HouseSnapshot: Sendable {
         let id: UUID
         let address: String
         let note: String
@@ -128,13 +130,37 @@ enum BackupService {
     }
 
     static func makeBackup(gebiete: [Gebiet], houses: [House]) async throws -> URL {
+        let data = try await makeBackupData(gebiete: gebiete, houses: houses)
+        return try await Task.detached(priority: .userInitiated) { () -> URL in
+            let date = Date.now.formatted(.iso8601.year().month().day())
+            // Own directory per backup: files used to collide at day granularity, so
+            // a second backup overwrote one the share sheet might still be reading.
+            let url = try ExportScratch.makeURL(fileName: "Nachbesuch-Backup-\(date).json")
+            try data.write(to: url, options: .atomic)
+            return url
+        }.value
+    }
+
+    /// The backup as bytes, without choosing where they land. The manual export
+    /// writes them to the share scratch directory; the automatic safety backup
+    /// writes them into the Files-visible documents directory.
+    static func makeBackupData(gebiete: [Gebiet], houses: [House]) async throws -> Data {
         let trace = PerformanceTrace.begin("Create backup")
         defer { PerformanceTrace.end("Create backup", id: trace) }
 
         let gebietSnapshots = gebiete.map(GebietSnapshot.init)
         let houseSnapshots = houses.map(HouseSnapshot.init)
+        return try await encodeBackup(gebietSnapshots: gebietSnapshots, houseSnapshots: houseSnapshots)
+    }
 
-        return try await Task.detached(priority: .userInitiated) { () -> URL in
+    /// Encode already-detached snapshots. Internal so the automatic backup can
+    /// snapshot on its own background context and share this exact encoder —
+    /// never a second serialiser.
+    static func encodeBackup(
+        gebietSnapshots: [GebietSnapshot],
+        houseSnapshots: [HouseSnapshot]
+    ) async throws -> Data {
+        try await Task.detached(priority: .userInitiated) { () -> Data in
             let decoder = AppCoders.unitsDecoder()
             let backup = AppBackup(
                 formatVersion: 2,
@@ -184,13 +210,7 @@ enum BackupService {
                 }
             )
 
-            let data = try AppCoders.backupEncoder().encode(backup)
-            let date = Date.now.formatted(.iso8601.year().month().day())
-            // Own directory per backup: files used to collide at day granularity, so
-            // a second backup overwrote one the share sheet might still be reading.
-            let url = try ExportScratch.makeURL(fileName: "Nachbesuch-Backup-\(date).json")
-            try data.write(to: url, options: .atomic)
-            return url
+            return try AppCoders.backupEncoder().encode(backup)
         }.value
     }
 
