@@ -477,14 +477,30 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     /// path) and `didSelect` (fallback). Debounced **per house**: a global debounce
     /// silently swallows the second tap when the user works quickly down a street.
     private var lastTapByHouse: [UUID: Date] = [:]
+    private var lastDirectTapByHouse: [UUID: Date] = [:]
+
+    func houseTappedFromGesture(_ houseID: UUID) {
+        let now = Date()
+        if let last = lastTapByHouse[houseID], now.timeIntervalSince(last) < 0.35 { return }
+        lastDirectTapByHouse[houseID] = now
+        executeHouseTap(houseID, at: now)
+    }
 
     func houseTapped(_ houseID: UUID) {
         let now = Date()
-        if let last = lastTapByHouse[houseID], now.timeIntervalSince(last) < 0.3 { return }
+        if let last = lastTapByHouse[houseID], now.timeIntervalSince(last) < 0.35 { return }
+        executeHouseTap(houseID, at: now)
+    }
+
+    private func executeHouseTap(_ houseID: UUID, at now: Date) {
         lastTapByHouse[houseID] = now
         if lastTapByHouse.count > 64 {
             let cutoff = now.addingTimeInterval(-2)
             lastTapByHouse = lastTapByHouse.filter { $0.value > cutoff }
+        }
+        if lastDirectTapByHouse.count > 64 {
+            let cutoff = now.addingTimeInterval(-2)
+            lastDirectTapByHouse = lastDirectTapByHouse.filter { $0.value > cutoff }
         }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
 
@@ -499,8 +515,13 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
         switch view.annotation {
         case let house as HouseAnnotation:
-            houseTapped(house.houseID)
             deselect(mapView, view.annotation)
+            let now = Date()
+            if let lastDirect = lastDirectTapByHouse[house.houseID], now.timeIntervalSince(lastDirect) < 1.0 {
+                // Already processed by the direct pin gesture recognizer; ignore MapKit's delayed echo.
+                return
+            }
+            houseTapped(house.houseID)
         case is MKMapFeatureAnnotation:
             // A tapped POI: MapKit shows its own callout, nothing for us to do.
             break

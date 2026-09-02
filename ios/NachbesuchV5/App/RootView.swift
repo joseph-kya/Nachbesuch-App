@@ -3,6 +3,10 @@ import SwiftUI
 
 enum AppTab: Hashable {
     case map, list, archive
+
+    func isActive(selectedTab: AppTab, scenePhase: ScenePhase) -> Bool {
+        self == selectedTab && scenePhase == .active
+    }
 }
 
 struct RootView: View {
@@ -82,7 +86,7 @@ struct RootView: View {
                 MapScreen(
                     gebiet: selectedGebiet,
                     scope: $scope,
-                    isActive: tab == .map && scenePhase == .active
+                    isActive: AppTab.map.isActive(selectedTab: tab, scenePhase: scenePhase)
                 )
             }
 
@@ -94,7 +98,7 @@ struct RootView: View {
                 ListScreen(
                     gebiet: selectedGebiet,
                     scope: $scope,
-                    isActive: tab == .list
+                    isActive: AppTab.list.isActive(selectedTab: tab, scenePhase: scenePhase)
                 )
             }
 
@@ -102,7 +106,7 @@ struct RootView: View {
                 ArchiveScreen(
                     selectedGebietID: selectedGebietBinding,
                     scope: $scope,
-                    isActive: tab == .archive
+                    isActive: AppTab.archive.isActive(selectedTab: tab, scenePhase: scenePhase)
                 )
             }
         }

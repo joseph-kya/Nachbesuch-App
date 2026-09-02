@@ -156,7 +156,7 @@ final class HousePinView: MKAnnotationView {
 
     @objc private func handleTap() {
         guard let annotation = annotation as? HouseAnnotation else { return }
-        coordinator?.houseTapped(annotation.houseID)
+        coordinator?.houseTappedFromGesture(annotation.houseID)
     }
 
     /// A freshly placed house drops onto the map.

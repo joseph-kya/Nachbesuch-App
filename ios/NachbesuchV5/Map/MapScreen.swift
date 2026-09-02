@@ -849,7 +849,6 @@ struct MapScreen: View {
 
     private func scheduleSave() {
         pendingSave.schedule(in: modelContext, reporting: notices) {
-            notices.show("Gespeichert")
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         }
     }
@@ -955,7 +954,7 @@ struct MapScreen: View {
                 gebietID: gebietID,
                 writeDay: gebiet.map { $0.writeScope().writeTargetDay } ?? 1
             ) { house in
-                dropHouseID = house.id
+                insertCreatedHouse(house)
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -1002,6 +1001,25 @@ struct MapScreen: View {
             .presentationDetents([.medium])
             .presentationDragIndicator(.visible)
         }
+    }
+
+    /// Makes a committed house visible in the same presentation turn that closes
+    /// the add sheet. Waiting for the save notification plus the refresh dwell made
+    /// freshly placed houses appear missing, and the drop animation was consumed
+    /// before an annotation existed to animate.
+    private func insertCreatedHouse(_ house: House) {
+        let raw = RawMapHouse(house)
+        prepared = MapPinSnapshotBuilder.patch(prepared, with: [raw], scope: scope)
+        changedHouseIDs = [house.id]
+        structuralVersion &+= 1
+        contentVersion &+= 1
+        hasLoadedPins = true
+        if let updatedAt = raw.updatedAt {
+            pinsWatermark = max(pinsWatermark ?? .distantPast, updatedAt)
+        }
+        dropHouseID = house.id
+        updateTerritoryProximity(camera.region)
+        scheduleAutoNaming()
     }
 
     private func alert(for confirmation: MapConfirmation) -> Alert {

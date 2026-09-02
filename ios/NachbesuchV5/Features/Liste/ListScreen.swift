@@ -649,7 +649,6 @@ struct ListScreen: View {
 
     private func scheduleSave() {
         pendingSave.schedule(in: modelContext, reporting: notices) {
-            notices.show("Gespeichert")
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         }
     }

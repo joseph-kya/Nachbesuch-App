@@ -405,7 +405,6 @@ struct HouseDetailSheet: View {
 
     private func save() {
         if modelContext.save(reporting: notices, context: "Änderung konnte nicht gespeichert werden") {
-            notices.show("Gespeichert")
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         }
     }

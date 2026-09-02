@@ -18,6 +18,12 @@ enum DebugSeed {
         return count
     }
 
+    static func gridDimensions(for count: Int) -> (streets: Int, perStreet: Int) {
+        let streets = max(1, Int(Double(count).squareRoot() / 1.6))
+        let perStreet = max(1, (count + streets - 1) / streets)
+        return (streets, perStreet)
+    }
+
     /// A distinct, digit-free name per street.
     ///
     /// The seed used to emit "Teststraße \(street + 1) \(index + 1)". Geographically
@@ -43,8 +49,9 @@ enum DebugSeed {
     private static func parkCamera(streets: Int, perStreet: Int, count: Int) {
         // Derived from the requested count so the camera lands on the block that
         // was actually generated, whatever its size.
-        let effectiveStreets = streets > 0 ? streets : max(1, Int(Double(count).squareRoot() / 1.6))
-        let effectivePerStreet = perStreet > 0 ? perStreet : max(1, count / effectiveStreets)
+        let dimensions = gridDimensions(for: count)
+        let effectiveStreets = streets > 0 ? streets : dimensions.streets
+        let effectivePerStreet = perStreet > 0 ? perStreet : dimensions.perStreet
         let centreLatitude = 48.2115 + Double(effectiveStreets) * 0.00085 / 2
         let centreLongitude = 16.3105 + Double(effectivePerStreet) * 0.00035 / 2
         let span = ProcessInfo.processInfo.environment["NACHBESUCH_SPAN"].flatMap(Double.init) ?? 0.004
@@ -75,8 +82,9 @@ enum DebugSeed {
         // dense streets and stacked pins behave like they do in the field.
         let originLatitude = 48.2115
         let originLongitude = 16.3105
-        let streets = max(1, Int(Double(count).squareRoot() / 1.6))
-        let perStreet = max(1, count / streets)
+        let dimensions = gridDimensions(for: count)
+        let streets = dimensions.streets
+        let perStreet = dimensions.perStreet
         let outcomes: [VisitOutcome?] = [nil, .notHome, .notHome, .joined, .earlyNo, .lateNo]
 
         var made = 0

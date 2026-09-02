@@ -225,7 +225,9 @@ nonisolated enum MapPinSnapshotBuilder {
         )
     }
 
-    /// Replaces the pins of houses that changed, leaving the rest untouched.
+    /// Inserts new pins and replaces pins of houses that changed, leaving the rest
+    /// untouched. New houses use this path immediately after a successful save, so
+    /// their annotation does not have to wait for the asynchronous store refresh.
     static func patch(
         _ snapshot: PreparedMapSnapshot,
         with changed: [RawMapHouse],
@@ -255,6 +257,7 @@ nonisolated enum MapPinSnapshotBuilder {
             damaged += (updated.isDamaged ? 1 : 0) - (previous?.isDamaged == true ? 1 : 0)
         }
 
+        let insertedPin = changed.contains { snapshot.pinsByID[$0.id] == nil }
         return PreparedMapSnapshot(
             pinsByID: pins,
             stats: MapDayStats(
@@ -266,8 +269,11 @@ nonisolated enum MapPinSnapshotBuilder {
                 lateNoCount: max(lateNo, 0),
                 damagedHouseCount: max(damaged, 0)
             ),
-            // A content patch never moves a pin, so the extent is unchanged.
-            bounds: snapshot.bounds
+            // Existing pins do not move through this path. An insertion can extend
+            // the territory, so only that less-common case recomputes the extent.
+            bounds: insertedPin
+                ? MapBounds.around(pins.values.map(\.coordinate))
+                : snapshot.bounds
         )
     }
 
