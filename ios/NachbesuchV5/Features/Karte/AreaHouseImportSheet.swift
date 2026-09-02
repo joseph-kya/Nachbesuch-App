@@ -11,10 +11,6 @@ struct AreaHouseImportSheet: View {
 
     let boundary: [CLLocationCoordinate2D]
     let gebietID: UUID
-    /// A closure for the same reason as in `AddHouseSheet`: the presenting screen's
-    /// body can re-run while this sheet is open, and an array parameter re-read the
-    /// territory every time it did.
-    let existingHouses: () -> [House]
     let onFinished: () -> Void
 
     @State private var addresses: [ImportedAreaAddress] = []
@@ -110,12 +106,28 @@ struct AreaHouseImportSheet: View {
         // and race on the results.
         loadTask?.cancel()
         phase = .loading
-        let fingerprints = existingHouses().map {
-            ExistingHouseFingerprint(address: $0.address, latitude: $0.latitude, longitude: $0.longitude)
-        }
+        // The fingerprints come from the background reader inside the task, not
+        // from a main-thread fetch up front: materialising the whole territory
+        // before the network request even started is what stalled this sheet on
+        // open. On a fetch failure the import proceeds without dedup — the same
+        // fallback the old path had, which reported and read an empty territory.
+        let target = gebietID
+        let container = modelContext.container
+        let region = boundary
         loadTask = Task {
+            let reader = HouseReadService(modelContainer: container)
+            let fingerprints: [ExistingHouseFingerprint]
             do {
-                let found = try await AreaHouseImportService.fetchAddresses(inside: boundary)
+                fingerprints = try await reader.addressFingerprints(territoryID: target)
+            } catch is CancellationError {
+                return
+            } catch {
+                notices.report(error, context: "Häuser konnten nicht gelesen werden")
+                fingerprints = []
+            }
+            guard !Task.isCancelled else { return }
+            do {
+                let found = try await AreaHouseImportService.fetchAddresses(inside: region)
                 guard !Task.isCancelled else { return }
                 let selection = AreaHouseImportService.excludingExistingHouses(from: found, existing: fingerprints)
                 addresses = selection.addresses

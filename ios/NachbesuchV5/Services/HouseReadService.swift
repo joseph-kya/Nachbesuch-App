@@ -51,6 +51,31 @@ actor HouseReadService {
         return result
     }
 
+    /// Address + coordinate fingerprints for one territory's duplicate checks —
+    /// the manual add sheet and the bulk importer. Both open from menus, so this
+    /// read must not sit in the presentation transaction on the main actor: a
+    /// full fetch of live models plus per-address normalisation is what made
+    /// those sheets stutter open on large territories.
+    func addressFingerprints(territoryID: UUID) throws -> [ExistingHouseFingerprint] {
+        let descriptor = FetchDescriptor<House>(predicate: #Predicate {
+            $0.gebietID == territoryID || $0.dayID == territoryID
+        })
+        var result: [ExistingHouseFingerprint] = []
+        var visited = 0
+        try modelContext.enumerate(descriptor, batchSize: 200) { house in
+            if visited.isMultiple(of: 64) { try Task.checkCancellation() }
+            visited += 1
+            result.append(
+                ExistingHouseFingerprint(
+                    address: house.address,
+                    latitude: house.latitude,
+                    longitude: house.longitude
+                )
+            )
+        }
+        return result
+    }
+
     /// Pin inputs for one territory.
     ///
     /// `updatedAfter` is what makes a door tap cheap: the map keeps a watermark of

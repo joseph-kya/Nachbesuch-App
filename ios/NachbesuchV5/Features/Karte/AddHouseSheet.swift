@@ -12,12 +12,6 @@ struct AddHouseSheet: View {
 
     let coordinate: CLLocationCoordinate2D
     let gebietID: UUID
-    /// Fetched, not held. `.sheet(item:)` re-runs its content builder on every
-    /// evaluation of the presenting screen's body, so an array parameter meant the
-    /// caller re-read the whole territory each time anything on the map changed
-    /// while this sheet was open. A closure moves that read to the one `.task` below
-    /// that actually needs it, where it happens once.
-    let existingHouses: () -> [House]
     /// The campaign day an immediately-set status belongs to. Previously absent, so
     /// a house created on day 2 recorded its first result against day 1.
     let writeDay: Int
@@ -29,7 +23,7 @@ struct AddHouseSheet: View {
     @State private var initialOutcome: VisitOutcome?
     @State private var isLoadingAddress = true
     @State private var duplicateIndex: HouseDuplicateIndex?
-    @State private var duplicateWarning: House?
+    @State private var duplicateWarning: String?
     @State private var didOverrideDuplicate = false
     @FocusState private var addressIsFocused: Bool
 
@@ -122,16 +116,41 @@ struct AddHouseSheet: View {
                     attemptSave()
                 }
                 Button("Abbrechen", role: .cancel) { duplicateWarning = nil }
-            } message: { house in
-                Text("„\(house.address)“ ist bereits erfasst.")
+            } message: { address in
+                Text("„\(address)“ ist bereits erfasst.")
             }
             .task {
-                // Built BEFORE the geocode: the old order left the index nil for the
-                // whole network round trip, so a fast user could save a duplicate
-                // before duplicate detection had loaded.
-                duplicateIndex = HouseDuplicateIndex(houses: existingHouses(), coordinate: coordinate)
+                // The fingerprints come from the background reader, and the index
+                // itself builds off the main thread: the old order fetched every
+                // live model and normalised every address on the main actor while
+                // the sheet animated in. Built BEFORE the geocode — the old order
+                // left the index nil for the whole network round trip, so a fast
+                // user could save a duplicate before duplicate detection had loaded.
+                duplicateIndex = await buildDuplicateIndex()
                 await loadSuggestedAddress()
             }
+        }
+    }
+
+    /// Reads the territory's fingerprints on the background actor and builds the
+    /// index off the main thread. On a fetch failure the index covers nothing —
+    /// the same silent fallback the old main-thread fetch had, which reported
+    /// and returned an empty territory.
+    private func buildDuplicateIndex() async -> HouseDuplicateIndex {
+        let empty = HouseDuplicateIndex(fingerprints: [], coordinate: coordinate)
+        let reader = HouseReadService(modelContainer: modelContext.container)
+        let fingerprints: [ExistingHouseFingerprint]
+        do {
+            fingerprints = try await reader.addressFingerprints(territoryID: gebietID)
+        } catch is CancellationError {
+            return empty
+        } catch {
+            notices.report(error, context: "Häuser konnten nicht gelesen werden")
+            return empty
+        }
+        guard !Task.isCancelled else { return empty }
+        return await offMainActor {
+            HouseDuplicateIndex(fingerprints: fingerprints, coordinate: coordinate)
         }
     }
 
@@ -209,25 +228,31 @@ struct AddHouseSheet: View {
 }
 
 /// Duplicate detection for a new house.
-struct HouseDuplicateIndex {
-    private let byNormalizedAddress: [String: House]
-    private let nearby: [House]
+///
+/// Works from lightweight fingerprints, never live models: the whole territory
+/// is indexed while the sheet animates in, and materialising thousands of
+/// models with their door blobs on the main thread is what made that stall.
+/// Only the matched address comes back out — the warning shows the address,
+/// nothing else from the existing house is ever read.
+struct HouseDuplicateIndex: Sendable {
+    private let byNormalizedAddress: [String: String]
+    private let nearby: [String]
 
-    init(houses: [House], coordinate: CLLocationCoordinate2D) {
-        var index: [String: House] = [:]
-        var near: [House] = []
+    nonisolated init(fingerprints: [ExistingHouseFingerprint], coordinate: CLLocationCoordinate2D) {
+        var index: [String: String] = [:]
+        var near: [String] = []
         // Flat equirectangular metres — no `CLLocation` object per house, which at a
         // few thousand houses was thousands of ObjC allocations while the sheet
         // animated in.
         let latitudeScale = 110_540.0
         let longitudeScale = 111_320.0 * cos(coordinate.latitude * .pi / 180)
 
-        for house in houses {
-            let key = AddressNormalizer.normalize(house.address)
-            if !key.isEmpty, index[key] == nil { index[key] = house }
-            let dLat = (house.latitude - coordinate.latitude) * latitudeScale
-            let dLon = (house.longitude - coordinate.longitude) * longitudeScale
-            if dLat * dLat + dLon * dLon <= 12 * 12 { near.append(house) }
+        for fingerprint in fingerprints {
+            let key = AddressNormalizer.normalize(fingerprint.address)
+            if !key.isEmpty, index[key] == nil { index[key] = fingerprint.address }
+            let dLat = (fingerprint.latitude - coordinate.latitude) * latitudeScale
+            let dLon = (fingerprint.longitude - coordinate.longitude) * longitudeScale
+            if dLat * dLat + dLon * dLon <= 12 * 12 { near.append(fingerprint.address) }
         }
         byNormalizedAddress = index
         nearby = near
@@ -236,11 +261,11 @@ struct HouseDuplicateIndex {
     /// A different address at the same spot is a legitimate second entrance, a corner
     /// building or a neighbouring row house — the old code warned about all of them
     /// because it returned any nearby house regardless of what was typed.
-    func duplicate(for address: String) -> House? {
+    func duplicate(for address: String) -> String? {
         let key = AddressNormalizer.normalize(address)
         guard !key.isEmpty else { return nil }
         if let exact = byNormalizedAddress[key] { return exact }
-        return nearby.first { AddressNormalizer.normalize($0.address) == key }
+        return nearby.first { AddressNormalizer.normalize($0) == key }
     }
 }
 

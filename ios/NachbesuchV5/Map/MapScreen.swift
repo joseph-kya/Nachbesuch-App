@@ -747,8 +747,18 @@ struct MapScreen: View {
     }
 
     private var selectedHouses: [House] {
-        guard let selectedHouseIDs else { return [] }
-        return territoryHouses().filter { selectedHouseIDs.contains($0.id) }
+        guard let selectedHouseIDs, !selectedHouseIDs.isEmpty else { return [] }
+        // Only the selection, by id. The old shape fetched the whole territory
+        // and filtered in memory — inside the sheet builder, so opening
+        // "Auswahl exportieren" decoded every door blob before the first frame.
+        let ids = Array(selectedHouseIDs)
+        let descriptor = FetchDescriptor<House>(predicate: #Predicate { ids.contains($0.id) })
+        do {
+            return try modelContext.fetch(descriptor)
+        } catch {
+            notices.report(error, context: "Häuser konnten nicht gelesen werden")
+            return []
+        }
     }
 
     /// One row, by id. Interaction paths need a real model to write through; they do
@@ -761,22 +771,6 @@ struct MapScreen: View {
         } catch {
             notices.report(error, context: "Haus konnte nicht gelesen werden")
             return nil
-        }
-    }
-
-    /// The territory's real models, fetched for one operation that genuinely needs
-    /// them — bulk selection, the add sheet's duplicate check, the area importer.
-    /// The map itself holds immutable pin values, never live models.
-    private func territoryHouses() -> [House] {
-        guard let territoryID = gebiet?.id else { return [] }
-        let descriptor = FetchDescriptor<House>(predicate: #Predicate {
-            $0.gebietID == territoryID || $0.dayID == territoryID
-        })
-        do {
-            return try modelContext.fetch(descriptor)
-        } catch {
-            notices.report(error, context: "Häuser konnten nicht gelesen werden")
-            return []
         }
     }
 
@@ -959,7 +953,6 @@ struct MapScreen: View {
             AddHouseSheet(
                 coordinate: coordinate,
                 gebietID: gebietID,
-                existingHouses: territoryHouses,
                 writeDay: gebiet.map { $0.writeScope().writeTargetDay } ?? 1
             ) { house in
                 dropHouseID = house.id
@@ -982,8 +975,7 @@ struct MapScreen: View {
             if let gebiet {
                 AreaHouseImportSheet(
                     boundary: gebiet.boundaryCoordinates,
-                    gebietID: gebiet.id,
-                    existingHouses: territoryHouses
+                    gebietID: gebiet.id
                 ) {
                     scheduleAutoNaming(force: true)
                 }

@@ -162,22 +162,28 @@ struct FilterBar: View {
 ///
 /// iOS 26 gets this from the scroll edge effect. iOS 18 has none, so a chip was
 /// simply chopped off at the boundary with no way to tell a clipped label from the
-/// end of the row; below iOS 26 the trailing edge fades instead of cutting. Applied
-/// only where it is missing — a mask is an offscreen pass, and there is no reason to
-/// pay for one twice.
+/// end of the row; below iOS 26 the trailing edge fades instead of cutting.
+/// Applied only where it is missing.
+///
+/// This used to be a gradient **mask** over the whole scroller. A mask is an
+/// offscreen pass over the scrolling content, recomposited on every scroll frame
+/// and every selection change — on an iPhone 11, for a static cue. A fixed fade
+/// strip pinned to the trailing edge says the same thing for one small static
+/// composite that never moves with the content.
 private struct ChipScrollEdge: ViewModifier {
     func body(content: Content) -> some View {
         if LegacyChrome.isActive {
-            content.mask {
+            content.overlay(alignment: .trailing) {
                 LinearGradient(
                     stops: [
-                        .init(color: .black, location: 0),
-                        .init(color: .black, location: 0.93),
-                        .init(color: .clear, location: 1)
+                        .init(color: .clear, location: 0),
+                        .init(color: Color(uiColor: .systemGroupedBackground), location: 1)
                     ],
                     startPoint: .leading,
                     endPoint: .trailing
                 )
+                .frame(width: 28)
+                .allowsHitTesting(false)
             }
         } else {
             content
