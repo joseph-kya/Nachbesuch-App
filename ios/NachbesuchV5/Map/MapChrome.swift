@@ -333,15 +333,19 @@ struct BoundaryDrawingBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAccent) private var accent
     let pointCount: Int
+    /// 1-based number of the vertex being re-aimed, if any. While one is
+    /// selected the primary button moves it instead of appending.
+    let selectedPointNumber: Int?
     let namespace: Namespace.ID
     let onCancel: () -> Void
     let onUndo: () -> Void
     let onAddPoint: () -> Void
+    let onMoveSelected: () -> Void
     let onSave: () -> Void
 
     var body: some View {
         VStack(spacing: AppSpacing.snug) {
-            Text("Karte bewegen und an jeder Ecke einen Punkt setzen")
+            Text(hintText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -370,16 +374,29 @@ struct BoundaryDrawingBar: View {
                 .compatGlassID("map.drawUndo", in: namespace)
                 .accessibilityLabel("Letzten Punkt entfernen")
 
-                Button(action: onAddPoint) {
-                    Label("Punkt \(pointCount + 1)", systemImage: "plus")
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity, minHeight: 26)
-                        .contentTransition(.numericText(value: Double(pointCount + 1)))
+                if let selected = selectedPointNumber {
+                    Button(action: onMoveSelected) {
+                        Label("Punkt \(selected) versetzen", systemImage: "arrow.up.and.down.and.arrow.left.and.right")
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity, minHeight: 26)
+                    }
+                    .compatGlassButton(prominent: true)
+                    .controlSize(.large)
+                    .tint(accent)
+                    .compatGlassID("map.drawAdd", in: namespace)
+                    .accessibilityLabel("Punkt \(selected) an die Fadenkreuzposition versetzen")
+                } else {
+                    Button(action: onAddPoint) {
+                        Label("Punkt \(pointCount + 1)", systemImage: "plus")
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity, minHeight: 26)
+                            .contentTransition(.numericText(value: Double(pointCount + 1)))
+                    }
+                    .compatGlassButton(prominent: true)
+                    .controlSize(.large)
+                    .tint(accent)
+                    .compatGlassID("map.drawAdd", in: namespace)
                 }
-                .compatGlassButton(prominent: true)
-                .controlSize(.large)
-                .tint(accent)
-                .compatGlassID("map.drawAdd", in: namespace)
 
                 Button(action: onSave) {
                     Image(systemName: "checkmark").frame(width: 24, height: 24)
@@ -393,6 +410,14 @@ struct BoundaryDrawingBar: View {
                 .accessibilityLabel("Gebiet speichern")
             }
             .animation(.appFeedback(reduceMotion: reduceMotion), value: pointCount)
+        }
+    }
+
+    private var hintText: String {
+        if let selected = selectedPointNumber {
+            "Punkt \(selected) ist ausgewählt. Karte bewegen und Punkt versetzen — nochmals auf den Punkt tippen bricht ab."
+        } else {
+            "Karte bewegen und an jeder Ecke einen Punkt setzen. Zum Korrigieren einen Punkt antippen."
         }
     }
 }

@@ -210,6 +210,8 @@ extension HousePinView: UIContextMenuInteractionDelegate {
 final class DraftPointView: MKAnnotationView {
     static let reuseIdentifier = "DraftPoint"
 
+    weak var coordinator: MapCoordinator?
+
     private static let side: CGFloat = 26
     private static let artwork: UIImage = {
         let side = DraftPointView.side
@@ -236,7 +238,47 @@ final class DraftPointView: MKAnnotationView {
         }
     }()
 
+    /// The edit-selected vertex: the same disc inverted — white fill, red ring,
+    /// red number. Inverted rather than recoloured so the selection introduces
+    /// no new hue on a map where colours already carry status meaning.
+    private static let selectedArtwork: UIImage = {
+        let side = DraftPointView.side
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(
+            size: CGSize(width: side + 6, height: side + 6),
+            format: format
+        )
+        return renderer.image { context in
+            let rect = CGRect(x: 3, y: 3, width: side, height: side)
+            context.cgContext.setShadow(
+                offset: CGSize(width: 0, height: 1),
+                blur: 3,
+                color: UIColor.black.withAlphaComponent(0.3).cgColor
+            )
+            UIColor.white.setFill()
+            UIBezierPath(ovalIn: rect).fill()
+            context.cgContext.setShadow(offset: .zero, blur: 0, color: nil)
+            let ring = UIBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1))
+            ring.lineWidth = 2.5
+            UIColor.systemRed.setStroke()
+            ring.stroke()
+        }
+    }()
+
     private let numberLabel = UILabel()
+
+    /// Edit selection while drawing: tap a vertex, move the map, versetzen.
+    /// Deliberately not MapKit `isSelected`, which only tracks callout
+    /// selection — this is the app's own drawing state.
+    var editSelected = false {
+        didSet {
+            guard editSelected != oldValue else { return }
+            image = editSelected ? Self.selectedArtwork : Self.artwork
+            numberLabel.textColor = editSelected ? .systemRed : .white
+            accessibilityValue = editSelected ? "ausgewählt" : nil
+        }
+    }
 
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -250,6 +292,11 @@ final class DraftPointView: MKAnnotationView {
         numberLabel.font = .systemFont(ofSize: 12, weight: .bold)
         numberLabel.textColor = .white
         addSubview(numberLabel)
+        // The fast path, like the house pins: open the selection the instant the
+        // finger lifts instead of waiting out MapKit's selection round trip.
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        tap.cancelsTouchesInView = false
+        addGestureRecognizer(tap)
     }
 
     @available(*, unavailable)
@@ -257,11 +304,19 @@ final class DraftPointView: MKAnnotationView {
         fatalError("init(coder:) is not supported")
     }
 
+    @objc private func handleTap() {
+        guard let draft = annotation as? DraftPointAnnotation else { return }
+        coordinator?.draftPointTapped(draft)
+    }
+
     override var annotation: MKAnnotation? {
         didSet {
             guard let draft = annotation as? DraftPointAnnotation else { return }
             numberLabel.text = "\(draft.number)"
             accessibilityLabel = "Gebietspunkt \(draft.number)"
+            // Recycled views keep whoever's highlight they last showed; the
+            // coordinator re-applies after dequeue, this covers any path it misses.
+            if editSelected { editSelected = false }
         }
     }
 }

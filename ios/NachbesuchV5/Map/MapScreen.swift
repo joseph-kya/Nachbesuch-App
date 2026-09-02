@@ -52,6 +52,10 @@ struct MapScreen: View {
     // Interaction
     @State private var mode: MapMode = .browsing
     @State private var draftBoundary: [CLLocationCoordinate2D] = []
+    /// Index of the draft vertex being re-aimed. Points used to be
+    /// append-only, so fixing point 2 of 10 meant undoing 8 points;
+    /// now any single vertex moves to the reticle on demand.
+    @State private var selectedDraftIndex: Int? = nil
     @State private var selectedHouseIDs: Set<UUID>?
     @State private var cameraCommand: MapCameraCommand?
     @State private var dropHouseID: UUID?
@@ -134,6 +138,7 @@ struct MapScreen: View {
                 changedHouseIDs: changedHouseIDs,
                 boundary: boundary,
                 draftPoints: mode == .drawingArea ? draftBoundary : [],
+                selectedDraftIndex: mode == .drawingArea ? selectedDraftIndex : nil,
                 selectedHouseIDs: selectedHouseIDs,
                 isActive: isActive,
                 isSatellite: isSatellite,
@@ -157,6 +162,7 @@ struct MapScreen: View {
                 onStackedPins: { ids in
                     sheetRoute = .stackedPins(ids)
                 },
+                onTapDraftPoint: toggleDraftPoint,
                 onDropConsumed: { id in
                     if dropHouseID == id { dropHouseID = nil }
                 },
@@ -364,10 +370,12 @@ struct MapScreen: View {
                 case .drawingArea:
                     BoundaryDrawingBar(
                         pointCount: draftBoundary.count,
+                        selectedPointNumber: selectedDraftIndex.map { $0 + 1 },
                         namespace: glass,
                         onCancel: cancelDrawing,
-                        onUndo: { if !draftBoundary.isEmpty { draftBoundary.removeLast() } },
+                        onUndo: undoBoundaryPoint,
                         onAddPoint: addBoundaryPoint,
+                        onMoveSelected: moveSelectedDraftPoint,
                         onSave: saveBoundary
                     )
                 case .placingHouse, .browsing:
@@ -592,6 +600,7 @@ struct MapScreen: View {
         isAwayFromTerritory = false
         mode = .browsing
         draftBoundary = []
+        selectedDraftIndex = nil
         selectedHouseIDs = nil
         sheetRoute = nil
         confirmation = nil
@@ -689,17 +698,46 @@ struct MapScreen: View {
 
     private func beginDrawingArea() {
         draftBoundary = gebiet?.boundaryCoordinates ?? []
+        selectedDraftIndex = nil
         setMode(.drawingArea)
     }
 
     private func cancelDrawing() {
         mode = .browsing
         draftBoundary = []
+        selectedDraftIndex = nil
     }
 
     private func addBoundaryPoint() {
         draftBoundary.append(camera.region.center)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    /// Tapping a draft vertex selects it for re-aiming; tapping it again
+    /// deselects. Numbers are 1-based on the map, indices 0-based here —
+    /// guarded because the tap races nothing, but stale numbers must not
+    /// index out of bounds.
+    private func toggleDraftPoint(number: Int) {
+        let index = number - 1
+        guard draftBoundary.indices.contains(index) else { return }
+        selectedDraftIndex = (selectedDraftIndex == index) ? nil : index
+    }
+
+    private func undoBoundaryPoint() {
+        guard !draftBoundary.isEmpty else { return }
+        let removed = draftBoundary.count - 1
+        draftBoundary.removeLast()
+        if selectedDraftIndex == removed { selectedDraftIndex = nil }
+    }
+
+    /// Moves the selected vertex to the reticle and releases the selection —
+    /// a correction is a one-shot, not a mode, so appending continues directly.
+    private func moveSelectedDraftPoint() {
+        guard let index = selectedDraftIndex,
+              draftBoundary.indices.contains(index) else { return }
+        draftBoundary[index] = camera.region.center
+        selectedDraftIndex = nil
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
     private func saveBoundary() {
@@ -708,6 +746,7 @@ struct MapScreen: View {
         guard modelContext.save(reporting: notices, context: "Gebiet konnte nicht gespeichert werden")
         else { return }
         setMode(.browsing)
+        selectedDraftIndex = nil
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         scheduleAutoNaming(force: true)
     }

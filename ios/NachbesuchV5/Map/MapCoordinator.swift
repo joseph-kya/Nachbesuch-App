@@ -25,6 +25,9 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     /// offer a list instead of opening whichever one happened to win the touch.
     var onStackedPins: (([UUID]) -> Void)?
     var onDropConsumed: ((UUID) -> Void)?
+    /// The 1-based number of the tapped draft vertex while drawing, so the UI can
+    /// offer moving that one point instead of undoing everything after it.
+    var onTapDraftPoint: ((Int) -> Void)?
     var menuProvider: ((MapPinSnapshot) -> UIMenu)?
     var previewProvider: ((MapPinSnapshot) -> UIViewController?)?
     var reduceMotionEnabled = false
@@ -265,7 +268,8 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         mapView.addOverlay(overlay, level: .aboveRoads)
     }
 
-    func syncDraftPoints(_ mapView: MKMapView, points: [CLLocationCoordinate2D]) {
+    func syncDraftPoints(_ mapView: MKMapView, points: [CLLocationCoordinate2D], selectedNumber: Int?) {
+        selectedDraftNumber = selectedNumber
         if draftAnnotations.count != points.count {
             UIView.performWithoutAnimation {
                 if !draftAnnotations.isEmpty { mapView.removeAnnotations(draftAnnotations) }
@@ -274,12 +278,35 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
                 }
                 if !draftAnnotations.isEmpty { mapView.addAnnotations(draftAnnotations) }
             }
+            applyDraftSelection(mapView)
             return
         }
         for (index, annotation) in draftAnnotations.enumerated() where
             annotation.coordinate.latitude != points[index].latitude
             || annotation.coordinate.longitude != points[index].longitude {
             annotation.coordinate = points[index]
+        }
+        applyDraftSelection(mapView)
+    }
+
+    /// A tap on a draft vertex while drawing. Deselects the annotation so MapKit
+    /// holds no callout selection, then hands the number to the UI.
+    func draftPointTapped(_ annotation: DraftPointAnnotation) {
+        mapView?.deselectAnnotation(annotation, animated: false)
+        UISelectionFeedbackGenerator().selectionChanged()
+        onTapDraftPoint?(annotation.number)
+    }
+
+    /// The edit selection is SwiftUI state, but the discs are UIKit views that
+    /// outlive any single body evaluation — including recycled ones dequeued for
+    /// a different vertex. So the flag is pushed here, on every sync, rather
+    /// than carried by the annotation.
+    private var selectedDraftNumber: Int?
+
+    private func applyDraftSelection(_ mapView: MKMapView) {
+        for annotation in draftAnnotations {
+            guard let view = mapView.view(for: annotation) as? DraftPointView else { continue }
+            view.editSelected = (annotation.number == selectedDraftNumber)
         }
     }
 
@@ -445,11 +472,14 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
             view.configure()
             return view
 
-        case is DraftPointAnnotation:
-            return mapView.dequeueReusableAnnotationView(
+        case let draft as DraftPointAnnotation:
+            guard let view = mapView.dequeueReusableAnnotationView(
                 withIdentifier: DraftPointView.reuseIdentifier,
-                for: annotation
-            )
+                for: draft
+            ) as? DraftPointView else { return nil }
+            view.coordinator = self
+            view.editSelected = (draft.number == selectedDraftNumber)
+            return view
 
         default:
             return nil

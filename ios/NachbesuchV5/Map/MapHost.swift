@@ -68,6 +68,9 @@ struct MapHost: UIViewRepresentable {
     let changedHouseIDs: Set<UUID>
     let boundary: [CLLocationCoordinate2D]
     let draftPoints: [CLLocationCoordinate2D]
+    /// Index of the draft vertex being re-aimed, if any. Passed through so the
+    /// disc highlight follows SwiftUI state instead of UIKit reuse.
+    let selectedDraftIndex: Int?
     let selectedHouseIDs: Set<UUID>?
     let isActive: Bool
     let isSatellite: Bool
@@ -86,6 +89,7 @@ struct MapHost: UIViewRepresentable {
     var onTrackingModeChanged: (Bool) -> Void = { _ in }
     var onTapHouse: (UUID) -> Void = { _ in }
     var onStackedPins: ([UUID]) -> Void = { _ in }
+    var onTapDraftPoint: (Int) -> Void = { _ in }
     var onDropConsumed: (UUID) -> Void = { _ in }
     var menuProvider: ((MapPinSnapshot) -> UIMenu)?
     var previewProvider: ((MapPinSnapshot) -> UIViewController?)?
@@ -130,6 +134,7 @@ struct MapHost: UIViewRepresentable {
         coordinator.onTrackingModeChanged = onTrackingModeChanged
         coordinator.onTapHouse = onTapHouse
         coordinator.onStackedPins = onStackedPins
+        coordinator.onTapDraftPoint = onTapDraftPoint
         coordinator.onDropConsumed = onDropConsumed
         coordinator.menuProvider = menuProvider
         coordinator.previewProvider = previewProvider
@@ -141,7 +146,7 @@ struct MapHost: UIViewRepresentable {
         coordinator.applyConfiguration(mapView, satellite: isSatellite, poi: poiPreset)
         coordinator.applyChromeInsets(mapView, insets: chromeInsets)
         coordinator.syncBoundary(mapView, boundary: boundary)
-        coordinator.syncDraftPoints(mapView, points: draftPoints)
+        coordinator.syncDraftPoints(mapView, points: draftPoints, selectedNumber: selectedDraftIndex.map { $0 + 1 })
         coordinator.applyUserHeading(userHeading, accuracy: userHeadingAccuracy)
 
         // Registered before the data sync: if the new pin and its drop request land
