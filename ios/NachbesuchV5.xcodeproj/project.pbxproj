@@ -304,7 +304,8 @@
 				DEVELOPMENT_TEAM = V8TS2P6862;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = NachbesuchV5;
+				INFOPLIST_KEY_CFBundleDisplayName = Nachbesuch;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Solange die Karte offen ist, zeigt die App deine Position und Blickrichtung, damit du siehst, an welchem Haus du gerade stehst. Es gibt keine Ortung im Hintergrund.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -337,7 +338,8 @@
 				DEVELOPMENT_TEAM = V8TS2P6862;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = NachbesuchV5;
+				INFOPLIST_KEY_CFBundleDisplayName = Nachbesuch;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Solange die Karte offen ist, zeigt die App deine Position und Blickrichtung, damit du siehst, an welchem Haus du gerade stehst. Es gibt keine Ortung im Hintergrund.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

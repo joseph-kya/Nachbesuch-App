@@ -25,9 +25,15 @@ Packages/
 *.iml
 local.properties
 secrets.properties
+keystore.properties
+google-services.json
+.env
 captures/
 *.keystore
 *.jks
+*.aab
+*.apk
+*.apks
 **/data/schemas/
 
 # ── macOS ───────────────────────────────────────────────

@@ -57,7 +57,7 @@ nonisolated enum AreaHouseImportService {
             request.httpBody = body
             request.timeoutInterval = 40
             request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
-            request.setValue("Nachbesuch-iOS/2.8", forHTTPHeaderField: "User-Agent")
+            request.setValue("Nachbesuch-iOS/6.0", forHTTPHeaderField: "User-Agent")
 
             let trace = PerformanceTrace.begin("Import area addresses")
             defer { PerformanceTrace.end("Import area addresses", id: trace) }
