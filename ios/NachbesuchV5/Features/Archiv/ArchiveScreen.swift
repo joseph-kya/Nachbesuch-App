@@ -10,6 +10,9 @@ struct ArchiveScreen: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.modelContext) private var modelContext
     @Environment(AppNoticeCenter.self) private var notices
+    #if DEBUG
+    @Environment(LocationService.self) private var location
+    #endif
 
     @Query(sort: \Gebiet.day1Date, order: .reverse) private var gebiete: [Gebiet]
 
@@ -27,6 +30,9 @@ struct ArchiveScreen: View {
     @State private var backupURL: URL?
     @State private var showsImporter = false
     @State private var isWorking = false
+    #if DEBUG
+    @State private var showsDiagnostics = false
+    #endif
     /// The newest automatic safety backup, if one exists yet. Read on appear
     /// and after every save — the launch backup may finish while this screen
     /// is already open.
@@ -141,6 +147,9 @@ struct ArchiveScreen: View {
                 .sensoryFeedback(.selection, trigger: selectedGebietID)
                 .overlay { if isWorking { ProgressView().controlSize(.large) } }
                 .sheet(item: $route, content: sheet(for:))
+                #if DEBUG
+                .sheet(isPresented: $showsDiagnostics) { DiagnosticsSheet() }
+                #endif
                 .alert(item: $confirmation, content: alert(for:))
                 .fileImporter(
                     isPresented: $showsImporter,
@@ -297,6 +306,13 @@ struct ArchiveScreen: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
+                    #if DEBUG
+                    // Hidden diagnostics (B4): no visible entry point on purpose.
+                    .simultaneousGesture(
+                        LongPressGesture(minimumDuration: 0.8)
+                            .onEnded { _ in showsDiagnostics = true }
+                    )
+                    #endif
             }
             .accessibilityLabel("Archivoptionen")
         }

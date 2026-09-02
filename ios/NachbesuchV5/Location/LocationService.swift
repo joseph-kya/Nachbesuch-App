@@ -2,6 +2,49 @@ import CoreLocation
 import Observation
 import UIKit
 
+/// Location precision is a function of two independent conditions, resolved in
+/// one place. The previous shape let `setFollowing(false)` overwrite an
+/// unrelated caller's request — two writers, one property, last one wins.
+/// Internal so the resolution rules carry unit tests.
+nonisolated struct AccuracyProfile: Equatable, Sendable {
+    let desiredAccuracy: CLLocationAccuracy
+    let distanceFilter: CLLocationDistance
+
+    /// - Following wins: the camera is locked to the user, every metre shows.
+    /// - The visible map gets full precision: at a door, ten-metre accuracy is
+    ///   three houses wide, and the screen costs more than the GPS duty cycle.
+    /// - Everything else (list distance sorting, background waits) stays coarse.
+    static func resolve(mapVisible: Bool, following: Bool) -> AccuracyProfile {
+        if following {
+            return AccuracyProfile(desiredAccuracy: kCLLocationAccuracyBest, distanceFilter: 1)
+        }
+        if mapVisible {
+            return AccuracyProfile(desiredAccuracy: kCLLocationAccuracyBest, distanceFilter: 2)
+        }
+        return AccuracyProfile(
+            desiredAccuracy: kCLLocationAccuracyNearestTenMeters,
+            distanceFilter: 3
+        )
+    }
+}
+
+/// How much the drawn position can be trusted.
+///
+/// Hysteresis on purpose: a fix hovering at the threshold would flicker the
+/// puck between states, which reads as a bug rather than as information.
+/// Internal so the bands carry unit tests.
+nonisolated enum PuckConfidence: Sendable, Equatable {
+    case trusted
+    case uncertain
+
+    static func from(horizontalAccuracy: Double, current: PuckConfidence) -> PuckConfidence {
+        switch current {
+        case .trusted: return horizontalAccuracy > 25 ? .uncertain : .trusted
+        case .uncertain: return horizontalAccuracy <= 18 ? .trusted : .uncertain
+        }
+    }
+}
+
 /// Continuous, foreground-only location + heading for the map.
 ///
 /// The previous implementation was one-shot (`requestLocation()` followed by an
@@ -29,6 +72,13 @@ final class LocationService: NSObject {
     var isAuthorized: Bool {
         authorization == .authorizedWhenInUse || authorization == .authorizedAlways
     }
+    /// "Ungefährer Standort": the fix is kilometres off and every distance, the
+    /// puck and the sort order would be nonsense. Distances hide and the puck
+    /// goes uncertain while this holds (B6).
+    private(set) var isReducedAccuracy = false
+    /// One-time explainer state for the reduced-accuracy grant. The UI shows it
+    /// once and routes to Settings; the flag survives so it never nags twice.
+    private(set) var needsAccuracyExplainer = false
 
     // MARK: Internals
 
@@ -43,9 +93,21 @@ final class LocationService: NSObject {
     /// Only true while a view that draws the direction cone is visible.
     private var wantsHeading = false
     private var precisionRequests = 0
+    /// The two independent precision conditions, resolved through
+    /// `AccuracyProfile` so neither caller stamps on the other.
+    private var mapVisible = false
+    private var following = false
     /// Completions waiting for the next usable fix (supermarket search, recenter).
     private var freshFixWaiters: [(CLLocation?) -> Void] = []
     private var freshFixTimeout: Task<Void, Never>?
+
+    #if DEBUG
+    /// Fix counter and accuracy aggregates for the hidden diagnostics view
+    /// (B4). Present in debug builds only; nothing leaves the device.
+    private(set) var debugFixCount = 0
+    private(set) var debugAccuracySum = 0.0
+    private(set) var debugUncertainFixes = 0
+    #endif
 
     override init() {
         authorization = manager.authorizationStatus
@@ -67,6 +129,7 @@ final class LocationService: NSObject {
         manager.showsBackgroundLocationIndicator = false
         manager.headingFilter = 2
         manager.headingOrientation = .portrait
+        refreshReducedAccuracy()
     }
 
     // MARK: Lifecycle
@@ -139,13 +202,30 @@ final class LocationService: NSObject {
     }
 
     /// Temporarily raises accuracy while the user is actively being followed.
+    /// Resolved against map visibility in one place — see `AccuracyProfile`.
     func setFollowing(_ following: Bool) {
-        // Tighten up only while the camera is locked to the user, where the extra
-        // precision is actually visible.
-        manager.desiredAccuracy = following
-            ? kCLLocationAccuracyBest
-            : kCLLocationAccuracyNearestTenMeters
-        manager.distanceFilter = following ? 1 : 3
+        self.following = following
+        applyAccuracyProfile()
+    }
+
+    /// Full precision follows the visible map, not the camera lock: this app
+    /// deliberately does not follow, so gating precision on following left the
+    /// normal state permanently at ten metres — three houses at a door.
+    /// The list intentionally does NOT call this: distance sorting wants a
+    /// position, not metre precision, and often runs with the phone pocketed.
+    func setMapVisible(_ visible: Bool) {
+        mapVisible = visible
+        applyAccuracyProfile()
+    }
+
+    private func applyAccuracyProfile() {
+        let profile = AccuracyProfile.resolve(mapVisible: mapVisible, following: following)
+        // Skip the `CLLocationManager` write when nothing resolved differently:
+        // re-setting accuracy restarts the fix cycle for no reason.
+        guard manager.desiredAccuracy != profile.desiredAccuracy
+            || manager.distanceFilter != profile.distanceFilter else { return }
+        manager.desiredAccuracy = profile.desiredAccuracy
+        manager.distanceFilter = profile.distanceFilter
     }
 
     // MARK: One-off precise fix
@@ -189,6 +269,49 @@ final class LocationService: NSObject {
         freshFixWaiters = []
         for waiter in waiters { waiter(location) }
     }
+
+    // MARK: - Reduced accuracy (B6)
+
+    private static let reducedExplainerKey = "location.reducedExplainerShown"
+
+    private func refreshReducedAccuracy() {
+        let reduced: Bool
+        if #available(iOS 14, *) {
+            reduced = manager.accuracyAuthorization == .reducedAccuracy
+        } else {
+            reduced = false
+        }
+        isReducedAccuracy = reduced
+        needsAccuracyExplainer = reduced
+            && !UserDefaults.standard.bool(forKey: Self.reducedExplainerKey)
+    }
+
+    /// The one-time explainer was shown (or dismissed) — never ask twice.
+    func accuracyExplainerHandled() {
+        UserDefaults.standard.set(true, forKey: Self.reducedExplainerKey)
+        needsAccuracyExplainer = false
+    }
+
+    /// Opens Settings so the grant can be switched to a precise position.
+    /// A generated Info.plist cannot carry the temporary-authorization
+    /// dictionary, so the durable fix (Settings) replaces the per-session one.
+    func openLocationSettings() {
+        accuracyExplainerHandled()
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
+    }
+
+    #if DEBUG
+    /// One block for the hidden diagnostics view (B4): fix count, mean
+    /// accuracy, share of fixes above the puck's uncertainty threshold.
+    var debugDiagnostics: String {
+        let mean = debugFixCount > 0 ? debugAccuracySum / Double(debugFixCount) : 0
+        let share = debugFixCount > 0
+            ? Double(debugUncertainFixes) / Double(debugFixCount) * 100 : 0
+        return String(format: "Fixes: %d · mittlere Genauigkeit: %.0f m · ungenau: %.0f %%",
+                      debugFixCount, mean, share)
+    }
+    #endif
 }
 
 // MARK: - CLLocationManagerDelegate
@@ -196,8 +319,17 @@ final class LocationService: NSObject {
 extension LocationService: CLLocationManagerDelegate {
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
+        let reduced: Bool
+        if #available(iOS 14, *) {
+            reduced = manager.accuracyAuthorization == .reducedAccuracy
+        } else {
+            reduced = false
+        }
         Task { @MainActor in
             self.authorization = status
+            self.isReducedAccuracy = reduced
+            self.needsAccuracyExplainer = reduced
+                && !UserDefaults.standard.bool(forKey: Self.reducedExplainerKey)
             switch status {
             case .authorizedWhenInUse, .authorizedAlways:
                 self.beginUpdates()
@@ -215,11 +347,23 @@ extension LocationService: CLLocationManagerDelegate {
         didUpdateLocations locations: [CLLocation]
     ) {
         guard let newest = locations.last else { return }
+        #if DEBUG
+        // One Instruments event per fix (B4): intervals cannot span the hop onto
+        // the main actor, events mark the stream without that.
+        if PerformanceTrace.signposter.isEnabled {
+            PerformanceTrace.signposter.emitEvent("location-fix")
+        }
+        #endif
         Task { @MainActor in
             // Reject readings that are stale or wildly imprecise; a 2 km "fix" would
             // otherwise teleport the dot across the city.
             guard newest.horizontalAccuracy >= 0, newest.horizontalAccuracy < 500 else { return }
             self.location = newest
+            #if DEBUG
+            self.debugFixCount += 1
+            self.debugAccuracySum += newest.horizontalAccuracy
+            if newest.horizontalAccuracy > 25 { self.debugUncertainFixes += 1 }
+            #endif
             if newest.horizontalAccuracy <= 65 {
                 self.resolveFreshFixWaiters(with: newest)
             }

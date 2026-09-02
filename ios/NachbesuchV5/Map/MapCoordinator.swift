@@ -363,6 +363,7 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         onTrackingModeChanged = nil
         onTapHouse = nil
         onStackedPins = nil
+        onTapDraftPoint = nil
         onDropConsumed = nil
         menuProvider = nil
         previewProvider = nil
@@ -386,11 +387,38 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
             accuracy: lastHeadingAccuracy,
             mapHeadingDegrees: mapView.camera.heading
         )
-        if let accuracy = mapView.userLocation.location?.horizontalAccuracy, accuracy > 0 {
+        // The simulator reports optimistic accuracy, so the degraded state is
+        // forced with a DEBUG-only override for screenshots (T4 verification).
+        var accuracy = Self.effectiveAccuracy(
+            real: mapView.userLocation.location?.horizontalAccuracy,
+            fakeOverride: Self.fakeAccuracyOverride
+        )
+        if let accuracy, accuracy > 0 {
             puck.apply(accuracyRadiusInPoints: CGFloat(accuracy / metersPerPoint(mapView)))
+            puckConfidence = PuckConfidence.from(horizontalAccuracy: accuracy, current: puckConfidence)
         }
+        puck.apply(confidence: puckConfidence)
         puck.setPulsing(mapView.userTrackingMode != .none)
     }
+
+    /// Which accuracy the puck draws: the fake override wins when it names a
+    /// positive number, otherwise the real fix. Pure so the override semantics
+    /// carry a unit test instead of only screenshots.
+    nonisolated static func effectiveAccuracy(real: Double?, fakeOverride: String?) -> Double? {
+        if let fakeOverride, let fake = Double(fakeOverride), fake > 0 { return fake }
+        return real
+    }
+
+    #if DEBUG
+    nonisolated private static var fakeAccuracyOverride: String? {
+        ProcessInfo.processInfo.environment["NACHBESUCH_FAKE_ACCURACY"]
+    }
+    #else
+    nonisolated private static var fakeAccuracyOverride: String? { nil }
+    #endif
+
+    /// Hysteresis state for the puck — see `PuckConfidence`.
+    private var puckConfidence: PuckConfidence = .trusted
 
     private func metersPerPoint(_ mapView: MKMapView) -> Double {
         let height = max(Double(mapView.bounds.height), 1)

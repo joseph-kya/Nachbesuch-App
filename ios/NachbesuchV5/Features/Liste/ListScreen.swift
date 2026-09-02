@@ -296,6 +296,14 @@ struct ListScreen: View {
         .onChange(of: location.location) { _, fix in
             updateSortOrigin(fix?.coordinate)
         }
+        .onChange(of: location.isReducedAccuracy) { _, reduced in
+            // "Ungefährer Standort" is kilometres off: kilometre-grade
+            // distances would sort doors into a meaningless order, so the
+            // ranking and its per-row figures go away until the grant returns.
+            guard reduced else { return }
+            sortOrigin = nil
+            recomputeSections()
+        }
         // The GPS only runs while this ordering is actually on screen and in use.
         .task(id: isActive) {
             // Half a minute, not a full one: the chip rounds to the nearest minute,
@@ -308,7 +316,7 @@ struct ListScreen: View {
         .task(id: sortByDistance && isActive) {
             guard sortByDistance, isActive else { return }
             location.beginUsing()
-            sortOrigin = location.location?.coordinate
+            sortOrigin = location.isReducedAccuracy ? nil : location.location?.coordinate
             recomputeSections()
             defer { location.endUsing() }
             // Held open for as long as the task lives, which is exactly as long as
@@ -478,8 +486,9 @@ struct ListScreen: View {
 
     /// Adopts a new origin only after a real move — 25 m is far enough that the
     /// order can meaningfully change, and short enough to feel live on foot.
+    /// Never from a reduced-accuracy fix: it would re-sort the street by noise.
     private func updateSortOrigin(_ coordinate: CLLocationCoordinate2D?) {
-        guard sortByDistance, let coordinate else { return }
+        guard sortByDistance, let coordinate, !location.isReducedAccuracy else { return }
         if let sortOrigin {
             let latitudeScale = 110_540.0
             let longitudeScale = 111_320.0 * cos(coordinate.latitude * .pi / 180)

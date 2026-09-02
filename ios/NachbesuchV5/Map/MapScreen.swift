@@ -70,6 +70,7 @@ struct MapScreen: View {
     // single view is how the importer→confirmation race got in.
     @State private var sheetRoute: MapRoute?
     @State private var confirmation: MapConfirmation?
+    @State private var showsAccuracyAlert = false
     @State private var isLocating = false
     @State private var pendingSave = PendingSave()
     @State private var namingTask: Task<Void, Never>?
@@ -182,10 +183,29 @@ struct MapScreen: View {
         }
         .sheet(item: $sheetRoute, content: sheet(for:))
         .alert(item: $confirmation, content: alert(for:))
+        .alert(
+            "Ungenauer Standort",
+            isPresented: $showsAccuracyAlert,
+            actions: {
+                Button("Einstellungen öffnen") { location.openLocationSettings() }
+                Button("Später", role: .cancel) { location.accuracyExplainerHandled() }
+            },
+            message: {
+                Text("„Ungefährer Standort“ reicht für diese App nicht: Entfernungen lägen um Kilometer daneben. Bitte erlaube den genauen Standort in den Einstellungen.")
+            }
+        )
+        .onChange(of: location.needsAccuracyExplainer) { _, needs in
+            if needs { showsAccuracyAlert = true }
+        }
         .task(id: isActive) {
             if isActive {
                 location.beginUsing()
+                // Precision follows the visible map (T4), resolved together with
+                // the camera lock inside the service — never set from here.
+                location.setMapVisible(true)
+                if location.needsAccuracyExplainer { showsAccuracyAlert = true }
             } else {
+                location.setMapVisible(false)
                 location.endUsing()
                 camera.flush()
                 // A queued command must not replay against a later coordinator.

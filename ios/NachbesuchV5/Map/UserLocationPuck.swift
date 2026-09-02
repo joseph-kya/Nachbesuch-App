@@ -27,6 +27,10 @@ final class UserLocationPuckView: MKAnnotationView {
     /// Compass heading in degrees clockwise from true north, or `nil` to hide the cone.
     private var headingDegrees: Double?
     private var headingHalfAngle: CGFloat = UserLocationPuckView.minimumHalfAngle
+    /// How much the drawn position can be trusted. Uncertain is reduced
+    /// confidence, not an error — it happens constantly in street canyons —
+    /// so the puck hollows out instead of warning.
+    private var confidence: PuckConfidence = .trusted
     /// The map's own rotation, subtracted so the cone points at the real-world bearing.
     private var mapHeadingDegrees: Double = 0
     private var renderedRotation: CGFloat = .greatestFiniteMagnitude
@@ -127,6 +131,30 @@ final class UserLocationPuckView: MKAnnotationView {
         updateHaloRadius(max(radius, Self.coreDiameter / 2 + 6))
     }
 
+    /// Trusted is today's look (solid blue core, white ring). Uncertain hollows
+    /// the core to a blue ring, dims the whole puck and strengthens the halo
+    /// stroke — legible at a glance, with no warning icon and no red.
+    func apply(confidence: PuckConfidence) {
+        guard confidence != self.confidence else { return }
+        self.confidence = confidence
+        switch confidence {
+        case .trusted:
+            coreLayer.fillColor = UIColor.systemBlue.cgColor
+            coreLayer.strokeColor = nil
+            coreLayer.lineWidth = 0
+            haloLayer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.28).cgColor
+            alpha = 1
+            accessibilityLabel = "Dein Standort"
+        case .uncertain:
+            coreLayer.fillColor = UIColor.clear.cgColor
+            coreLayer.strokeColor = UIColor.systemBlue.cgColor
+            coreLayer.lineWidth = 2.5
+            haloLayer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.5).cgColor
+            alpha = 0.55
+            accessibilityLabel = "Dein Standort, ungenau"
+        }
+    }
+
     func setPulsing(_ pulsing: Bool) {
         guard pulsing != isPulsing else { return }
         isPulsing = pulsing
@@ -214,5 +242,6 @@ final class UserLocationPuckView: MKAnnotationView {
         renderedRotation = .greatestFiniteMagnitude
         coneLayer.isHidden = true
         setPulsing(false)
+        apply(confidence: .trusted)
     }
 }
