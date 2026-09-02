@@ -1,7 +1,8 @@
 # Status
 
-Last updated: 2026-09-02T01:40:00+02:00 · Tests: iOS suite green, 1 diagnostic
-PDF test skipped, 0 fehlgeschlagen on iOS 26.5 **and** iOS 18.5;
+Last updated: 2026-09-03T01:00:00+02:00 · Tests: iOS suite green on clean
+checkout (`2dd9afe`→`608a817`, iPhone 17 Pro sim, 0 warnings); iOS-18-Liste
+vorher/nachher auf iPhone 11 / iOS 18.5 gegengeprüft, optisch identisch;
 Android domain + data passing · `refactor/minimal-ui` und `salvage/offene-arbeit`
 sind auf `main` und auf `origin`
 
@@ -19,6 +20,19 @@ sind auf `main` und auf `origin`
   Glasfläche und die Accessibility-Zustände funktionieren.
 
 ## Done
+- [x] Menü-Wege auf iOS 18 entlastet · `2dd9afe` · „Haus hinzufügen" und
+  „Häuser laden" materialisierten zur Sheet-Animation das ganze Gebiet auf dem
+  Hauptthread (Fetch + Normalisierung je Adresse); beide lesen jetzt
+  `HouseReadService.addressFingerprints` im Hintergrund, der Index baut über
+  `offMainActor`. „Auswahl exportieren" holte ebenfalls das volle Gebiet im
+  Sheet-Builder — jetzt Holt per ID. `territoryHouses()` ersatzlos entfallen.
+  Filterleiste: Gradienten-Maske (Offscreen-Pass pro Frame) durch statischen
+  Rand-Fade ersetzt; auf iPhone 11 / iOS 18.5 vorher/nachher fotografiert,
+  optisch identisch. Sauberer Checkout baut warnungsfrei, Suite grün.
+- [x] `RenderingAndLifecycleTests.swift` vorerst nicht eingecheckt · `608a817` ·
+  die Datei braucht `AppTab.isActive` + `DebugSeed.gridDimensions` aus noch
+  nicht committeter Arbeit und brach den Test-Build sauberer Checkouts; liegt
+  wieder untracked daneben, bis die zugehörige Arbeit committed wird.
 - [x] iOS 18 · das Einfrieren beim Tabwechsel · Zwei Ursachen, beide gemessen.
   **Erstens das Layout.** Der Kartenschirm war als
   `Color.clear.overlay { mapStack }` plus zwei weitere Overlays geschrieben, und
