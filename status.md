@@ -1,10 +1,9 @@
 # Status
 
-Last updated: 2026-09-03T01:00:00+02:00 · Tests: iOS suite green on clean
-checkout (`2dd9afe`→`608a817`, iPhone 17 Pro sim, 0 warnings); iOS-18-Liste
-vorher/nachher auf iPhone 11 / iOS 18.5 gegengeprüft, optisch identisch;
-Android domain + data passing · `refactor/minimal-ui` und `salvage/offene-arbeit`
-sind auf `main` und auf `origin`
+Last updated: 2026-09-03T03:10:00+02:00 · Tests: iOS suite green (volle Suite,
+iPhone 17 Pro sim, 0 Warnungen), Android 77 Unit-Tests grün, assembleDebug ok,
+assembleRelease scheitert nur am fehlenden Keystore (so verdrahtet);
+Fehlerpfad-Tabelle siehe unten (B5)
 
 ## In flight
 - Der iOS-18-Durchgang ist visuell geprüft (Karte, Liste, Archiv, Exportblatt,
@@ -20,6 +19,61 @@ sind auf `main` und auf `origin`
   Glasfläche und die Accessibility-Zustände funktionieren.
 
 ## Done
+- [x] Anleitung (Tutorial) · 7 Seiten (Willkommen, Karte, Haus, Liste, Später,
+  Archiv, Datensicherheit), einmal beim Erststart, jederzeit Archiv → ⋯ →
+  Anleitung. Eine Implementierung für beide Stufen (contentCard/Hintergrund);
+  auf iPhone 11 / iOS 18.5 und iPhone 17 Pro / iOS 26.5 fotografiert. Dabei
+  gefunden und sofort behoben: der Tour-Start stand hinter
+  `reconcileReminders()`, das auf frischen Geräten auf die
+  Mitteilungsfreigabe wartet — nichts Startkritisches darf dahinter stehen.
+  Offener Rest: Tour auf echter Hardware einmal durchblättern.
+- [x] B1 Automatische Tagessicherung · höchstens 1×/Tag beim Start, komplett
+  neben dem Hauptthread, Files-sichtbar (letzte 7, Rest gelöscht), Fehler nur
+  im Log. Archiv → Sicherung zeigt die letzte mit Teilen-Knopf. Verifiziert
+  auf iPhone 11: 2 Starts → genau 1 Datei, Format 2, 2 Gebiete, 40 Häuser,
+  64 Türen, 53 eingetragen. Anfänglicher Fehler (Sicherung lief vor Seed und
+  stempelte ein leeres Backup) behoben: Start nach ensureSelection, leere
+  Bestände stempeln nicht.
+- [x] B2 v1-Importer-Test · Fixture + 4 Tests (Dekodieren, Struct-Treue,
+  verwaistes Haus wird übersprungen, Roundtrip verlustfrei). Fixture heißt
+  absichtlich `LegacyV1Fixture.json`, damit Hook und .gitignore scharf bleiben.
+- [x] T4 Standortgenauigkeit + ehrlicher Punkt · Precision folgt der
+  sichtbaren Karte (AccuracyProfile, ein Auslöser), Liste bleibt grob. Punkt
+  wird über 25 m hohl/blass, unter 18 m solide (9 Tests). Degradiert-Status
+  per NACHBESUCH_FAKE_ACCURACY erzwingbar. Echte Runde (Treffer + Batterie)
+  steht aus; Rückfall vorbereitet. Hinweis: Puck-Screenshots auf diesem
+  Rechner nicht möglich (kein Tap → keine Standortfreigabe → kein Punkt).
+- [x] B6 Ungefährer Standort · einmalige Erklärung mit Weg in die
+  Einstellungen; solange Entfernungen versteckt, Punkt unsicher (ergibt sich
+  aus der km-Genauigkeit von selbst). Kein plist-Wörterbuch nötig, weil kein
+  temporäres, sondern das dauerhafte Recht verlinkt wird.
+- [x] B11 Diagnose-Export · Archiv → Sicherung → Diagnose exportieren:
+  Version, System, Anzahlen, Speicherstatus, letzte Autosicherung — Tests
+  beweisen Abwesenheit von Adressen/Notizen/Koordinaten/Namen.
+- [x] B12 Löschen-nach-Export (Schalter aus) · Einstellungen → Daten; Export
+  bietet das Löschen an, Löschlogik liegt einmal in GebietDeletion (Archiv
+  nutzt denselben Pfad).
+- [x] B8 Duplikat öffnen · Warnung bietet Öffnen (statt nur Trotzdem-anlegen),
+  plus Abstandstests für die 12-m-Regel.
+- [x] B4 Diagnose-Blatt (nur Debug) · Archiv-⋯ lang drücken: Fix-Zähler,
+  mittlere Genauigkeit, Ungenau-Anteil, plus Signpost-Events.
+- [x] B9 Benchmark-Schranken · Katastrophen-Schranken (25-%-Tor braucht
+  Xcode-Baselines, sobald CI existiert).
+- [x] Frische Installationen fragen nicht mehr beim Kaltstart nach
+  Mitteilungen (Standard aus; Bestand unverändert). Einschalten fragt
+  kontextbezogen in den Einstellungen.
+- [x] BilanzStatsEngine entfernt · rechnete produktiv nichts mehr; add-Helfer
+  nach OutcomeTally, 3 Tests auf ArchiveIndexBuilder umgezogen. Verwaiste
+  Routen-Kommentare bereinigt.
+- [x] Android Routenfunktion entfernt (Parität mit iOS) · Planer, Graph,
+  Overpass-Routenclient, RouteStore, Karten-App-Sprung, Hinweise, toter Key,
+  Routen-Tests. Meter-Mathematik als GeoDistance weiterverwendet. Dazu
+  versionName 6.0 (eine Produktversion), Android-User-Agent 6.0,
+  Release-Signing über keystore.properties verdrahtet, ProGuard-Regeln
+  hinterlegt (Minify aus bis zur Geräteprüfung).
+- [x] Archiv-Diagnosedocs gelöscht · docs/archive (Audit, UPGRADE, Motion,
+  Pin-Drift) war vollständig umgesetzt; porting.md bleibt (Vertrag),
+  next-steps.md bleibt (offene 👤-Punkte T1/T3/Feldabnahmen).
 - [x] Menü-Wege auf iOS 18 entlastet · `2dd9afe` · „Haus hinzufügen" und
   „Häuser laden" materialisierten zur Sheet-Animation das ganze Gebiet auf dem
   Hauptthread (Fetch + Normalisierung je Adresse); beide lesen jetzt
@@ -190,11 +244,32 @@ sind auf `main` und auf `origin`
 - [x] Android retained — active import/map work integrated under `android/`; generated Gradle/IDE/schema files excluded
 - [x] Repository cleanup — platform source grouped under `ios/` and `android/`; documentation and build commands aligned with the monorepo layout
 
+## Fehlerpfade (B5-Audit)
+
+| Pfad | Erzwungen durch | Was der Nutzer sieht | Stand |
+|---|---|---|---|
+| Overpass down (Import) | Flugmodus beim Laden | „Import nicht möglich“ + Wiederholen-Knopf | ✅ Code + UI vorhanden |
+| Overpass 429/504 | Drossel/Timeout | Eigene Texte (serviceBusy/requestTimedOut) im Blatt | ✅ vorhanden |
+| Standort verweigert | Ablehnung im Systemdialog | Keine Ortungsaktionen; Hinweis mit Weg in Einstellungen | ✅ vorhanden |
+| Ungefährer Standort | Genauigkeit „Ungefähr“ | Einmalige Erklärung + Einstellungen; Entfernungen aus, Punkt unsicher | ✅ neu (B6) |
+| Platte voll (Export/Backup) | — | Fehlermeldung über NoticeCenter | ⚠️ nicht erzwungen (do/catch vorhanden, Pfad ungeprüft) |
+| Datenbank korrupt | — | Wiederherstellungsbildschirm mit Sichern-Angebot | ✅ vorhanden, Start nie provoziert |
+| Türdaten beschädigt | Fixture `not-json` | Badge + Sperre, Export bricht ab | ✅ Tests vorhanden |
+
 ## Blocked
 - T1 — needs 👤: create the backup on the production phone, copy it outside the app container, provide its path, and make a second copy.
 - T2 CI — needs 👤: confirm GitHub plan and macOS runner budget before enabling macOS CI. The current runner documentation lists Xcode 26.6 on `macos-26`; `macos-15` currently lists Xcode 26.3.
 
 ## Notes for the next session
+- Latent gefunden (Tutorial-Arbeit): `reconcileReminders()` wartet auf frischen
+  Geräten auf die Mitteilungsfreigabe — `ensureAuthorized()` fragt per Alert und
+  kehrt erst nach Antwort zurück. Startkritisches steht davor (Tour, Sicherung),
+  aber das Banner `unscheduledRevisits` aktualisiert sich bis zur Antwort nicht.
+  Kandidat: erst Settings lesen, nur bei expliziten Aktionen fragen.
+- `HouseReadServiceTests` wirft Warnungen („no async operations in await") —
+  Datei unberührt, neuere Xcode-Strenge, nicht angefasst.
+- Bewusst offen: B3 MapScreen-Split (parallele Arbeit an derselben Datei),
+  B7 formale Audit-Artefakte (Geräte), T4 Feldabnahme, T1/T3/CI/Keys (👤).
 - Google Maps tiles took several seconds to appear on a cold emulator launch —
   a `SecurityException: GoogleCertificatesRslt: not allowed` for the debug
   keystore's SHA-256 appears in logcat at startup, but tiles rendered correctly

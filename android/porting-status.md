@@ -42,9 +42,11 @@
 - [x] M11 walking-network/Overpass client with three mirrors, 40-second deadline,
   30-day disk cache, cancellable fetch and immutable OSM graph/Dijkstra route; the
   recommended route draws the deterministic `Luftlinie` immediately and upgrades to
-  street geometry when the network is available
+  street geometry when the network is available — ENTFERNT (Produktentscheidung
+  30.08., Parität mit iOS): Planer, Graph, Overpass-Routenclient, RouteStore und
+  Karten-App-Handoff sind ausgebaut; die Meter-Mathematik lebt als GeoDistance weiter
 - [x] Interactive route start selection, next-house focus/halo, skip, overlay toggle
-  and end controls on the Google map
+  and end controls on the Google map — ENTFERNT (siehe oben)
 - [x] M12 OSM polygon address import with preview, safety limits, duplicate filtering
   and batched normal-house creation
 - [ ] M12 remainder: fixture round-trip, accessibility audit, baseline profile and
@@ -67,7 +69,7 @@ dem vorherigen Stand:
 - [x] Archiv: Bilanz mit Fortschritt, Kacheln und Diagramm, Gruppierung nach
   Kampagnentag, gewichtete Suche, Gebiete bearbeiten
 - [x] Detailblatt: Adresse und Notiz bearbeitbar, Türen umbenennbar,
-  Sammelaktion, Zeitstempel, Fußroute, Adresse kopieren
+  Sammelaktion, Zeitstempel, Adresse kopieren („Fußroute öffnen“ entfernt, Parität mit iOS)
 - [x] Export mit Zeitraum, "nur besuchte Adressen" und "Notizen einbeziehen"
 - [x] Gemeinsame Positionsquelle (LocationService) für Karte und Liste
 - [x] Adaptives App-Icon in der Bildsprache des iOS-Icons

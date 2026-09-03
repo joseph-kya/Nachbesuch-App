@@ -48,6 +48,9 @@ benanntem Undo.
 **Archiv** — Gedächtnis und Abrechnung. Bilanz des aktiven Gebiets, taggruppierte
 Gebietsliste, Suche, Export (PDF/Text) und vollständiges JSON-Backup.
 
+**Anleitung** — sieben Seiten durch alle Kernfunktionen, einmal beim Erststart,
+jederzeit über Archiv → ⋯ → Anleitung.
+
 ---
 
 ## Was in Version 6 neu ist
