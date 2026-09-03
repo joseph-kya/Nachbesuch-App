@@ -56,6 +56,9 @@ struct RootView: View {
         Binding(get: { selectedGebietID }, set: { selectedGebietID = $0 })
     }
     @State private var scope: DayScope = .combined
+    /// First launch shows the tour once; afterwards it lives in Archiv → ⋯.
+    @AppStorage("tutorial.didShow") private var didShowTutorial = false
+    @State private var showsTutorial = false
     /// One instance for the whole app: the map and the list both need position,
     /// and two services would mean two GPS sessions.
     @State private var location = LocationService()
@@ -134,8 +137,14 @@ struct RootView: View {
             }
             #endif
             ensureSelection()
+            // Before the reminder reconciliation: it awaits the notification
+            // authorization, which on a fresh install waits for a system alert
+            // the user hasn't answered yet. Nothing launch-critical may sit
+            // behind it.
+            if !didShowTutorial { showsTutorial = true }
             await reconcileReminders()
         }
+        .fullScreenCover(isPresented: $showsTutorial) { TutorialView() }
         #if DEBUG
         // The regression harness for the iOS 18 freeze.
         //

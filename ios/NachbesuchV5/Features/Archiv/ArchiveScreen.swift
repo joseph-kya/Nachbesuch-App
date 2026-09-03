@@ -80,6 +80,7 @@ struct ArchiveScreen: View {
         case export(UUID)
         case share(URL)
         case settings
+        case tutorial
 
         var id: String {
             switch self {
@@ -88,6 +89,7 @@ struct ArchiveScreen: View {
             case .export(let id): "export-\(id)"
             case .share(let url): "share-\(url.lastPathComponent)"
             case .settings: "settings"
+            case .tutorial: "tutorial"
             }
         }
     }
@@ -287,6 +289,9 @@ struct ArchiveScreen: View {
                 Section {
                     Button { route = .settings } label: {
                         Label("Einstellungen", systemImage: "gearshape")
+                    }
+                    Button { route = .tutorial } label: {
+                        Label("Anleitung", systemImage: "book.fill")
                     }
                 }
                 Section("Sicherung") {
@@ -656,6 +661,11 @@ struct ArchiveScreen: View {
         case .settings:
             AppearanceSettingsSheet()
                 .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+
+        case .tutorial:
+            TutorialView()
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
     }
