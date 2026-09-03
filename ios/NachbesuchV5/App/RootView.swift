@@ -137,6 +137,11 @@ struct RootView: View {
             }
             #endif
             ensureSelection()
+            // Before the reminder reconciliation (same reason as the tour):
+            // both run off the main actor and must not wait on each other.
+            // The backup reads the migrated, seeded store — never the empty
+            // one the scene task would see a moment earlier.
+            await AutoBackupService(modelContainer: modelContext.container).runIfNeeded()
             // Before the reminder reconciliation: it awaits the notification
             // authorization, which on a fresh install waits for a system alert
             // the user hasn't answered yet. Nothing launch-critical may sit

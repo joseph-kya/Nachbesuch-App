@@ -42,11 +42,6 @@ struct NachbesuchApp: App {
             .task(id: dailyListRemindersEnabled) {
                 await ReminderService.applyDailyListReminders(enabled: dailyListRemindersEnabled)
             }
-            .task {
-                // The daily safety net (B1): at most one backup per day, entirely
-                // off the main actor, so launch time is unaffected within noise.
-                await AutoBackupService(modelContainer: store.container).runIfNeeded()
-            }
         }
         .modelContainer(store.container)
     }

@@ -30,6 +30,10 @@ actor AutoBackupService {
         do {
             let gebietSnapshots = try fetchGebietSnapshots()
             let houseSnapshots = try fetchHouseSnapshots()
+            // An empty store backs up nothing — and must not stamp the day,
+            // or a launch that raced the seeding would block the real backup
+            // until tomorrow.
+            guard !gebietSnapshots.isEmpty || !houseSnapshots.isEmpty else { return }
             let data = try await BackupService.encodeBackup(
                 gebietSnapshots: gebietSnapshots,
                 houseSnapshots: houseSnapshots
