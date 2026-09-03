@@ -1,6 +1,7 @@
 import Charts
 import SwiftData
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 /// Memory and accounting: the balance for the active territory, then every
@@ -294,6 +295,9 @@ struct ArchiveScreen: View {
                     }
                     Button { showsImporter = true } label: {
                         Label("Backup importieren", systemImage: "arrow.up.doc")
+                    }
+                    Button { Task { await exportDiagnostics() } } label: {
+                        Label("Diagnose exportieren", systemImage: "stethoscope")
                     }
                     if let autoBackup {
                         ShareLink(item: autoBackup.url) {
@@ -680,22 +684,8 @@ struct ArchiveScreen: View {
     // MARK: Actions
 
     private func delete(_ id: UUID) async {
-        guard let gebiet = gebiete.first(where: { $0.id == id }) else { return }
-        let dependents: [House]
-        do {
-            dependents = try modelContext.fetch(
-                FetchDescriptor<House>(predicate: #Predicate { $0.gebietID == id || $0.dayID == id })
-            )
-        } catch {
-            notices.report(error, context: "Zugehörige Häuser konnten nicht gelesen werden. Nichts wurde gelöscht")
-            return
-        }
-        for house in dependents { modelContext.delete(house) }
-        modelContext.delete(gebiet)
-        guard modelContext.save(reporting: notices, context: "Gebiet konnte nicht gelöscht werden") else { return }
-        for house in dependents {
-            await ReminderService.cancelAllRevisits(house: house.id)
-        }
+        guard gebiete.contains(where: { $0.id == id }) else { return }
+        guard await GebietDeletion.delete(id, in: modelContext, notices: notices) else { return }
         // Dismiss any stale sheet/confirmation that still points at the deleted Gebiet.
         if case .edit(let editID) = route, editID == id { route = nil }
         if case .export(let expID) = route, expID == id { route = nil }
@@ -712,7 +702,6 @@ struct ArchiveScreen: View {
                 route = .create
             }
         }
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
     private func createBackup() async {
@@ -723,6 +712,42 @@ struct ArchiveScreen: View {
             route = .share(url)
         } catch {
             notices.report(error, context: "Backup konnte nicht erstellt werden")
+        }
+    }
+
+    /// Health report without donor data (B11): counts only, never addresses,
+    /// notes, coordinates or territory names.
+    private func exportDiagnostics() async {
+        isWorking = true
+        defer { isWorking = false }
+        var doors = 0
+        var recorded = 0
+        for gebiet in gebiete {
+            if let tally = index.entry(for: gebiet.id)?.overall {
+                doors += tally.unitCount
+                recorded += tally.completed
+            }
+        }
+        let storeURL = modelContext.container.configurations.first?.url
+        let storeSizeKB = storeURL
+            .flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? Int }
+            .map { $0 / 1024 }
+        let text = DiagnosticsExport.makeText(
+            counts: .init(
+                territories: gebiete.count,
+                houses: houseCount,
+                doors: doors,
+                recordedDoors: recorded
+            ),
+            autoBackup: autoBackup.map { AutoBackupService.describe(date: $0.date) },
+            storeSizeKB: storeSizeKB,
+            system: "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)",
+            model: UIDevice.current.model
+        )
+        do {
+            route = .share(try DiagnosticsExport.writeFile(text))
+        } catch {
+            notices.report(error, context: "Diagnose konnte nicht erstellt werden")
         }
     }
 

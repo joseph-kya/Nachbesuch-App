@@ -16,6 +16,8 @@ struct AddHouseSheet: View {
     /// a house created on day 2 recorded its first result against day 1.
     let writeDay: Int
     let onCreated: (House) -> Void
+    /// Opens the already-recorded house instead of creating a second pin (B8).
+    let onOpenExisting: (House) -> Void
 
     @State private var address = ""
     @State private var isApartment = false
@@ -110,6 +112,7 @@ struct AddHouseSheet: View {
                 ),
                 presenting: duplicateWarning
             ) { _ in
+                Button("Öffnen") { openExisting() }
                 Button("Trotzdem anlegen") {
                     didOverrideDuplicate = true
                     duplicateWarning = nil
@@ -163,7 +166,6 @@ struct AddHouseSheet: View {
             duplicateWarning = existing
             return
         }
-
         let house = House(
             address: trimmed,
             latitude: coordinate.latitude,
@@ -189,6 +191,27 @@ struct AddHouseSheet: View {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         onCreated(house)
         dismiss()
+    }
+
+    /// Opens the already-recorded house the warning names, instead of creating
+    /// a second pin for it. Falls back to the override path when the house
+    /// vanished between the warning and the tap.
+    private func openExisting() {
+        guard let warned = duplicateWarning else { return }
+        duplicateWarning = nil
+        let key = AddressNormalizer.normalize(warned)
+        let descriptor = FetchDescriptor<House>(predicate: #Predicate {
+            $0.gebietID == gebietID || $0.dayID == gebietID
+        })
+        if let match = (try? modelContext.fetch(descriptor))?
+            .first(where: { AddressNormalizer.normalize($0.address) == key }) {
+            UISelectionFeedbackGenerator().selectionChanged()
+            dismiss()
+            onOpenExisting(match)
+            return
+        }
+        didOverrideDuplicate = true
+        attemptSave()
     }
 
     private func loadSuggestedAddress() async {

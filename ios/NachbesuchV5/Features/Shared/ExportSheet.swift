@@ -5,6 +5,7 @@ import UIKit
 /// Export a territory — or a hand-picked selection — as PDF or text.
 struct ExportSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
     @Environment(AppNoticeCenter.self) private var notices
 
     let gebiet: Gebiet
@@ -16,10 +17,14 @@ struct ExportSheet: View {
 
     @AppStorage("export.visitedOnly") private var visitedOnly = true
     @AppStorage("export.includeNotes") private var includeNotes = true
+    /// Pre-built retention prompt (B12), defaulted off: with the flag on, the
+    /// export offers deleting the territory from the device afterwards.
+    @AppStorage("export.deleteAfterExportPrompt") private var deleteAfterExportPrompt = false
 
     @State private var document: ExportDocument?
     @State private var pdfURL: URL?
     @State private var isBuilding = true
+    @State private var showsDeleteConfirm = false
 
     private var options: ExportOptions {
         ExportOptions(visitedOnly: visitedOnly && !isPreselected, includeNotes: includeNotes)
@@ -52,6 +57,7 @@ struct ExportSheet: View {
                 if !isPreselected { rangeSection }
                 contentSection
                 shareSection
+                if deleteAfterExportPrompt, !isPreselected { cleanupSection }
             }
             .navigationTitle("Exportieren")
             .navigationBarTitleDisplayMode(.inline)
@@ -61,6 +67,17 @@ struct ExportSheet: View {
                 }
             }
             .task(id: buildKey) { await rebuild() }
+            .alert(
+                "„\(gebiet.displayName)“ löschen?",
+                isPresented: $showsDeleteConfirm,
+                actions: {
+                    Button("Löschen", role: .destructive) { Task { await deleteGebiet() } }
+                    Button("Behalten", role: .cancel) {}
+                },
+                message: {
+                    Text("Der Export bleibt bestehen. Alle Häuser und Ergebnisse werden vom Gerät entfernt.")
+                }
+            )
         }
     }
 
@@ -199,6 +216,25 @@ struct ExportSheet: View {
     }
 
     // MARK: Build
+
+    private var cleanupSection: some View {
+        Section {
+            if let document, document.isExportable, !document.isEmpty {
+                Button(role: .destructive) { showsDeleteConfirm = true } label: {
+                    Label("Gebiet exportiert. Jetzt vom Gerät löschen?", systemImage: "trash")
+                }
+            }
+        } header: {
+            Text("Aufräumen")
+        } footer: {
+            Text("Erst exportieren, dann löschen — nie umgekehrt.")
+        }
+    }
+
+    private func deleteGebiet() async {
+        guard await GebietDeletion.delete(gebiet.id, in: modelContext, notices: notices) else { return }
+        dismiss()
+    }
 
     private func rebuild() async {
         isBuilding = true

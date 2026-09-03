@@ -9,7 +9,7 @@ struct NachbesuchApp: App {
     /// The standing "send the list" reminder. Mirrored into `AppStorage` by the
     /// settings sheet; read here so the schedule is re-applied on every launch,
     /// which is also what repairs it after a restore to a new device.
-    @AppStorage(ReminderSettings.dailyListKey) private var dailyListRemindersEnabled = true
+    @AppStorage(ReminderSettings.dailyListKey) private var dailyListRemindersEnabled = false
 
     init() {
         // Exports from previous launches are dead weight in `tmp`.

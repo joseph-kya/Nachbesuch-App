@@ -389,7 +389,7 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         )
         // The simulator reports optimistic accuracy, so the degraded state is
         // forced with a DEBUG-only override for screenshots (T4 verification).
-        var accuracy = Self.effectiveAccuracy(
+        let accuracy = Self.effectiveAccuracy(
             real: mapView.userLocation.location?.horizontalAccuracy,
             fakeOverride: Self.fakeAccuracyOverride
         )

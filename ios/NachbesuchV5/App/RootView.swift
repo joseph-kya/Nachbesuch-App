@@ -45,7 +45,7 @@ struct RootView: View {
     @AppStorage("appearance.mode") private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage("appearance.accent") private var accentRaw = AppAccent.volkshilfe.rawValue
     @AppStorage(ReminderSettings.unscheduledCountKey) private var unscheduledRevisits = 0
-    @AppStorage(ReminderSettings.dailyListKey) private var dailyListReminders = true
+    @AppStorage(ReminderSettings.dailyListKey) private var dailyListReminders = false
 
     private var selectedGebietID: UUID? {
         get { UUID(uuidString: selectedGebietIDString) }

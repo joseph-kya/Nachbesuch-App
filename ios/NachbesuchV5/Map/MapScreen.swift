@@ -1014,6 +1014,8 @@ struct MapScreen: View {
                 writeDay: gebiet.map { $0.writeScope().writeTargetDay } ?? 1
             ) { house in
                 insertCreatedHouse(house)
+            } onOpenExisting: { house in
+                sheetRoute = .houseDetail(house.id)
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)

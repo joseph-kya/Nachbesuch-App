@@ -81,7 +81,8 @@ struct AppearanceSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("appearance.mode") private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage("appearance.accent") private var accentRaw = AppAccent.volkshilfe.rawValue
-    @AppStorage(ReminderSettings.dailyListKey) private var dailyListRemindersEnabled = true
+    @AppStorage(ReminderSettings.dailyListKey) private var dailyListRemindersEnabled = false
+    @AppStorage("export.deleteAfterExportPrompt") private var deleteAfterExportPrompt = false
     /// Whether the system will actually deliver anything. Checked on appear so a
     /// toggle that is on but muted in iOS Settings cannot silently lie.
     @State private var notificationsAllowed = true
@@ -174,6 +175,23 @@ struct AppearanceSettingsSheet: View {
                         Text("Gilt auch für „Später“: ein Haus mit gebuchter Uhrzeit meldet sich pünktlich.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        Text("Beim Einschalten fragt die App nach Mitteilungs-Erlaubnis.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    settingsGroup("Daten", systemImage: "externaldrive.fill") {
+                        Toggle(isOn: $deleteAfterExportPrompt) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Nach Export löschen anbieten")
+                                    .font(.subheadline.weight(.medium))
+                                Text("Der Export fragt, ob das Gebiet danach vom Gerät gelöscht werden soll.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(minHeight: AppTouch.minimum)
+                        .sensoryFeedback(.selection, trigger: deleteAfterExportPrompt)
                     }
 
                     Text("Die Einstellung gilt sofort für Karte, Liste und Archiv.")
