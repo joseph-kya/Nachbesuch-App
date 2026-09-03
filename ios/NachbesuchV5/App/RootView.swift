@@ -56,9 +56,6 @@ struct RootView: View {
         Binding(get: { selectedGebietID }, set: { selectedGebietID = $0 })
     }
     @State private var scope: DayScope = .combined
-    /// First launch shows the tour once; afterwards it lives in Archiv → ⋯.
-    @AppStorage("tutorial.didShow") private var didShowTutorial = false
-    @State private var showsTutorial = false
     /// One instance for the whole app: the map and the list both need position,
     /// and two services would mean two GPS sessions.
     @State private var location = LocationService()
@@ -137,19 +134,17 @@ struct RootView: View {
             }
             #endif
             ensureSelection()
-            // Before the reminder reconciliation (same reason as the tour):
-            // both run off the main actor and must not wait on each other.
-            // The backup reads the migrated, seeded store — never the empty
-            // one the scene task would see a moment earlier.
+            // Before the reminder reconciliation: both the safety backup and
+            // the tour setup run off the main actor and must not wait on a
+            // system alert the user hasn't answered yet. The backup reads the
+            // migrated, seeded store — never the empty one the scene task
+            // would see a moment earlier.
             await AutoBackupService(modelContainer: modelContext.container).runIfNeeded()
-            // Before the reminder reconciliation: it awaits the notification
-            // authorization, which on a fresh install waits for a system alert
-            // the user hasn't answered yet. Nothing launch-critical may sit
-            // behind it.
-            if !didShowTutorial { showsTutorial = true }
+            // The reconciliation awaits the notification authorization, which
+            // on a fresh install waits for a system alert the user hasn't
+            // answered yet. Nothing launch-critical may sit behind it.
             await reconcileReminders()
         }
-        .fullScreenCover(isPresented: $showsTutorial) { TutorialView() }
         #if DEBUG
         // The regression harness for the iOS 18 freeze.
         //

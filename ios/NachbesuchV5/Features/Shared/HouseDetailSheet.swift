@@ -16,6 +16,10 @@ struct HouseDetailSheet: View {
     /// Which campaign day a tap writes to. Decided by the caller from the
     /// territory's calendar, so the value read and the value written always match.
     let writeDay: Int
+    /// Fires after a confirmed delete saved, so the presenter can drop the pin
+    /// in the same turn instead of waiting for the store refresh to notice a
+    /// row that comes back in no fetch.
+    let onDelete: (UUID) -> Void
 
     @State private var draftAddress: String
     @State private var draftNote: String
@@ -23,10 +27,11 @@ struct HouseDetailSheet: View {
     @State private var showDeleteConfirmation = false
     @State private var dismissTask: Task<Void, Never>?
 
-    init(house: House, scope: DayScope, writeDay: Int) {
+    init(house: House, scope: DayScope, writeDay: Int, onDelete: @escaping (UUID) -> Void = { _ in }) {
         self.house = house
         self.scope = scope
         self.writeDay = writeDay
+        self.onDelete = onDelete
         _draftAddress = State(initialValue: house.address)
         _draftNote = State(initialValue: house.note)
     }
@@ -186,6 +191,7 @@ struct HouseDetailSheet: View {
                     Task { await ReminderService.cancelAllRevisits(house: houseID) }
                     modelContext.delete(house)
                     if modelContext.save(reporting: notices, context: "Haus konnte nicht gelöscht werden") {
+                        onDelete(houseID)
                         dismiss()
                     }
                 }

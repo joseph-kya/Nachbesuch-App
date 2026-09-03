@@ -351,6 +351,30 @@ struct MapPinTests {
         #expect(snapshot.pinsByID.count == 10_000)
         #expect(snapshot.stats.followUpCount == 10_000)
     }
+
+    /// A deleted house comes back in no fetch — not in the watermark query, not
+    /// anywhere — so the snapshot has to drop it the moment the delete commits.
+    /// Otherwise the pin lingers until the next full rebuild.
+    @Test("Gelöschte Häuser verschwinden sofort aus dem Snapshot")
+    func removingDropsDeletedPins() {
+        let doomed = raw([DoorResult(label: "1", outcome: .notHome)], address: "Weg 1")
+        let spared = raw([DoorResult(label: "1", outcome: .joined)], address: "Bleibt 2")
+        let base = MapPinSnapshotBuilder.build(from: [doomed, spared], scope: .combined)
+        #expect(base.stats.houseCount == 2)
+
+        let removed = MapPinSnapshotBuilder.removing(base, ids: [doomed.id])
+        #expect(removed.pinsByID.count == 1)
+        #expect(removed.pinsByID[spared.id] != nil)
+        #expect(removed.pinsByID[doomed.id] == nil)
+        #expect(removed.stats.houseCount == 1)
+        #expect(removed.stats.followUpCount == 0, "Das Niemand-da ging mit dem Pin")
+        #expect(removed.stats.joinedCount == 1, "Der bleibende Pin zählt weiter")
+
+        // Unknown IDs and empty sets are no-ops, never negative counters.
+        let untouched = MapPinSnapshotBuilder.removing(base, ids: [UUID()])
+        #expect(untouched.pinsByID.count == 2)
+        #expect(MapPinSnapshotBuilder.removing(base, ids: []).pinsByID.count == 2)
+    }
 }
 
 @Suite("Pin-Grafik")

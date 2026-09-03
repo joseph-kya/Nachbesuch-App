@@ -6,12 +6,10 @@ import SwiftUI
 /// One implementation for both presentation tiers: the pages are built from
 /// `contentCard` and the app backdrop, so iOS 26 renders them in glass and
 /// iOS 18 on the opaque branch — the same split every other screen uses.
-/// Shown once on first launch (`tutorial.didShow`) and on demand from
-/// Archiv → ⋯ → Anleitung.
+/// Reached deliberately from Archiv → ⋯ → Anleitung, never unasked.
 struct TutorialView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("tutorial.didShow") private var didShowTutorial = false
 
     @State private var page = TutorialView.initialPage
 
@@ -75,7 +73,6 @@ struct TutorialView: View {
     }
 
     private func finish() {
-        didShowTutorial = true
         dismiss()
     }
 }

@@ -277,6 +277,46 @@ nonisolated enum MapPinSnapshotBuilder {
         )
     }
 
+    /// Drops deleted houses, the mirror of `patch` for inserts. Deletions never
+    /// appear in the watermark fetch — a deleted row comes back in no query —
+    /// so without this the pins lingered until the next full rebuild.
+    static func removing(_ snapshot: PreparedMapSnapshot, ids: Set<UUID>) -> PreparedMapSnapshot {
+        guard !ids.isEmpty else { return snapshot }
+        var pins = snapshot.pinsByID
+        var followUps = snapshot.stats.followUpCount
+        var joined = snapshot.stats.joinedCount
+        var open = snapshot.stats.openCount
+        var earlyNo = snapshot.stats.earlyNoCount
+        var lateNo = snapshot.stats.lateNoCount
+        var damaged = snapshot.stats.damagedHouseCount
+
+        for id in ids {
+            guard let previous = pins.removeValue(forKey: id) else { continue }
+            followUps -= previous.followUpCount
+            joined -= previous.joinedCount
+            earlyNo -= previous.earlyNoCount
+            lateNo -= previous.lateNoCount
+            open -= previous.openCount
+            damaged -= previous.isDamaged ? 1 : 0
+        }
+
+        return PreparedMapSnapshot(
+            pinsByID: pins,
+            stats: MapDayStats(
+                houseCount: pins.count,
+                followUpCount: max(followUps, 0),
+                joinedCount: max(joined, 0),
+                openCount: max(open, 0),
+                earlyNoCount: max(earlyNo, 0),
+                lateNoCount: max(lateNo, 0),
+                damagedHouseCount: max(damaged, 0)
+            ),
+            // A deletion can shrink the extent, so unlike the patch path this
+            // always remeasures. Coordinates only, no decoding.
+            bounds: MapBounds.around(pins.values.map(\.coordinate))
+        )
+    }
+
     static func pin(
         for house: RawMapHouse,
         scope: DayScope,

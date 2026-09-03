@@ -839,6 +839,7 @@ struct MapScreen: View {
         for house in doomed { modelContext.delete(house) }
         guard modelContext.save(reporting: notices, context: "Auswahl konnte nicht gelöscht werden")
         else { return }
+        dropPins(Set(doomed.map(\.id)))
         Task {
             for house in doomed { await ReminderService.cancelAllRevisits(house: house.id) }
         }
@@ -994,7 +995,9 @@ struct MapScreen: View {
         switch route {
         case .houseDetail(let id):
             if let house = fetchHouse(id) {
-                HouseDetailSheet(house: house, scope: scope, writeDay: writeDay(for: house))
+                HouseDetailSheet(house: house, scope: scope, writeDay: writeDay(for: house)) { deletedID in
+                    dropPins([deletedID])
+                }
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
@@ -1083,6 +1086,22 @@ struct MapScreen: View {
         scheduleAutoNaming()
     }
 
+    /// Removes deleted houses in the same presentation turn that commits the
+    /// delete. The watermark refresh only ever sees *updated* rows, so without
+    /// this the pin lingered until the next full rebuild. Mirror of
+    /// `insertCreatedHouse`.
+    private func dropPins(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        prepared = MapPinSnapshotBuilder.removing(prepared, ids: ids)
+        changedHouseIDs.subtract(ids)
+        if var selection = selectedHouseIDs {
+            selection.subtract(ids)
+            selectedHouseIDs = selection
+        }
+        structuralVersion &+= 1
+        contentVersion &+= 1
+    }
+
     private func alert(for confirmation: MapConfirmation) -> Alert {
         switch confirmation {
         case .deleteHouse(let id, let address):
@@ -1093,6 +1112,7 @@ struct MapScreen: View {
                     guard let house = fetchHouse(id) else { return }
                     modelContext.delete(house)
                     if modelContext.save(reporting: notices, context: "Haus konnte nicht gelöscht werden") {
+                        dropPins([id])
                         Task { await ReminderService.cancelAllRevisits(house: id) }
                         UINotificationFeedbackGenerator().notificationOccurred(.success)
                     }
