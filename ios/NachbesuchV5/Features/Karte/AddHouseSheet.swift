@@ -21,13 +21,23 @@ struct AddHouseSheet: View {
 
     @State private var address = ""
     @State private var isApartment = false
-    @State private var unitCount = 4
+    @State private var unitCount: Int = {
+        let remembered = UserDefaults.standard.integer(forKey: "lastApartmentUnitCount")
+        return remembered >= 2 ? min(remembered, 100) : 4
+    }()
     @State private var initialOutcome: VisitOutcome?
     @State private var isLoadingAddress = true
     @State private var duplicateIndex: HouseDuplicateIndex?
     @State private var duplicateWarning: String?
     @State private var didOverrideDuplicate = false
     @FocusState private var addressIsFocused: Bool
+
+    private var clampedUnitCount: Binding<Int> {
+        Binding(
+            get: { unitCount },
+            set: { unitCount = min(max($0, 2), 100) }
+        )
+    }
 
     var body: some View {
         NavigationStack {
@@ -61,12 +71,16 @@ struct AddHouseSheet: View {
                     .pickerStyle(.segmented)
 
                     if isApartment {
-                        Stepper(value: $unitCount, in: 2...100) {
-                            HStack {
-                                Text("Parteien")
-                                Spacer()
-                                Text("\(unitCount)").monospacedDigit().foregroundStyle(.secondary)
-                            }
+                        HStack {
+                            Text("Parteien")
+                            Spacer()
+                            TextField("Anzahl", value: clampedUnitCount, format: .number)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 70)
+                                .monospacedDigit()
+                            Stepper("", value: clampedUnitCount, in: 2...100)
+                                .labelsHidden()
                         }
                     }
                 }
@@ -160,19 +174,21 @@ struct AddHouseSheet: View {
     private func attemptSave() {
         let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        addressIsFocused = false
 
         if !didOverrideDuplicate,
            let existing = duplicateIndex?.duplicate(for: trimmed) {
             duplicateWarning = existing
             return
         }
+        let safeUnitCount = min(max(unitCount, 2), 100)
         let house = House(
             address: trimmed,
             latitude: coordinate.latitude,
             longitude: coordinate.longitude,
             gebietID: gebietID,
             isApartmentBuilding: isApartment,
-            unitCount: isApartment ? unitCount : 1
+            unitCount: isApartment ? safeUnitCount : 1
         )
         modelContext.insert(house)
 
@@ -180,7 +196,7 @@ struct AddHouseSheet: View {
             house.setOutcome(initialOutcome, for: door.id, day: writeDay)
         }
         if isApartment {
-            UserDefaults.standard.set(unitCount, forKey: "lastApartmentUnitCount")
+            UserDefaults.standard.set(safeUnitCount, forKey: "lastApartmentUnitCount")
         }
 
         guard modelContext.save(reporting: notices, context: "Haus konnte nicht gespeichert werden") else {

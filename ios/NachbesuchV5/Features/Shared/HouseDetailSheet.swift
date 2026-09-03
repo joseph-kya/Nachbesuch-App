@@ -347,15 +347,23 @@ struct HouseDetailSheet: View {
 
     /// The building-wide version, booking the same time for every open door.
     private func applyLaterToOpenDoors(at date: Date) {
-        let openDoorIDs = house.units
-            .filter { $0.isOpen(in: writeDay == 2 ? .day2 : .day1) }
-            .map(\.id)
         guard house.setOutcomeForOpenDoors(.later, day: writeDay, revisitAt: date) > 0 else { return }
         save()
-        for unitID in openDoorIDs {
-            scheduleReminder(for: unitID, at: date)
+        let openDoors = house.units.filter { $0.isOpen(in: writeDay == 2 ? .day2 : .day1) }
+        let houseID = house.id
+        let address = house.address
+        let isApartment = house.isApartmentBuilding
+        let day = writeDay
+        Task {
+            for door in openDoors.prefix(ReminderService.revisitBudget) {
+                await ReminderService.scheduleRevisit(
+                    house: houseID, door: door.id, day: day,
+                    address: address, doorLabel: door.label,
+                    isApartmentBuilding: isApartment, at: date
+                )
+            }
         }
-        notices.show("\(openDoorIDs.count) Türen: später um \(RevisitPlanner.clockFormatter.string(from: date))")
+        notices.show("\(openDoors.count) Türen: später um \(RevisitPlanner.clockFormatter.string(from: date))")
     }
 
     private func clearOutcome(for unitID: UUID) {
@@ -451,10 +459,20 @@ private struct ApartmentDoorRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: AppSpacing.tight) {
                 OutcomeGlyph(outcome: current)
-                TextField("Bezeichnung", text: $draftLabel)
-                    .focused($isEditingLabel)
-                    .font(.subheadline.weight(.medium))
-                    .onSubmit { commit() }
+                if isEditingLabel {
+                    TextField("Bezeichnung", text: $draftLabel)
+                        .focused($isEditingLabel)
+                        .font(.subheadline.weight(.medium))
+                        .onSubmit { commit() }
+                } else {
+                    Text(draftLabel.isEmpty ? door.label : draftLabel)
+                        .font(.subheadline.weight(.medium))
+                        .contentShape(.rect)
+                        .onTapGesture {
+                            guard !isDisabled else { return }
+                            isEditingLabel = true
+                        }
+                }
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 1) {
                     Text(current?.label(revisitAt: door.revisitTime(on: writeDay)) ?? current.displayTitle)
@@ -587,17 +605,17 @@ private struct UnitCountSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Stepper(value: clamped, in: 2...100) {
-                        HStack {
-                            Text("Parteien")
-                            Spacer()
-                            TextField("Anzahl", value: clamped, format: .number)
-                                .keyboardType(.numberPad)
-                                .multilineTextAlignment(.trailing)
-                                .focused($isFocused)
-                                .frame(width: 70)
-                                .monospacedDigit()
-                        }
+                    HStack {
+                        Text("Parteien")
+                        Spacer()
+                        TextField("Anzahl", value: clamped, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .focused($isFocused)
+                            .frame(width: 70)
+                            .monospacedDigit()
+                        Stepper("", value: clamped, in: 2...100)
+                            .labelsHidden()
                     }
                 } footer: {
                     if let currentCount, count < currentCount {
@@ -612,11 +630,16 @@ private struct UnitCountSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Abbrechen") { dismiss() }
+                    Button("Abbrechen") {
+                        isFocused = false
+                        dismiss()
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Übernehmen") {
-                        onApply(count)
+                        isFocused = false
+                        let finalCount = min(max(count, 2), 100)
+                        onApply(finalCount)
                         dismiss()
                     }
                     .fontWeight(.semibold)

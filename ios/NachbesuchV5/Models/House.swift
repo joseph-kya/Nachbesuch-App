@@ -46,7 +46,7 @@ final class House {
             // throwaway placeholder first would be pure waste at import scale.
             self.unitsData = unitsData
         } else {
-            let count = isApartmentBuilding ? max(2, unitCount) : 1
+            let count = isApartmentBuilding ? min(max(2, unitCount), 100) : 1
             let doors = (1...count).map {
                 DoorResult(label: isApartmentBuilding ? "Tür \($0)" : "Haushalt")
             }
@@ -173,7 +173,7 @@ final class House {
 
     func convertToApartmentBuilding(unitCount: Int) {
         guard !isApartmentBuilding, var copy = decodedUnits() else { return }
-        let target = max(2, unitCount)
+        let target = min(max(2, unitCount), 100)
         if copy.isEmpty {
             copy.append(DoorResult(label: "Tür 1"))
         } else {
@@ -188,7 +188,7 @@ final class House {
 
     func resizeUnits(to unitCount: Int) {
         guard var copy = decodedUnits() else { return }
-        let target = min(max(unitCount, 2), 100)
+        let target = min(max(2, unitCount), 100)
         guard copy.count != target else { return }
         if copy.count < target {
             while copy.count < target {

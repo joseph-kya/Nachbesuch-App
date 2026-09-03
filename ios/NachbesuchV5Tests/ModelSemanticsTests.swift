@@ -151,6 +151,33 @@ struct ChangeSignalTests {
         #expect(house.setOutcomeForOpenDoors(.notHome, day: 1) == 0)
         #expect(house.unitsData == corrupt)
     }
+
+    @Test("Mehrparteienhaus begrenzt Türenanzahl auf 2 bis 100")
+    func apartmentUnitCountClamping() {
+        let houseHuge = House(
+            address: "Großes Haus 1", latitude: 48.2, longitude: 16.3,
+            gebietID: UUID(), isApartmentBuilding: true, unitCount: 500
+        )
+        #expect(houseHuge.units.count == 100)
+
+        let houseSmall = House(
+            address: "Kleines Haus 1", latitude: 48.2, longitude: 16.3,
+            gebietID: UUID(), isApartmentBuilding: true, unitCount: 0
+        )
+        #expect(houseSmall.units.count == 2)
+
+        let single = House(
+            address: "Einzelhaus 1", latitude: 48.2, longitude: 16.3,
+            gebietID: UUID(), isApartmentBuilding: false, unitCount: 1
+        )
+        single.convertToApartmentBuilding(unitCount: 10_000)
+        #expect(single.units.count == 100)
+
+        single.resizeUnits(to: 500)
+        #expect(single.units.count == 100)
+        single.resizeUnits(to: 1)
+        #expect(single.units.count == 2)
+    }
 }
 
 // MARK: - Territory invariants
