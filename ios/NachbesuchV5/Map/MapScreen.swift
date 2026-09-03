@@ -164,6 +164,9 @@ struct MapScreen: View {
                     sheetRoute = .stackedPins(ids)
                 },
                 onTapDraftPoint: toggleDraftPoint,
+                onTapBoundary: mode == .drawingArea
+                    ? { index, coordinate in insertBoundaryPoint(at: coordinate, index: index) }
+                    : nil,
                 onDropConsumed: { id in
                     if dropHouseID == id { dropHouseID = nil }
                 },
@@ -758,6 +761,18 @@ struct MapScreen: View {
         draftBoundary[index] = camera.region.center
         selectedDraftIndex = nil
         UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    /// Inserts a vertex where the boundary line was tapped: between the two
+    /// neighbours, never just at the end. Any edit selection ends — inserting
+    /// while one is active would stack two intentions on one gesture.
+    private func insertBoundaryPoint(at coordinate: CLLocationCoordinate2D, index: Int) {
+        guard mode == .drawingArea else { return }
+        var points = draftBoundary
+        points.insert(coordinate, at: min(max(index, 0), points.count))
+        draftBoundary = points
+        selectedDraftIndex = nil
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
     private func saveBoundary() {

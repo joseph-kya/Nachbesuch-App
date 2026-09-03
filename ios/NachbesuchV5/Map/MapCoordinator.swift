@@ -28,6 +28,9 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     /// The 1-based number of the tapped draft vertex while drawing, so the UI can
     /// offer moving that one point instead of undoing everything after it.
     var onTapDraftPoint: ((Int) -> Void)?
+    /// Insert position and map coordinate of a tap onto the drawn boundary line
+    /// between two vertices. `nil` outside drawing mode, where taps belong to pins.
+    var onTapBoundary: ((Int, CLLocationCoordinate2D) -> Void)?
     var menuProvider: ((MapPinSnapshot) -> UIMenu)?
     var previewProvider: ((MapPinSnapshot) -> UIViewController?)?
     var reduceMotionEnabled = false
@@ -297,6 +300,81 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         onTapDraftPoint?(annotation.number)
     }
 
+    /// Listens for taps onto the boundary line itself, so a new vertex lands
+    /// exactly between two existing ones instead of only at the end. Installed
+    /// once; the handler ignores everything while `onTapBoundary` is nil.
+    private weak var boundaryTapRecognizer: UITapGestureRecognizer?
+
+    func installBoundaryTap(into mapView: MKMapView) {
+        guard boundaryTapRecognizer == nil else { return }
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleBoundaryTap(_:)))
+        tap.cancelsTouchesInView = false
+        mapView.addGestureRecognizer(tap)
+        boundaryTapRecognizer = tap
+    }
+
+    @objc private func handleBoundaryTap(_ recognizer: UITapGestureRecognizer) {
+        guard let onTapBoundary, let mapView, recognizer.state == .ended else { return }
+        let point = recognizer.location(in: mapView)
+        // Pins and draft vertices handle their own taps — a tap near one is
+        // meant for it, never for the line behind it.
+        guard !tapsAnnotation(at: point, in: mapView) else { return }
+        let vertices = draftAnnotations.map { mapView.convert($0.coordinate, toPointTo: mapView) }
+        guard let index = Self.insertionIndex(tap: point, vertices: vertices) else { return }
+        UISelectionFeedbackGenerator().selectionChanged()
+        onTapBoundary(index, mapView.convert(point, toCoordinateFrom: mapView))
+    }
+
+    private func tapsAnnotation(at point: CGPoint, in mapView: MKMapView) -> Bool {
+        // Bounded by what's on screen: a tap is a rare event, but there is no
+        // reason to measure thousands of off-screen pins for it.
+        let radius: CGFloat = 30
+        for wrapped in mapView.annotations(in: mapView.visibleMapRect) {
+            guard let annotation = wrapped as? MKAnnotation,
+                  annotation is HouseAnnotation || annotation is DraftPointAnnotation
+            else { continue }
+            let center = mapView.convert(annotation.coordinate, toPointTo: mapView)
+            if hypot(center.x - point.x, center.y - point.y) <= radius { return true }
+        }
+        return false
+    }
+
+    /// Where a tap between vertices inserts: the index the new point takes in
+    /// the array. Pure screen geometry — no map needed — so the rule carries
+    /// unit tests. Open segments insert between their endpoints; the closing
+    /// segment of a 3+ polygon appends, which is the same vertex order.
+    nonisolated static func insertionIndex(
+        tap: CGPoint,
+        vertices: [CGPoint],
+        threshold: CGFloat = 24
+    ) -> Int? {
+        guard vertices.count >= 2 else { return nil }
+        var best: (index: Int, distance: CGFloat)?
+        func consider(index: Int, distance: CGFloat) {
+            guard distance <= threshold else { return }
+            if best == nil || distance < best!.distance { best = (index, distance) }
+        }
+        for i in 0..<(vertices.count - 1) {
+            consider(index: i + 1, distance: distanceToSegment(tap, a: vertices[i], b: vertices[i + 1]))
+        }
+        if vertices.count >= 3 {
+            consider(
+                index: vertices.count,
+                distance: distanceToSegment(tap, a: vertices.last!, b: vertices.first!)
+            )
+        }
+        return best?.index
+    }
+
+    nonisolated private static func distanceToSegment(_ p: CGPoint, a: CGPoint, b: CGPoint) -> CGFloat {
+        let dx = b.x - a.x
+        let dy = b.y - a.y
+        let squared = dx * dx + dy * dy
+        guard squared > 0 else { return hypot(p.x - a.x, p.y - a.y) }
+        let t = max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / squared))
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+    }
+
     /// The edit selection is SwiftUI state, but the discs are UIKit views that
     /// outlive any single body evaluation — including recycled ones dequeued for
     /// a different vertex. So the flag is pushed here, on every sync, rather
@@ -364,6 +442,7 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         onTapHouse = nil
         onStackedPins = nil
         onTapDraftPoint = nil
+        onTapBoundary = nil
         onDropConsumed = nil
         menuProvider = nil
         previewProvider = nil

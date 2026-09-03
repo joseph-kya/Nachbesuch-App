@@ -417,7 +417,7 @@ struct BoundaryDrawingBar: View {
         if let selected = selectedPointNumber {
             "Punkt \(selected) ist ausgewählt. Karte bewegen und Punkt versetzen — nochmals auf den Punkt tippen bricht ab."
         } else {
-            "Karte bewegen und an jeder Ecke einen Punkt setzen. Zum Korrigieren einen Punkt antippen."
+            "Karte bewegen und an jeder Ecke einen Punkt setzen. Punkt antippen korrigiert ihn, Linie antippen fügt dazwischen ein."
         }
     }
 }

@@ -90,6 +90,9 @@ struct MapHost: UIViewRepresentable {
     var onTapHouse: (UUID) -> Void = { _ in }
     var onStackedPins: ([UUID]) -> Void = { _ in }
     var onTapDraftPoint: (Int) -> Void = { _ in }
+    /// Insert position + coordinate for taps onto the boundary line. `nil`
+    /// outside drawing mode, where every tap belongs to pins.
+    var onTapBoundary: ((Int, CLLocationCoordinate2D) -> Void)?
     var onDropConsumed: (UUID) -> Void = { _ in }
     var menuProvider: ((MapPinSnapshot) -> UIMenu)?
     var previewProvider: ((MapPinSnapshot) -> UIViewController?)?
@@ -106,6 +109,7 @@ struct MapHost: UIViewRepresentable {
         mapView.register(HousePinView.self, forAnnotationViewWithReuseIdentifier: HousePinView.reuseIdentifier)
         mapView.register(DraftPointView.self, forAnnotationViewWithReuseIdentifier: DraftPointView.reuseIdentifier)
         mapView.register(UserLocationPuckView.self, forAnnotationViewWithReuseIdentifier: UserLocationPuckView.reuseIdentifier)
+        coordinator.installBoundaryTap(into: mapView)
 
         mapView.showsUserLocation = isActive
         mapView.showsCompass = false      // custom compass placed clear of the chrome
@@ -135,6 +139,7 @@ struct MapHost: UIViewRepresentable {
         coordinator.onTapHouse = onTapHouse
         coordinator.onStackedPins = onStackedPins
         coordinator.onTapDraftPoint = onTapDraftPoint
+        coordinator.onTapBoundary = onTapBoundary
         coordinator.onDropConsumed = onDropConsumed
         coordinator.menuProvider = menuProvider
         coordinator.previewProvider = previewProvider

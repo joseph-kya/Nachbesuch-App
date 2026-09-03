@@ -375,6 +375,23 @@ struct MapPinTests {
         #expect(untouched.pinsByID.count == 2)
         #expect(MapPinSnapshotBuilder.removing(base, ids: []).pinsByID.count == 2)
     }
+
+    /// Tapping the line inserts between the neighbours — never just at the end.
+    /// Pure screen geometry, so the rule holds without a map underneath.
+    @Test("Linie antippen fügt zwischen den Nachbarn ein")
+    func lineTapInsertsBetweenNeighbours() {
+        let line = [CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0)]
+        #expect(MapCoordinator.insertionIndex(tap: CGPoint(x: 50, y: 5), vertices: line) == 1)
+        #expect(MapCoordinator.insertionIndex(tap: CGPoint(x: 50, y: 200), vertices: line) == nil)
+        #expect(MapCoordinator.insertionIndex(tap: CGPoint(x: 50, y: 0), vertices: []) == nil)
+        #expect(MapCoordinator.insertionIndex(tap: CGPoint(x: 50, y: 0), vertices: [CGPoint(x: 0, y: 0)]) == nil)
+
+        // A triangle closes visually, so a tap on the closing edge appends —
+        // which is the same vertex order as inserting at the end.
+        let triangle = [CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0), CGPoint(x: 50, y: 80)]
+        #expect(MapCoordinator.insertionIndex(tap: CGPoint(x: 50, y: 4), vertices: triangle) == 1)
+        #expect(MapCoordinator.insertionIndex(tap: CGPoint(x: 15, y: 55), vertices: triangle) == 3)
+    }
 }
 
 @Suite("Pin-Grafik")
