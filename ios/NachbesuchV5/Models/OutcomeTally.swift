@@ -119,3 +119,17 @@ nonisolated struct HouseSummary: Sendable {
             : "\(tally.completed)/\(units.count)"
     }
 }
+
+nonisolated extension OutcomeTally {
+    /// Records an outcome whose "completed" bookkeeping the caller already handled.
+    /// Lives here (not in a balance engine) because the archive index builds on it.
+    mutating func add(_ outcome: VisitOutcome) {
+        switch outcome {
+        case .notHome: notHome += 1
+        case .earlyNo: earlyNo += 1
+        case .lateNo: lateNo += 1
+        case .joined: joined += 1
+        case .later: later += 1
+        }
+    }
+}

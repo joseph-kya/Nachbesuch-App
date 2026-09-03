@@ -24,8 +24,8 @@ extension Animation {
 }
 
 extension AnyTransition {
-    /// A floating chrome panel entering or leaving — the route cards, and anything
-    /// else that is not backed by a `glassEffectID`.
+    /// A floating chrome panel entering or leaving — anything that is not
+    /// backed by a `glassEffectID`.
     ///
     /// Scale is deliberately shallow (0.94, not 0.7): these panels are wide, and a
     /// deep scale on a wide panel reads as a zoom rather than as an appearance. Under

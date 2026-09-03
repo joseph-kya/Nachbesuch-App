@@ -219,39 +219,46 @@ struct ArchiveSearchTests {
 @Suite("Bilanz")
 struct BilanzTests {
 
-    private func seed(_ doors: [DoorResult]) -> BilanzStatsEngine.HouseSeed {
-        BilanzStatsEngine.HouseSeed(unitsData: try! AppCoders.unitsEncoder().encode(doors))
+    private func entry(for doors: [DoorResult]) throws -> ArchiveEntry {
+        let territoryID = UUID()
+        let data = try AppCoders.unitsEncoder().encode(doors)
+        let index = ArchiveIndexBuilder.build(
+            gebiete: [.init(
+                id: territoryID, name: "Test", districtOrCity: "Wien", notes: "",
+                day1Date: .now, day2Date: nil, isTwoDay: false
+            )],
+            houses: [.init(gebietID: territoryID, address: "Test 1", note: "", unitsData: data)]
+        )
+        return try #require(index.entry(for: territoryID))
     }
 
     @Test("Tag 1 und Tag 2 werden getrennt gezählt")
-    func daysAreSeparate() {
-        let snapshot = BilanzStatsEngine.build(from: [
-            seed([
-                DoorResult(label: "1", outcome: .notHome),
-                DoorResult(label: "2", outcome: .joined),
-                DoorResult(label: "3", outcome: .notHome, day2Outcome: .joined),
-                DoorResult(label: "4")
-            ])
+    func daysAreSeparate() throws {
+        let entry = try entry(for: [
+            DoorResult(label: "1", outcome: .notHome),
+            DoorResult(label: "2", outcome: .joined),
+            DoorResult(label: "3", outcome: .notHome, day2Outcome: .joined),
+            DoorResult(label: "4")
         ])
-        #expect(snapshot.day1.completed == 3)
-        #expect(snapshot.day2.completed == 1, "Nur die echte Zweitbesuchs-Eintragung zählt")
-        #expect(snapshot.overall.completed == 3)
-        #expect(snapshot.overall.joined == 2)
-        #expect(snapshot.pendingRevisits == 1, "Tür 1 wartet noch")
-        #expect(snapshot.revisitTargets == 3, "Türen 1, 3 und 4 waren Ziele")
+        #expect(entry.day1.completed == 3)
+        #expect(entry.day2.completed == 1, "Nur die echte Zweitbesuchs-Eintragung zählt")
+        #expect(entry.overall.completed == 3)
+        #expect(entry.overall.joined == 2)
+        #expect(entry.pendingRevisits == 1, "Tür 1 wartet noch")
+        #expect(entry.revisitTargets == 3, "Türen 1, 3 und 4 waren Ziele")
     }
 
     @Test("Der Tag-2-Fortschritt misst an den Nachbesuchs-Zielen")
-    func day2ProgressUsesTargets() {
-        let snapshot = BilanzStatsEngine.build(from: [
-            seed([
-                DoorResult(label: "1", outcome: .joined),
-                DoorResult(label: "2", outcome: .joined),
-                DoorResult(label: "3", outcome: .notHome, day2Outcome: .lateNo)
-            ])
+    func day2ProgressUsesTargets() throws {
+        let entry = try entry(for: [
+            DoorResult(label: "1", outcome: .joined),
+            DoorResult(label: "2", outcome: .joined),
+            DoorResult(label: "3", outcome: .notHome, day2Outcome: .lateNo)
         ])
-        #expect(snapshot.revisitTargets == 1)
-        #expect(snapshot.day2Progress == 1.0, "Das einzige Ziel wurde erreicht → 100 %")
+        #expect(entry.revisitTargets == 1)
+        let progress = entry.revisitTargets > 0
+            ? Double(entry.day2.completed) / Double(entry.revisitTargets) : 0
+        #expect(progress == 1.0, "Das einzige Ziel wurde erreicht → 100 %")
     }
 }
 

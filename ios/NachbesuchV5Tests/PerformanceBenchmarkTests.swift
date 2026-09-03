@@ -24,6 +24,13 @@ nonisolated final class PerformanceBenchmarkTests: XCTestCase {
         }
 
         XCTAssertEqual(resultCount, Self.houseCount)
+        // Catastrophe gate, not the 25 % regression gate from B9: fine-grained
+        // baselines live in Xcode-set .xcbaseline files, which need a UI pass
+        // once CI exists. This only fails on order-of-magnitude blowups, with
+        // ~50x headroom, so it never flakes on a slow machine.
+        let start = Date.now
+        _ = MapPinSnapshotBuilder.build(from: houses, scope: .combined)
+        XCTAssertLessThan(Date.now.timeIntervalSince(start), 8)
     }
 
     func testPatchOneHundredOfTenThousandPins() throws {
@@ -42,6 +49,9 @@ nonisolated final class PerformanceBenchmarkTests: XCTestCase {
         }
 
         XCTAssertEqual(resultCount, Self.houseCount)
+        let start = Date.now
+        _ = MapPinSnapshotBuilder.patch(base, with: changed, scope: .combined)
+        XCTAssertLessThan(Date.now.timeIntervalSince(start), 8)
     }
 
     private var metrics: [any XCTMetric] {

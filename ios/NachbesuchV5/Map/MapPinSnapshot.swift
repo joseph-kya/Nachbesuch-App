@@ -29,7 +29,7 @@ nonisolated struct MapPinSnapshot: Identifiable, Sendable, Equatable {
     /// reported 40, for the same territory.
     let openCount: Int
     /// The earliest booked return time on this house, when a door is "Später".
-    /// Carried on the pin because the route planner schedules around it.
+    /// Carried on the pin so the map can offer the nearest open revisit.
     var nextRevisitAt: Date?
 
     var coordinate: CLLocationCoordinate2D {

@@ -25,9 +25,18 @@ struct DayScopeSemanticsTests {
         #expect(doors[2].result(on: 2) == .lateNo)
 
         // Statistics are strict: only door 3 was actually revisited.
-        let stats = BilanzStatsEngine.build(from: [
-            BilanzStatsEngine.HouseSeed(unitsData: try! AppCoders.unitsEncoder().encode(doors))
-        ])
+        let territoryID = UUID()
+        let index = ArchiveIndexBuilder.build(
+            gebiete: [.init(
+                id: territoryID, name: "Test", districtOrCity: "Wien", notes: "",
+                day1Date: .now, day2Date: nil, isTwoDay: false
+            )],
+            houses: [.init(
+                gebietID: territoryID, address: "Test 1", note: "",
+                unitsData: try! AppCoders.unitsEncoder().encode(doors)
+            )]
+        )
+        let stats = try! #require(index.entry(for: territoryID))
         #expect(stats.day2.completed == 1)
         #expect(stats.day1.completed == 3)
         #expect(stats.overall.completed == 3)
