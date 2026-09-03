@@ -211,7 +211,6 @@ class MainActivity : ComponentActivity() {
                         onResize = { viewModel.makeApartment(house.id, it) },
                         onAddressChange = { viewModel.updateAddress(house.id, it) },
                         onNoteChange = { viewModel.updateNote(house.id, it) },
-                        onWalkRoute = { openWalkingRoute(house.latitude, house.longitude, house.address) },
                         onCopyAddress = { copyToClipboard(context, house.address) },
                         onDelete = { viewModel.deleteHouse(house.id); sheet = null },
                         onDismiss = { sheet = null }
@@ -318,8 +317,8 @@ class MainActivity : ComponentActivity() {
                 title = { Text("Standortzugriff ist deaktiviert") },
                 text = {
                     Text(
-                        "Du kannst die Karte weiterhin verwenden. Für deinen Standort, die Sortierung " +
-                            "nach Entfernung und die empfohlene Route kannst du den Zugriff später erlauben."
+                        "Du kannst die Karte weiterhin verwenden. Für deinen Standort und die Sortierung " +
+                            "nach Entfernung kannst du den Zugriff später erlauben."
                     )
                 },
                 confirmButton = {
@@ -502,17 +501,6 @@ class MainActivity : ComponentActivity() {
                 viewModel.notices.report(it, "Export fehlgeschlagen")
             }
         }
-    }
-
-    private fun openWalkingRoute(latitude: Double, longitude: Double, label: String) {
-        val uri = Uri.parse("google.navigation:q=$latitude,$longitude&mode=w")
-        val intent = Intent(Intent.ACTION_VIEW, uri).setPackage("com.google.android.apps.maps")
-        // Falls back to whatever maps app is installed rather than crashing when
-        // Google Maps is absent, which is common on de-Googled devices.
-        val fallback = Intent(Intent.ACTION_VIEW, Uri.parse("geo:$latitude,$longitude?q=$latitude,$longitude($label)"))
-        runCatching { startActivity(intent) }
-            .recoverCatching { startActivity(fallback) }
-            .onFailure { viewModel.notices.reportMessage("Keine Karten-App gefunden.") }
     }
 
     /**

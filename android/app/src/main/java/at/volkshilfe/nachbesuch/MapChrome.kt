@@ -89,16 +89,11 @@ import at.volkshilfe.nachbesuch.data.prefs.SavedCamera
 import at.volkshilfe.nachbesuch.data.importing.AreaHouseImportService
 import at.volkshilfe.nachbesuch.data.importing.AreaImportResult
 import at.volkshilfe.nachbesuch.data.importing.ImportedAreaAddress
-import at.volkshilfe.nachbesuch.data.route.OverpassClient
-import at.volkshilfe.nachbesuch.data.route.WalkingNetworkResult
 import at.volkshilfe.nachbesuch.domain.model.DayScope
 import at.volkshilfe.nachbesuch.domain.model.Gebiet
 import at.volkshilfe.nachbesuch.domain.model.House
 import at.volkshilfe.nachbesuch.domain.model.StoredCoordinate
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
-import at.volkshilfe.nachbesuch.domain.route.PlannedRoute
-import at.volkshilfe.nachbesuch.domain.route.RoutePlanner
-import at.volkshilfe.nachbesuch.domain.route.RouteStop
 import at.volkshilfe.nachbesuch.ui.theme.ChromeIconButton
 import at.volkshilfe.nachbesuch.ui.theme.VolkshilfeRed
 import com.google.android.gms.location.FusedLocationProviderClient

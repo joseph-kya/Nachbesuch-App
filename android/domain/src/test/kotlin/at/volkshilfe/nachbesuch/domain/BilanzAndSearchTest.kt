@@ -8,9 +8,6 @@ import at.volkshilfe.nachbesuch.domain.model.Gebiet
 import at.volkshilfe.nachbesuch.domain.model.House
 import at.volkshilfe.nachbesuch.domain.model.StoredCoordinate
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
-import at.volkshilfe.nachbesuch.domain.route.RoutePlanner
-import at.volkshilfe.nachbesuch.domain.route.WalkingGraph
-import at.volkshilfe.nachbesuch.domain.route.WalkingWay
 import at.volkshilfe.nachbesuch.domain.stats.BilanzStats
 import at.volkshilfe.nachbesuch.domain.stats.TerritorySummarizer
 import org.junit.Assert.assertEquals
@@ -128,24 +125,6 @@ class BilanzAndSearchTest {
         val cleared = original.recordOutcome("A", null, DayScope.DAY_1, now = 2L)!!
         val restored = cleared.restore(original.units, now = 3L)
         assertEquals(VisitOutcome.JOINED, restored.units.single().result(DayScope.COMBINED))
-    }
-
-    @Test fun snappingPlacesStopOnStreetSegment() {
-        // One long north–south way; the stop sits mid-block between junctions.
-        val top = StoredCoordinate(48.2100, 16.3000)
-        val bottom = StoredCoordinate(48.2000, 16.3000)
-        val graph = requireNotNull(WalkingGraph.fromWays(listOf(WalkingWay(listOf(top, bottom)))))
-        val middle = StoredCoordinate(48.2050, 16.3010) // ~74 m east of the way
-        val (snapped, node) = graph.snapped(middle)!!
-        val snappedCoordinate = snapped.coordinate(node)
-        if (snappedCoordinate != null) {
-            // The snap point sits on the way, ~74 m west of the raw coordinate
-            // (the perpendicular distance), well inside the 120 m limit.
-            assertTrue(RoutePlanner.metres(middle, snappedCoordinate) < 90.0)
-        }
-        // The split node reaches both original junctions over street edges.
-        assertTrue(snapped.shortestDistance(node, 0) != null)
-        assertTrue(snapped.shortestDistance(node, 1) != null)
     }
 
     @Test fun plausibilityRejectsNearNullIsland() {

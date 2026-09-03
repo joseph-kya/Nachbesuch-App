@@ -48,7 +48,6 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocationSearching
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.SkipNext
@@ -93,8 +92,7 @@ import at.volkshilfe.nachbesuch.data.prefs.SavedCamera
 import at.volkshilfe.nachbesuch.data.importing.AreaHouseImportService
 import at.volkshilfe.nachbesuch.data.importing.AreaImportResult
 import at.volkshilfe.nachbesuch.data.importing.ImportedAreaAddress
-import at.volkshilfe.nachbesuch.data.route.OverpassClient
-import at.volkshilfe.nachbesuch.data.route.WalkingNetworkResult
+import at.volkshilfe.nachbesuch.domain.geo.GeoDistance
 import at.volkshilfe.nachbesuch.domain.map.PinScale
 import at.volkshilfe.nachbesuch.domain.map.PinStacking
 import at.volkshilfe.nachbesuch.domain.model.DayScope
@@ -103,9 +101,6 @@ import at.volkshilfe.nachbesuch.domain.model.House
 import at.volkshilfe.nachbesuch.domain.model.MapPinSnapshotBuilder
 import at.volkshilfe.nachbesuch.domain.model.StoredCoordinate
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
-import at.volkshilfe.nachbesuch.domain.route.PlannedRoute
-import at.volkshilfe.nachbesuch.domain.route.RoutePlanner
-import at.volkshilfe.nachbesuch.domain.route.RouteStop
 import at.volkshilfe.nachbesuch.ui.theme.ChromeIconButton
 import at.volkshilfe.nachbesuch.ui.theme.VolkshilfeRed
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -153,7 +148,7 @@ import java.util.Locale
 
 internal fun Set<String>.toggle(id: String): Set<String> = if (id in this) this - id else this + id
 
-internal fun LatLngBounds.visibleWidthMetres(): Double = RoutePlanner.metres(
+internal fun LatLngBounds.visibleWidthMetres(): Double = GeoDistance.metres(
     StoredCoordinate(southwest.latitude, southwest.longitude),
     StoredCoordinate(northeast.latitude, northeast.longitude)
 )

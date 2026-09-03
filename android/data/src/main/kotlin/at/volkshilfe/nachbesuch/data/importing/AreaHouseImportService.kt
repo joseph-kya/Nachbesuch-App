@@ -1,8 +1,8 @@
 package at.volkshilfe.nachbesuch.data.importing
 
 import at.volkshilfe.nachbesuch.domain.model.House
+import at.volkshilfe.nachbesuch.domain.geo.GeoDistance
 import at.volkshilfe.nachbesuch.domain.model.StoredCoordinate
-import at.volkshilfe.nachbesuch.domain.route.RoutePlanner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -93,7 +93,7 @@ class AreaHouseImportService {
             connectTimeout = 14_000
             readTimeout = 18_000
             setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
-            setRequestProperty("User-Agent", "Nachbesuch-Android/1.0")
+            setRequestProperty("User-Agent", "Nachbesuch-Android/6.0")
         }
         return try {
             val body = "data=" + URLEncoder.encode(query, Charsets.UTF_8.name())
@@ -173,7 +173,7 @@ class AreaHouseImportService {
         val cell = Cell(candidate.coordinate.latitude, candidate.coordinate.longitude, cellSize)
         for (lat in -1..1) for (lon in -1..1) {
             if (buckets[Cell(cell.latitudeIndex + lat, cell.longitudeIndex + lon)]?.any {
-                    RoutePlanner.metres(candidate.coordinate, StoredCoordinate(it.latitude, it.longitude)) < 12.0
+                    GeoDistance.metres(candidate.coordinate, StoredCoordinate(it.latitude, it.longitude)) < 12.0
                 } == true) return true
         }
         return false

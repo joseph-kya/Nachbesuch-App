@@ -17,7 +17,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -99,7 +98,6 @@ fun HouseDetailSheet(
     onResize: (Int) -> Unit,
     onAddressChange: (String) -> Unit,
     onNoteChange: (String) -> Unit,
-    onWalkRoute: () -> Unit,
     onCopyAddress: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
@@ -342,10 +340,6 @@ fun HouseDetailSheet(
 
             item(key = "actions") {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = onWalkRoute) {
-                        Icon(Icons.AutoMirrored.Filled.DirectionsWalk, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Text("  Fußroute öffnen")
-                    }
                     TextButton(onClick = onCopyAddress) {
                         Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
                         Text("  Adresse kopieren")

@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.TouchApp
-import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.SwipeLeft
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -81,7 +80,6 @@ fun StatusLegendSheet(onDismiss: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 6.dp)
             )
-            GestureRow(Icons.AutoMirrored.Filled.DirectionsWalk, "Nach rechts wischen öffnet die Fußroute")
             GestureRow(Icons.Default.SwipeLeft, "Nach links wischen setzt einen Schnellstatus")
             GestureRow(Icons.Default.TouchApp, "Tippen öffnet die Details")
         }

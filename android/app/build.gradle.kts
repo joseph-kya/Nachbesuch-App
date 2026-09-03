@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -15,7 +16,41 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "1.0"
+        // Same marketing version as iOS (MARKETING_VERSION 6.0): the two apps
+        // are one product with one changelog, even with separate versionCodes.
+        versionName = "6.0"
+    }
+    signingConfigs {
+        // Play-ready signing without committing secrets: create keystore.properties
+        // (gitignored, see .gitignore) next to this file with storeFile/storePassword/
+        // keyAlias/keyPassword. Without it, release builds stay unsigned and the
+        // Play upload remains blocked — deliberately, not silently.
+        create("release") {
+            val propsFile = rootProject.file("keystore.properties")
+            if (propsFile.exists()) {
+                val props = Properties()
+                propsFile.inputStream().use(props::load)
+                storeFile = file(props.getProperty("storeFile"))
+                storePassword = props.getProperty("storePassword")
+                keyAlias = props.getProperty("keyAlias")
+                keyPassword = props.getProperty("keyPassword")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            // Unsigned until keystore.properties exists (see above).
+            signingConfig = signingConfigs.getByName("release")
+            // Minify stays off until a release build is verified on a device:
+            // R8 without proven keep rules silently breaks kotlinx-serialization
+            // models and Room. The rules live in proguard-rules.pro already.
+            isMinifyEnabled = false
+            isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
     }
     buildFeatures {
         compose = true
