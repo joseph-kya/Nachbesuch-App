@@ -392,6 +392,27 @@ struct MapPinTests {
         #expect(MapCoordinator.insertionIndex(tap: CGPoint(x: 50, y: 4), vertices: triangle) == 1)
         #expect(MapCoordinator.insertionIndex(tap: CGPoint(x: 15, y: 55), vertices: triangle) == 3)
     }
+
+    /// Search flights glide to nearby streets and cut to far places: a fast
+    /// swoosh across the city swings every glass surface through the passing
+    /// landscape, which reads as flicker, not motion.
+    @Test("Nahe Suche gleitet, ferne schneidet")
+    func farSearchFlightsCut() {
+        let wien = CLLocationCoordinate2D(latitude: 48.2082, longitude: 16.3738)
+        #expect(MapScreen.isFarFlight(from: wien, to: wien) == false)
+        let nebenan = CLLocationCoordinate2D(latitude: 48.2127, longitude: 16.3738)
+        #expect(MapScreen.isFarFlight(from: wien, to: nebenan) == false, "500 m gleiten")
+        let graz = CLLocationCoordinate2D(latitude: 47.0707, longitude: 15.4395)
+        #expect(MapScreen.isFarFlight(from: wien, to: graz) == true)
+        let knappDrueber = CLLocationCoordinate2D(
+            latitude: wien.latitude + 2010 / 111_320, longitude: wien.longitude
+        )
+        let knappDrunter = CLLocationCoordinate2D(
+            latitude: wien.latitude + 1990 / 111_320, longitude: wien.longitude
+        )
+        #expect(MapScreen.isFarFlight(from: wien, to: knappDrueber) == true)
+        #expect(MapScreen.isFarFlight(from: wien, to: knappDrunter) == false)
+    }
 }
 
 @Suite("Pin-Grafik")

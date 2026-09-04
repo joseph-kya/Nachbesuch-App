@@ -9,6 +9,7 @@ import SwiftUI
 /// speed reliably tripped the limiter and surfaced a raw error alert.
 struct MapSearchSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model: SearchModel
     @FocusState private var isFocused: Bool
 
@@ -53,9 +54,15 @@ struct MapSearchSheet: View {
             .searchable(text: $model.query, prompt: "Adresse, Ort oder Gebiet")
             .searchFocused($isFocused)
             .overlay {
-                if model.isResolving {
-                    ProgressView().controlSize(.large)
+                ZStack {
+                    if model.isResolving {
+                        ProgressView().controlSize(.large)
+                            .transition(.opacity)
+                    }
                 }
+                // Scoped to the spinner alone: an animation on the list would
+                // also animate every suggestion row on each keystroke.
+                .animation(.appFeedback(reduceMotion: reduceMotion), value: model.isResolving)
             }
             .navigationTitle("Suchen")
             .navigationBarTitleDisplayMode(.inline)
@@ -76,8 +83,13 @@ struct MapSearchSheet: View {
     private func resolve(_ suggestion: SearchModel.Suggestion) {
         Task {
             guard let coordinate = await model.coordinate(for: suggestion) else { return }
-            onSelect(coordinate)
             dismiss()
+            // The sheet and the keyboard get off screen before the map starts
+            // streaming tiles: all three animations at once fought over the
+            // render server and the flight stuttered on arrival.
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            onSelect(coordinate)
         }
     }
 }

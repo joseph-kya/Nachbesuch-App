@@ -510,6 +510,32 @@ struct MapScreen: View {
         }
     }
 
+    /// Flies to a picked search result. Nearby streets glide; far places cut:
+    /// a fast swoosh across the city blasts tiles past the render server while
+    /// every glass surface swings through the passing landscape — which reads
+    /// as flicker, not motion.
+    private func flyToSearchResult(_ coordinate: CLLocationCoordinate2D) {
+        cameraCommand = .region(
+            center: coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008),
+            animated: !Self.isFarFlight(from: camera.region.center, to: coordinate)
+                && !reduceMotion
+        )
+    }
+
+    /// Whether a search flight crosses enough map to swoosh. Pure so the rule
+    /// carries a unit test instead of only eyeballing.
+    nonisolated static func isFarFlight(
+        from: CLLocationCoordinate2D,
+        to: CLLocationCoordinate2D
+    ) -> Bool {
+        let latitudeScale = 111_320.0
+        let longitudeScale = 111_320.0 * cos(from.latitude * .pi / 180)
+        let dLat = (to.latitude - from.latitude) * latitudeScale
+        let dLon = (to.longitude - from.longitude) * longitudeScale
+        return (dLat * dLat + dLon * dLon).squareRoot() > 2_000
+    }
+
     // MARK: - Pin pipeline
 
     /// What the pins are built from, expressed so that deciding whether to rebuild
@@ -1040,11 +1066,7 @@ struct MapScreen: View {
 
         case .search:
             MapSearchSheet(region: camera.region) { coordinate in
-                cameraCommand = .region(
-                    center: coordinate,
-                    span: MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008),
-                    animated: !reduceMotion
-                )
+                flyToSearchResult(coordinate)
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
