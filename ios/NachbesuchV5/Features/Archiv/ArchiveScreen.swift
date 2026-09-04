@@ -236,7 +236,7 @@ struct ArchiveScreen: View {
 
                     if daySections.isEmpty {
                         emptyState
-                            .frame(maxWidth: .infinity, minHeight: 260)
+                            .frame(maxWidth: .infinity, minHeight: 220)
                             .padding(AppSpacing.regular)
                             .contentCard(cornerRadius: AppRadius.card)
                             .padding(.horizontal, AppSpacing.regular)

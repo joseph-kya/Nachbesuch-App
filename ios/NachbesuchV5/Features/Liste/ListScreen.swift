@@ -353,7 +353,7 @@ struct ListScreen: View {
                     if sections.isEmpty {
                         emptyState
                             .contentCard(cornerRadius: AppRadius.card)
-                            .frame(maxWidth: .infinity, minHeight: 280)
+                            .frame(maxWidth: .infinity, minHeight: 200)
                     } else {
                         ForEach(sections) { section in
                             StreetCard(

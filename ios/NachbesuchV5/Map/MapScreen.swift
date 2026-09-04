@@ -464,12 +464,14 @@ struct MapScreen: View {
                 Label("Standard", systemImage: "map").tag(false)
                 Label("Satellit", systemImage: "globe.europe.africa.fill").tag(true)
             }
+            .sensoryFeedback(.selection, trigger: isSatellite)
 
             Picker("Orte", selection: $poiPresetRaw) {
                 ForEach(POIPreset.allCases) { preset in
                     Label(preset.title, systemImage: preset.systemImage).tag(preset.rawValue)
                 }
             }
+            .sensoryFeedback(.selection, trigger: poiPresetRaw)
         }
     }
 

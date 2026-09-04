@@ -148,6 +148,7 @@ struct DayScopePicker: View {
             }
         }
         .pickerStyle(.segmented)
+        .sensoryFeedback(.selection, trigger: scope)
         .accessibilityLabel("Angezeigter Kampagnentag")
     }
 }
@@ -176,7 +177,10 @@ struct MapActionBar<Menu: View>: View {
                 Button("Abbrechen", action: onCancelPlacement)
                     .compatGlassButton(role: .map)
                     .controlSize(.large)
-                    .compatGlassID("map.secondary", in: namespace)
+                    // Plain appear/disappear, no morph identity: a Menu inside the
+                    // shared container breaks morphing from iOS 26.1 on, so this
+                    // pair doesn't attempt one — the swap cross-fades instead.
+                    .standaloneGlassTransition(reduceMotion: reduceMotion)
             } else {
                 SwiftUI.Menu {
                     menu()
@@ -186,13 +190,12 @@ struct MapActionBar<Menu: View>: View {
                         .frame(width: 24, height: 24)
                 }
                 .compatGlassButton(shape: .circle, role: .map)
-                // Neutral like every other tool on this bar. Left on the app
-                // accent it came out as a red disc — which on this map reads as
-                // a status colour, and red already means "offen". Same reason
-                // the filter help button pins `.tint(.primary)`.
+                // Same as above: no glassEffectID on a Menu. It never had a
+                // genuine morph partner — only a swap — and the ID asked the
+                // container for exactly the morph that breaks.
+                .standaloneGlassTransition(reduceMotion: reduceMotion)
                 .tint(.primary)
                 .controlSize(.large)
-                .compatGlassID("map.secondary", in: namespace)
                 .accessibilityLabel("Kartenoptionen")
             }
 
@@ -409,6 +412,9 @@ struct BoundaryDrawingBar: View {
                 .compatGlassButton(prominent: true)
                 .controlSize(.large)
                 .buttonBorderShape(.circle)
+                // Prominent circles need the clip or the glass leaves artifacts
+                // at the rim; the wide pills keep the automatic shape.
+                .clipShape(Circle())
                 .tint(accent)
                 .disabled(pointCount < 3)
                 .compatGlassID("map.drawSave", in: namespace)
