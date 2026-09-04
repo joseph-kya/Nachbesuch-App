@@ -186,6 +186,11 @@ struct MapActionBar<Menu: View>: View {
                         .frame(width: 24, height: 24)
                 }
                 .compatGlassButton(shape: .circle, role: .map)
+                // Neutral like every other tool on this bar. Left on the app
+                // accent it came out as a red disc — which on this map reads as
+                // a status colour, and red already means "offen". Same reason
+                // the filter help button pins `.tint(.primary)`.
+                .tint(.primary)
                 .controlSize(.large)
                 .compatGlassID("map.secondary", in: namespace)
                 .accessibilityLabel("Kartenoptionen")

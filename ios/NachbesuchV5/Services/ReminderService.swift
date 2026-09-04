@@ -121,16 +121,36 @@ nonisolated enum ReminderService {
             return false
         }
         #endif
+        if await isAuthorized() { return true }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         switch settings.authorizationStatus {
-        case .authorized, .provisional, .ephemeral:
-            return true
         case .denied:
             return false
         case .notDetermined:
             return (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
-        @unknown default:
+        default:
+            return false
+        }
+    }
+
+    /// The current grant, without asking. The launch reconciliation uses this:
+    /// asking on a cold start with seeded or imported doors produced a system
+    /// prompt before the user had done anything requiring notifications — and
+    /// on a fresh install the await stalls the whole launch task behind an
+    /// unanswered alert. Unscheduled doors surface through the in-app banner
+    /// instead, which is exactly what it is for; the grant itself is asked for
+    /// in context (booking „Später", enabling the daily reminder).
+    nonisolated static func isAuthorized() async -> Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["NACHBESUCH_NO_NOTIFICATIONS"] != nil {
+            return false
+        }
+        #endif
+        switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            return true
+        default:
             return false
         }
     }
@@ -199,7 +219,11 @@ nonisolated enum ReminderService {
         let plan = plan(candidates, now: now)
         let selected = plan.scheduledCandidates
 
-        guard await ensureAuthorized() else {
+        // Deliberately the non-asking check: this runs on every launch, and
+        // asking here produced a system prompt on cold start — before the user
+        // had done anything requiring notifications — and stalled the launch
+        // task behind the unanswered alert on fresh installs.
+        guard await isAuthorized() else {
             return ReminderReconciliationResult(
                 dueInApp: plan.dueInApp,
                 scheduled: 0,
