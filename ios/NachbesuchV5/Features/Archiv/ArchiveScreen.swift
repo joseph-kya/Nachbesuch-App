@@ -788,7 +788,9 @@ struct ArchiveScreen: View {
         do {
             let result = try await BackupService.importBackup(backup, into: modelContext)
             notices.show(
-                "\(result.importedGebiete) Gebiete und \(result.importedHouses) Häuser importiert."
+                "\(result.importedGebiete) Gebiete, \(result.importedHouses) Häuser"
+                    + (result.importedPassanten > 0 ? " und \(result.importedPassanten) Passanten" : "")
+                    + " importiert."
                     + (result.skippedHouses > 0 ? " \(result.skippedHouses) übersprungen." : "")
             )
         } catch {

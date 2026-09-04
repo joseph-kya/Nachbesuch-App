@@ -6,6 +6,30 @@ nonisolated struct AppBackup: Codable, Sendable {
     let exportedAt: Date
     let gebiete: [BackupGebiet]
     let houses: [BackupHouse]
+    /// Street encounters (SchemaV2). Missing in v2 files — then it decodes as
+    /// empty rather than failing, so every old backup still restores.
+    let passanten: [BackupPassant]
+
+    enum CodingKeys: String, CodingKey {
+        case formatVersion, exportedAt, gebiete, houses, passanten
+    }
+
+    init(formatVersion: Int, exportedAt: Date, gebiete: [BackupGebiet], houses: [BackupHouse], passanten: [BackupPassant]) {
+        self.formatVersion = formatVersion
+        self.exportedAt = exportedAt
+        self.gebiete = gebiete
+        self.houses = houses
+        self.passanten = passanten
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        formatVersion = try container.decode(Int.self, forKey: .formatVersion)
+        exportedAt = try container.decode(Date.self, forKey: .exportedAt)
+        gebiete = try container.decode([BackupGebiet].self, forKey: .gebiete)
+        houses = try container.decode([BackupHouse].self, forKey: .houses)
+        passanten = try container.decodeIfPresent([BackupPassant].self, forKey: .passanten) ?? []
+    }
 }
 
 nonisolated struct BackupGebiet: Codable, Sendable {
@@ -35,9 +59,22 @@ nonisolated struct BackupHouse: Codable, Sendable {
     let updatedAt: Date
 }
 
+nonisolated struct BackupPassant: Codable, Sendable {
+    let id: UUID
+    let note: String
+    let latitude: Double
+    let longitude: Double
+    let outcome: VisitOutcome?
+    let revisitAt: Date?
+    let gebietID: UUID?
+    let createdAt: Date
+    let updatedAt: Date
+}
+
 nonisolated struct BackupImportResult: Sendable {
     let importedGebiete: Int
     let importedHouses: Int
+    let importedPassanten: Int
     let skippedHouses: Int
 }
 
@@ -129,8 +166,36 @@ enum BackupService {
         }
     }
 
-    static func makeBackup(gebiete: [Gebiet], houses: [House]) async throws -> URL {
-        let data = try await makeBackupData(gebiete: gebiete, houses: houses)
+    nonisolated struct PassantSnapshot: Sendable {
+        let id: UUID
+        let note: String
+        let latitude: Double
+        let longitude: Double
+        let outcome: VisitOutcome?
+        let revisitAt: Date?
+        let gebietID: UUID?
+        let createdAt: Date
+        let updatedAt: Date
+
+        init(_ passant: Passant) {
+            id = passant.id
+            note = passant.note
+            latitude = passant.latitude
+            longitude = passant.longitude
+            outcome = passant.outcome
+            revisitAt = passant.revisitAt
+            gebietID = passant.gebietID
+            createdAt = passant.createdAt
+            updatedAt = passant.updatedAt
+        }
+    }
+
+    static func makeBackup(
+        gebiete: [Gebiet],
+        houses: [House],
+        passanten: [Passant] = []
+    ) async throws -> URL {
+        let data = try await makeBackupData(gebiete: gebiete, houses: houses, passanten: passanten)
         return try await Task.detached(priority: .userInitiated) { () -> URL in
             let date = Date.now.formatted(.iso8601.year().month().day())
             // Own directory per backup: files used to collide at day granularity, so
@@ -144,13 +209,22 @@ enum BackupService {
     /// The backup as bytes, without choosing where they land. The manual export
     /// writes them to the share scratch directory; the automatic safety backup
     /// writes them into the Files-visible documents directory.
-    static func makeBackupData(gebiete: [Gebiet], houses: [House]) async throws -> Data {
+    static func makeBackupData(
+        gebiete: [Gebiet],
+        houses: [House],
+        passanten: [Passant] = []
+    ) async throws -> Data {
         let trace = PerformanceTrace.begin("Create backup")
         defer { PerformanceTrace.end("Create backup", id: trace) }
 
         let gebietSnapshots = gebiete.map(GebietSnapshot.init)
         let houseSnapshots = houses.map(HouseSnapshot.init)
-        return try await encodeBackup(gebietSnapshots: gebietSnapshots, houseSnapshots: houseSnapshots)
+        let passantSnapshots = passanten.map(PassantSnapshot.init)
+        return try await encodeBackup(
+            gebietSnapshots: gebietSnapshots,
+            houseSnapshots: houseSnapshots,
+            passantSnapshots: passantSnapshots
+        )
     }
 
     /// Encode already-detached snapshots. Internal so the automatic backup can
@@ -158,12 +232,13 @@ enum BackupService {
     /// never a second serialiser.
     static func encodeBackup(
         gebietSnapshots: [GebietSnapshot],
-        houseSnapshots: [HouseSnapshot]
+        houseSnapshots: [HouseSnapshot],
+        passantSnapshots: [PassantSnapshot] = []
     ) async throws -> Data {
         try await Task.detached(priority: .userInitiated) { () -> Data in
             let decoder = AppCoders.unitsDecoder()
             let backup = AppBackup(
-                formatVersion: 2,
+                formatVersion: 3,
                 exportedAt: .now,
                 gebiete: gebietSnapshots.map { snapshot in
                     BackupGebiet(
@@ -207,6 +282,19 @@ enum BackupService {
                         createdAt: snapshot.createdAt,
                         updatedAt: snapshot.updatedAt
                     )
+                },
+                passanten: passantSnapshots.map { snapshot in
+                    BackupPassant(
+                        id: snapshot.id,
+                        note: snapshot.note,
+                        latitude: snapshot.latitude,
+                        longitude: snapshot.longitude,
+                        outcome: snapshot.outcome,
+                        revisitAt: snapshot.revisitAt,
+                        gebietID: snapshot.gebietID,
+                        createdAt: snapshot.createdAt,
+                        updatedAt: snapshot.updatedAt
+                    )
                 }
             )
 
@@ -245,8 +333,11 @@ enum BackupService {
         }
 
         switch probe.formatVersion {
-        case 2:
+        case 2, 3:
             do {
+                // v2 files carry no `passanten` key; the custom decoder fills
+                // them as empty rather than failing, so every old backup still
+                // restores.
                 return try decoder.decode(AppBackup.self, from: data)
             } catch {
                 throw BackupError.corruptContents(underlying: error)
@@ -288,7 +379,7 @@ enum BackupService {
                     updatedAt: house.updatedAt
                 )
             }
-            return AppBackup(formatVersion: 2, exportedAt: v1Backup.exportedAt, gebiete: gebiete, houses: houses)
+            return AppBackup(formatVersion: 2, exportedAt: v1Backup.exportedAt, gebiete: gebiete, houses: houses, passanten: [])
         }
 
         throw BackupError.corruptContents(underlying: nil)
@@ -302,16 +393,19 @@ enum BackupService {
         // body, which could already be stale by the time the loop runs.
         let existingGebiete: [Gebiet]
         let existingHouses: [House]
+        let existingPassanten: [Passant]
         do {
             existingGebiete = try modelContext.fetch(FetchDescriptor<Gebiet>())
             existingHouses = try modelContext.fetch(FetchDescriptor<House>())
+            existingPassanten = try modelContext.fetch(FetchDescriptor<Passant>())
         } catch {
             throw BackupError.storeUnavailable(underlying: error)
         }
         do {
             return try await performImport(backup, into: modelContext,
                                            existingGebiete: existingGebiete,
-                                           existingHouses: existingHouses)
+                                           existingHouses: existingHouses,
+                                           existingPassanten: existingPassanten)
         } catch {
             // Without this, a failed import stays live in the context and the next
             // unrelated save anywhere in the app silently commits half of it.
@@ -324,7 +418,8 @@ enum BackupService {
         _ backup: AppBackup,
         into modelContext: ModelContext,
         existingGebiete: [Gebiet],
-        existingHouses: [House]
+        existingHouses: [House],
+        existingPassanten: [Passant]
     ) async throws -> BackupImportResult {
         let trace = PerformanceTrace.begin("Import backup")
         defer { PerformanceTrace.end("Import backup", id: trace) }
@@ -424,10 +519,45 @@ enum BackupService {
             importedHouses += 1
         }
 
+        // Street encounters, matched by identity like everything else. An
+        // encounter whose territory is missing from the file is skipped rather
+        // than orphaned — same rule as houses.
+        var existingPassantIDs = Set(existingPassanten.map(\.id))
+        var importedPassanten = 0
+
+        for backupPassant in backup.passanten {
+            guard !existingPassantIDs.contains(backupPassant.id) else {
+                skippedHouses += 1
+                continue
+            }
+
+            guard let sourceGebietID = backupPassant.gebietID,
+                  let targetGebietID = gebietIDMap[sourceGebietID] else {
+                skippedHouses += 1
+                continue
+            }
+
+            let passant = Passant(
+                note: backupPassant.note,
+                latitude: backupPassant.latitude,
+                longitude: backupPassant.longitude,
+                gebietID: targetGebietID
+            )
+            passant.id = backupPassant.id
+            passant.outcome = backupPassant.outcome
+            passant.revisitAt = backupPassant.revisitAt
+            passant.createdAt = backupPassant.createdAt
+            passant.updatedAt = backupPassant.updatedAt
+            modelContext.insert(passant)
+            existingPassantIDs.insert(passant.id)
+            importedPassanten += 1
+        }
+
         try modelContext.save()
         return BackupImportResult(
             importedGebiete: importedGebiete,
             importedHouses: importedHouses,
+            importedPassanten: importedPassanten,
             skippedHouses: skippedHouses
         )
     }

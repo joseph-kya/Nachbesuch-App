@@ -19,9 +19,23 @@ enum SchemaV1: VersionedSchema {
     }
 }
 
+/// V2 adds exactly one entity — `Passant`, the street encounter — and nothing
+/// else. Additive-only is the safest migration class there is: existing rows
+/// are untouched, the new table starts empty, and a store that cannot be
+/// opened still lands on the recovery screen instead of a launch crash.
+enum SchemaV2: VersionedSchema {
+    static var versionIdentifier: Schema.Version { Schema.Version(2, 0, 0) }
+
+    static var models: [any PersistentModel.Type] {
+        [House.self, Gebiet.self, CampaignDay.self, Passant.self]
+    }
+}
+
 enum AppMigrationPlan: SchemaMigrationPlan {
-    static var schemas: [any VersionedSchema.Type] { [SchemaV1.self] }
-    static var stages: [MigrationStage] { [] }
+    static var schemas: [any VersionedSchema.Type] { [SchemaV1.self, SchemaV2.self] }
+    static var stages: [MigrationStage] {
+        [.lightweight(fromVersion: SchemaV1.self, toVersion: SchemaV2.self)]
+    }
 }
 
 /// Result of opening the store, so the UI can tell the difference between "working"
@@ -55,7 +69,7 @@ enum AppStore {
     /// Opens the real store, falling back to an in-memory one so a corrupt database
     /// degrades to "the app opens and explains itself" instead of "the app is dead".
     static func load() -> StoreLoadResult {
-        let schema = Schema(versionedSchema: SchemaV1.self)
+        let schema = Schema(versionedSchema: SchemaV2.self)
         do {
             let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
             let container = try ModelContainer(
