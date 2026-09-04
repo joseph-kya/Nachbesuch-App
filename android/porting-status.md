@@ -70,6 +70,8 @@ dem vorherigen Stand:
   Kampagnentag, gewichtete Suche, Gebiete bearbeiten
 - [x] Detailblatt: Adresse und Notiz bearbeitbar, Türen umbenennbar,
   Sammelaktion, Zeitstempel, Adresse kopieren („Fußroute öffnen“ entfernt, Parität mit iOS)
+- [ ] Passant (iOS SchemaV2): Begegnungen erfassen, Scheiben, Detailblatt,
+  Backup- und Export-Anbindung — Android-Portierung steht aus
 - [x] Export mit Zeitraum, "nur besuchte Adressen" und "Notizen einbeziehen"
 - [x] Gemeinsame Positionsquelle (LocationService) für Karte und Liste
 - [x] Adaptives App-Icon in der Bildsprache des iOS-Icons

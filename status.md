@@ -1,9 +1,7 @@
 # Status
 
-Last updated: 2026-09-03T03:10:00+02:00 · Tests: iOS suite green (volle Suite,
-iPhone 17 Pro sim, 0 Warnungen), Android 77 Unit-Tests grün, assembleDebug ok,
-assembleRelease scheitert nur am fehlenden Keystore (so verdrahtet);
-Fehlerpfad-Tabelle siehe unten (B5)
+Last updated: 2026-09-04T07:00:00+02:00 · Tests: iOS Suite grün (volle Suite,
+iPhone 17 Pro sim, 0 Warnungen), Android 77 Unit-Tests grün
 
 ## In flight
 - Der iOS-18-Durchgang ist visuell geprüft (Karte, Liste, Archiv, Exportblatt,
@@ -19,6 +17,15 @@ Fehlerpfad-Tabelle siehe unten (B5)
   Glasfläche und die Accessibility-Zustände funktionieren.
 
 ## Done
+- [x] Passant (Begegnung statt Haus) · SchemaV2 + Backup-Format 3, eigene
+  Entität (Notiz, Koordinate, Ergebnis, Rückkehrzeit, Gebiet), runde
+  Ergebnis-Scheiben statt Tropfen, Platzierungsmodus mit Personen-Fadenkreuz,
+  Detailblatt mit Löschen, Export in PDF/Text (alle Bereiche), Gebiets-
+  Löschung räumt mit ab. Vertragsbruch bewusst: next-steps verbietet
+  Speicheränderungen ohne Rückfrage — der Auftrag kam direkt vom Eigentümer.
+  Migration rein additiv (neue Tabelle, alte Zeilen unangetastet), Fallback
+  bleibt der Wiederherstellungsbildschirm. Draußen bewusst: Listen-/Bilanz-
+  Zähler, Android-Portierung, Tour-Seite dazu.
 - [x] Anleitung (Tutorial) · 7 Seiten (Willkommen, Karte, Haus, Liste, Später,
   Archiv, Datensicherheit), einmal beim Erststart, jederzeit Archiv → ⋯ →
   Anleitung. Eine Implementierung für beide Stufen (contentCard/Hintergrund);
