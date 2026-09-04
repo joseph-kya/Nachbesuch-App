@@ -52,6 +52,8 @@ struct ListScreen: View {
     /// pin the whole territory in memory for the rest of the session — the exact leak
     /// this screen's queries were taken out to stop — so `showsExport` clears it.
     @State private var exportHouses: [House] = []
+    /// Street encounters for the same export. Cleared with the houses above.
+    @State private var exportPassanten: [Passant] = []
     /// The row waiting for a return time, once "Später" was swiped.
     @State private var revisitTarget: HouseRowModel?
     @State private var undo: UndoEntry?
@@ -233,9 +235,9 @@ struct ListScreen: View {
                         .presentationDragIndicator(.visible)
                 }
             }
-            .sheet(isPresented: $showsExport, onDismiss: { exportHouses = [] }) {
+            .sheet(isPresented: $showsExport, onDismiss: { exportHouses = []; exportPassanten = [] }) {
                 if let gebiet {
-                    ExportSheet(gebiet: gebiet, houses: exportHouses, scope: scope)
+                    ExportSheet(gebiet: gebiet, houses: exportHouses, passanten: exportPassanten, scope: scope)
                         .presentationDetents([.medium, .large])
                         .presentationDragIndicator(.visible)
                 }
@@ -437,6 +439,9 @@ struct ListScreen: View {
         })
         do {
             exportHouses = try modelContext.fetch(descriptor)
+            exportPassanten = try modelContext.fetch(
+                FetchDescriptor<Passant>(predicate: #Predicate { $0.gebietID == territoryID })
+            )
             showsExport = true
         } catch {
             notices.report(error, context: "Export konnte nicht vorbereitet werden")

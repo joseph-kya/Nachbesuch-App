@@ -161,10 +161,39 @@ struct DayScopePicker: View {
 /// panel. That is the iOS 26 idiom — nesting glass inside glass is explicitly
 /// discouraged — and the surrounding `GlassEffectContainer` lets the shapes merge
 /// into each other as they appear and disappear.
+/// Which kind of thing the action bar is about to place, if any.
+enum MapPlacement {
+    case house
+    case passant
+
+    var idleTitle: String {
+        switch self {
+        case .house: "Haus hinzufügen"
+        case .passant: "Passant eintragen"
+        }
+    }
+
+    var idleShortTitle: String {
+        switch self {
+        case .house: "Hinzufügen"
+        case .passant: "Eintragen"
+        }
+    }
+
+    var idleSystemImage: String {
+        switch self {
+        case .house: "plus"
+        case .passant: "person.fill.badge.plus"
+        }
+    }
+}
+
 struct MapActionBar<Menu: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAccent) private var accent
-    let isPlacing: Bool
+    /// Non-nil while aiming the reticle — a house or a street encounter.
+    /// `nil` is browsing, where the primary button starts the house flow.
+    let placement: MapPlacement?
     let canAddHouse: Bool
     let namespace: Namespace.ID
     let onCancelPlacement: () -> Void
@@ -173,7 +202,7 @@ struct MapActionBar<Menu: View>: View {
 
     var body: some View {
         HStack(spacing: AppSpacing.snug) {
-            if isPlacing {
+            if placement != nil {
                 Button("Abbrechen", action: onCancelPlacement)
                     .compatGlassButton(role: .map)
                     .controlSize(.large)
@@ -201,15 +230,20 @@ struct MapActionBar<Menu: View>: View {
 
             Button(action: onPrimary) {
                 ViewThatFits(in: .horizontal) {
-                    Label(
-                        isPlacing ? "Hier eintragen" : "Haus hinzufügen",
-                        systemImage: isPlacing ? "checkmark" : "plus"
-                    )
-                    Label(
-                        isPlacing ? "Eintragen" : "Hinzufügen",
-                        systemImage: isPlacing ? "checkmark" : "plus"
-                    )
-                    Image(systemName: isPlacing ? "checkmark" : "plus")
+                    if placement != nil {
+                        Label("Hier eintragen", systemImage: "checkmark")
+                        Label("Eintragen", systemImage: "checkmark")
+                    } else {
+                        Label(
+                            MapPlacement.house.idleTitle,
+                            systemImage: MapPlacement.house.idleSystemImage
+                        )
+                        Label(
+                            MapPlacement.house.idleShortTitle,
+                            systemImage: MapPlacement.house.idleSystemImage
+                        )
+                    }
+                    Image(systemName: placement == nil ? MapPlacement.house.idleSystemImage : "checkmark")
                 }
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity, minHeight: 26)
@@ -221,7 +255,7 @@ struct MapActionBar<Menu: View>: View {
             .disabled(!canAddHouse)
             .compatGlassID("map.primary", in: namespace)
         }
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: isPlacing)
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: placement == nil)
     }
 }
 
@@ -444,7 +478,7 @@ struct BoundaryDrawingBar: View {
 /// in the middle of the cross, not 18 pt away.
 struct PlacementReticle: View {
     @Environment(\.appAccent) private var accent
-    enum Kind { case house, boundaryPoint }
+    enum Kind { case house, passant, boundaryPoint }
     let kind: Kind
 
     var body: some View {
@@ -465,6 +499,20 @@ struct PlacementReticle: View {
                             .fill(accent)
                             .frame(width: 12, height: 9)
                     }
+                }
+        case .passant:
+            // A person has no tip to hang off the anchor: the badge sits
+            // centred on it, so the encounter lands exactly where aimed.
+            Color.clear
+                .frame(width: 0, height: 0)
+                .overlay(alignment: .center) {
+                    Image(systemName: "person.fill")
+                        .font(.title3)
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(accent, in: Circle())
+                        .overlay(Circle().stroke(.white, lineWidth: 3))
+                        .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
                 }
         case .boundaryPoint:
             Color.clear

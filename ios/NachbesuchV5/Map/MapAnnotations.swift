@@ -35,6 +35,32 @@ final class DraftPointAnnotation: NSObject, MKAnnotation {
     }
 }
 
+/// A street encounter on the map. Value snapshot: the coordinator syncs a
+/// small separate set of these, outside the house pin pipeline, because
+/// passanten are dozens, never thousands, and carry no doors to decode.
+nonisolated struct PassantPin: Sendable {
+    let id: UUID
+    let coordinate: CLLocationCoordinate2D
+    let outcome: VisitOutcome?
+    let note: String
+}
+
+/// The annotation behind a street encounter.
+final class PassantAnnotation: NSObject, MKAnnotation {
+    let passantID: UUID
+    @objc dynamic var coordinate: CLLocationCoordinate2D
+    var outcome: VisitOutcome?
+    var note: String
+    var title: String? { "Passant" }
+
+    init(pin: PassantPin) {
+        passantID = pin.id
+        coordinate = pin.coordinate
+        outcome = pin.outcome
+        note = pin.note
+    }
+}
+
 // MARK: - House pin
 
 /// A bare image host. All geometry and text is baked into the cached bitmap by
@@ -318,6 +344,119 @@ final class DraftPointView: MKAnnotationView {
             // coordinator re-applies after dequeue, this covers any path it misses.
             if editSelected { editSelected = false }
         }
+    }
+}
+
+/// A street encounter: white disc, outcome-coloured ring and glyph. Round on
+/// purpose — houses are teardrops, draft vertices red dots, so a person reads
+/// as neither at a glance. Artwork is baked per outcome like the draft dots,
+/// so configuring is one image assignment.
+final class PassantPinView: MKAnnotationView {
+    static let reuseIdentifier = "PassantPin"
+
+    weak var coordinator: MapCoordinator?
+
+    /// Outcome raw value, or "none". `nil` outcomes share one grey artwork.
+    private static func key(for outcome: VisitOutcome?) -> String {
+        outcome?.rawValue ?? "none"
+    }
+
+    private static let artwork: [String: UIImage] = {
+        var images: [String: UIImage] = [:]
+        let cases: [VisitOutcome?] = [nil, .notHome, .earlyNo, .lateNo, .joined, .later]
+        for outcome in cases {
+            images[key(for: outcome)] = makeArtwork(color: uiColor(for: outcome))
+        }
+        return images
+    }()
+
+    private static func uiColor(for outcome: VisitOutcome?) -> UIColor {
+        switch outcome {
+        case .notHome: .systemRed
+        case .earlyNo: .systemOrange
+        case .lateNo: .systemGray
+        case .joined: .systemPink
+        case .later: .systemIndigo
+        case nil: .systemGray
+        }
+    }
+
+    private static func makeArtwork(color: UIColor) -> UIImage {
+        let side: CGFloat = 30
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(
+            size: CGSize(width: side + 6, height: side + 6),
+            format: format
+        )
+        return renderer.image { context in
+            let rect = CGRect(x: 3, y: 3, width: side, height: side)
+            context.cgContext.setShadow(
+                offset: CGSize(width: 0, height: 1),
+                blur: 3,
+                color: UIColor.black.withAlphaComponent(0.3).cgColor
+            )
+            UIColor.white.setFill()
+            UIBezierPath(ovalIn: rect).fill()
+            context.cgContext.setShadow(offset: .zero, blur: 0, color: nil)
+            let ring = UIBezierPath(ovalIn: rect.insetBy(dx: 1.25, dy: 1.25))
+            ring.lineWidth = 2.5
+            color.setStroke()
+            ring.stroke()
+            let glyph = UIImage(
+                systemName: "person.fill",
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+            )?
+                .withTintColor(color, renderingMode: .alwaysOriginal)
+            let glyphSize = glyph?.size ?? .zero
+            glyph?.draw(
+                in: CGRect(
+                    x: 3 + (side - glyphSize.width) / 2,
+                    y: 3 + (side - glyphSize.height) / 2,
+                    width: glyphSize.width,
+                    height: glyphSize.height
+                )
+            )
+        }
+    }
+
+    override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        canShowCallout = false
+        collisionMode = .circle
+        frame = CGRect(x: 0, y: 0, width: 36, height: 36)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        tap.cancelsTouchesInView = false
+        addGestureRecognizer(tap)
+        configure()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    @objc private func handleTap() {
+        guard let passant = annotation as? PassantAnnotation else { return }
+        coordinator?.passantTapped(passant.passantID)
+    }
+
+    override var annotation: MKAnnotation? {
+        didSet { configure() }
+    }
+
+    override func prepareForDisplay() {
+        super.prepareForDisplay()
+        configure()
+    }
+
+    func configure() {
+        guard let passant = annotation as? PassantAnnotation else { return }
+        image = Self.artwork[Self.key(for: passant.outcome)]
+        accessibilityLabel = passant.note.isEmpty
+            ? "Passant"
+            : "Passant: \(passant.note)"
+        accessibilityValue = passant.outcome?.title ?? "Noch kein Status"
     }
 }
 

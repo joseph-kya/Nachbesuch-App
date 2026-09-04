@@ -22,10 +22,14 @@ enum GebietDeletion {
         // context untouched, never half-deleted objects waiting for the next
         // unrelated save to commit them.
         let dependents: [House]
+        let passanten: [Passant]
         let gebiet: Gebiet
         do {
             dependents = try modelContext.fetch(
                 FetchDescriptor<House>(predicate: #Predicate { $0.gebietID == id || $0.dayID == id })
+            )
+            passanten = try modelContext.fetch(
+                FetchDescriptor<Passant>(predicate: #Predicate { $0.gebietID == id })
             )
             guard let found = try modelContext.fetch(
                 FetchDescriptor<Gebiet>(predicate: #Predicate { $0.id == id })
@@ -36,12 +40,16 @@ enum GebietDeletion {
             return false
         }
         for house in dependents { modelContext.delete(house) }
+        for passant in passanten { modelContext.delete(passant) }
         modelContext.delete(gebiet)
         guard modelContext.save(reporting: notices, context: "Gebiet konnte nicht gelöscht werden") else {
             return false
         }
         for house in dependents {
             await ReminderService.cancelAllRevisits(house: house.id)
+        }
+        for passant in passanten {
+            await ReminderService.cancelAllRevisits(house: passant.id)
         }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         return true

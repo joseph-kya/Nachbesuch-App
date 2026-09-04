@@ -56,6 +56,9 @@ struct MapScreen: View {
     /// append-only, so fixing point 2 of 10 meant undoing 8 points;
     /// now any single vertex moves to the reticle on demand.
     @State private var selectedDraftIndex: Int? = nil
+    /// Street encounters of the territory. Dozens, never thousands, so plain
+    /// live models on the main actor — no watermark pipeline like houses.
+    @State private var passanten: [Passant] = []
     @State private var selectedHouseIDs: Set<UUID>?
     @State private var cameraCommand: MapCameraCommand?
     @State private var dropHouseID: UUID?
@@ -140,6 +143,9 @@ struct MapScreen: View {
                 boundary: boundary,
                 draftPoints: mode == .drawingArea ? draftBoundary : [],
                 selectedDraftIndex: mode == .drawingArea ? selectedDraftIndex : nil,
+                passantPins: passanten.map {
+                    PassantPin(id: $0.id, coordinate: $0.coordinate, outcome: $0.outcome, note: $0.note)
+                },
                 selectedHouseIDs: selectedHouseIDs,
                 isActive: isActive,
                 isSatellite: isSatellite,
@@ -164,6 +170,7 @@ struct MapScreen: View {
                     sheetRoute = .stackedPins(ids)
                 },
                 onTapDraftPoint: toggleDraftPoint,
+                onTapPassant: { id in sheetRoute = .passantDetail(id) },
                 onTapBoundary: mode == .drawingArea
                     ? { index, coordinate in insertBoundaryPoint(at: coordinate, index: index) }
                     : nil,
@@ -179,7 +186,10 @@ struct MapScreen: View {
             }
 
             if mode != .browsing {
-                PlacementReticle(kind: mode == .placingHouse ? .house : .boundaryPoint)
+                PlacementReticle(
+                    kind: mode == .placingHouse ? .house
+                        : mode == .placingPassant ? .passant : .boundaryPoint
+                )
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
@@ -401,10 +411,11 @@ struct MapScreen: View {
                         onMoveSelected: moveSelectedDraftPoint,
                         onSave: saveBoundary
                     )
-                case .placingHouse, .browsing:
+                case .placingHouse, .placingPassant, .browsing:
                     if !isSelecting {
                         MapActionBar(
-                            isPlacing: mode == .placingHouse,
+                            placement: mode == .placingHouse ? .house
+                                : mode == .placingPassant ? .passant : nil,
                             canAddHouse: gebiet != nil,
                             namespace: glass,
                             onCancelPlacement: { setMode(.browsing) },
@@ -454,6 +465,16 @@ struct MapScreen: View {
                 Label("Häuser aus Kartendaten laden", systemImage: "square.and.arrow.down")
             }
             .disabled((gebiet?.boundaryCoordinates.count ?? 0) < 3)
+
+            Button {
+                setMode(.placingPassant)
+            } label: {
+                Label(
+                    MapPlacement.passant.idleTitle,
+                    systemImage: MapPlacement.passant.idleSystemImage
+                )
+            }
+            .disabled(gebiet == nil)
         }
 
         Section {
@@ -579,6 +600,10 @@ struct MapScreen: View {
             return
         }
 
+        // Street encounters travel with every refresh, full or incremental:
+        // dozens of small rows, fetched plainly on the main actor.
+        passanten = fetchPassanten()
+
         let reader = HouseReadService(modelContainer: modelContext.container)
 
         // Content-only change (a status was tapped): patch just the houses touched
@@ -652,6 +677,7 @@ struct MapScreen: View {
         mode = .browsing
         draftBoundary = []
         selectedDraftIndex = nil
+        passanten = []
         selectedHouseIDs = nil
         sheetRoute = nil
         confirmation = nil
@@ -739,6 +765,10 @@ struct MapScreen: View {
             // The reticle's point is at the map centre by construction, so what the
             // user aimed at is what gets stored.
             sheetRoute = .addHouse(coordinate: camera.region.center, gebietID: gebiet.id)
+            setMode(.browsing)
+        case .placingPassant:
+            guard let gebiet else { return }
+            sheetRoute = .addPassant(coordinate: camera.region.center, gebietID: gebiet.id)
             setMode(.browsing)
         case .browsing:
             setMode(.placingHouse)
@@ -863,6 +893,18 @@ struct MapScreen: View {
         }
     }
 
+    /// Street encounters of one territory. Dozens, so a plain main-thread fetch —
+    /// no background pipeline like houses.
+    private func fetchPassanten() -> [Passant] {
+        guard let territoryID = gebiet?.id else { return [] }
+        let descriptor = FetchDescriptor<Passant>(predicate: #Predicate { $0.gebietID == territoryID })
+        do {
+            return try modelContext.fetch(descriptor)
+        } catch {
+            notices.report(error, context: "Passanten konnten nicht gelesen werden")
+            return []
+        }
+    }
     /// One row, by id. Interaction paths need a real model to write through; they do
     /// not need the territory resident to find it.
     private func fetchHouse(_ id: UUID) -> House? {
@@ -1066,6 +1108,22 @@ struct MapScreen: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
 
+        case .addPassant(let coordinate, let gebietID):
+            PassantSheet(coordinate: coordinate, gebietID: gebietID) { passant in
+                insertCreatedPassant(passant)
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+
+        case .passantDetail(let id):
+            if let passant = passanten.first(where: { $0.id == id }) {
+                PassantDetailSheet(passant: passant) { deletedID in
+                    dropPassanten([deletedID])
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
+
         case .search:
             MapSearchSheet(region: camera.region) { coordinate in
                 flyToSearchResult(coordinate)
@@ -1087,7 +1145,7 @@ struct MapScreen: View {
 
         case .exportSelection:
             if let gebiet {
-                ExportSheet(gebiet: gebiet, houses: selectedHouses, scope: scope, isPreselected: true)
+                ExportSheet(gebiet: gebiet, houses: selectedHouses, passanten: [], scope: scope, isPreselected: true)
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
@@ -1125,6 +1183,14 @@ struct MapScreen: View {
         scheduleAutoNaming()
     }
 
+    /// Makes a recorded encounter visible in the same presentation turn that
+    /// closes the add sheet — same immediacy as `insertCreatedHouse`, without
+    /// a pin pipeline: encounters sync as a whole set on the next pass anyway.
+    private func insertCreatedPassant(_ passant: Passant) {
+        passanten.append(passant)
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
     /// Removes deleted houses in the same presentation turn that commits the
     /// delete. The watermark refresh only ever sees *updated* rows, so without
     /// this the pin lingered until the next full rebuild. Mirror of
@@ -1139,6 +1205,14 @@ struct MapScreen: View {
         }
         structuralVersion &+= 1
         contentVersion &+= 1
+    }
+
+    /// Removes deleted street encounters immediately. They live outside the
+    /// watermark pipeline, so this is just the array — the coordinator syncs
+    /// the small set on the next pass and the disc is gone.
+    private func dropPassanten(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        passanten.removeAll { ids.contains($0.id) }
     }
 
     private func alert(for confirmation: MapConfirmation) -> Alert {
@@ -1183,12 +1257,15 @@ struct MapScreen: View {
 enum MapMode: Equatable {
     case browsing
     case placingHouse
+    case placingPassant
     case drawingArea
 }
 
 enum MapRoute: Identifiable {
     case houseDetail(UUID)
     case addHouse(coordinate: CLLocationCoordinate2D, gebietID: UUID)
+    case addPassant(coordinate: CLLocationCoordinate2D, gebietID: UUID)
+    case passantDetail(UUID)
     case search
     case importArea
     case exportSelection
@@ -1200,6 +1277,8 @@ enum MapRoute: Identifiable {
         switch self {
         case .houseDetail(let id): "house-\(id)"
         case .addHouse(let coordinate, _): "add-\(coordinate.latitude)-\(coordinate.longitude)"
+        case .addPassant(let coordinate, _): "add-passant-\(coordinate.latitude)-\(coordinate.longitude)"
+        case .passantDetail(let id): "passant-\(id)"
         case .search: "search"
         case .importArea: "import"
         case .exportSelection: "export"

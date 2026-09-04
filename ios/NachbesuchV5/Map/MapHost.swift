@@ -71,6 +71,9 @@ struct MapHost: UIViewRepresentable {
     /// Index of the draft vertex being re-aimed, if any. Passed through so the
     /// disc highlight follows SwiftUI state instead of UIKit reuse.
     let selectedDraftIndex: Int?
+    /// Street encounters as value snapshots. Synced as a whole set — dozens,
+    /// never thousands — outside the house pin pipeline.
+    let passantPins: [PassantPin]
     let selectedHouseIDs: Set<UUID>?
     let isActive: Bool
     let isSatellite: Bool
@@ -90,6 +93,7 @@ struct MapHost: UIViewRepresentable {
     var onTapHouse: (UUID) -> Void = { _ in }
     var onStackedPins: ([UUID]) -> Void = { _ in }
     var onTapDraftPoint: (Int) -> Void = { _ in }
+    var onTapPassant: (UUID) -> Void = { _ in }
     /// Insert position + coordinate for taps onto the boundary line. `nil`
     /// outside drawing mode, where every tap belongs to pins.
     var onTapBoundary: ((Int, CLLocationCoordinate2D) -> Void)?
@@ -108,6 +112,7 @@ struct MapHost: UIViewRepresentable {
 
         mapView.register(HousePinView.self, forAnnotationViewWithReuseIdentifier: HousePinView.reuseIdentifier)
         mapView.register(DraftPointView.self, forAnnotationViewWithReuseIdentifier: DraftPointView.reuseIdentifier)
+        mapView.register(PassantPinView.self, forAnnotationViewWithReuseIdentifier: PassantPinView.reuseIdentifier)
         mapView.register(UserLocationPuckView.self, forAnnotationViewWithReuseIdentifier: UserLocationPuckView.reuseIdentifier)
         coordinator.installBoundaryTap(into: mapView)
 
@@ -139,6 +144,7 @@ struct MapHost: UIViewRepresentable {
         coordinator.onTapHouse = onTapHouse
         coordinator.onStackedPins = onStackedPins
         coordinator.onTapDraftPoint = onTapDraftPoint
+        coordinator.onTapPassant = onTapPassant
         coordinator.onTapBoundary = onTapBoundary
         coordinator.onDropConsumed = onDropConsumed
         coordinator.menuProvider = menuProvider
@@ -152,6 +158,7 @@ struct MapHost: UIViewRepresentable {
         coordinator.applyChromeInsets(mapView, insets: chromeInsets)
         coordinator.syncBoundary(mapView, boundary: boundary)
         coordinator.syncDraftPoints(mapView, points: draftPoints, selectedNumber: selectedDraftIndex.map { $0 + 1 })
+        coordinator.syncPassantAnnotations(mapView, pins: passantPins)
         coordinator.applyUserHeading(userHeading, accuracy: userHeadingAccuracy)
 
         // Registered before the data sync: if the new pin and its drop request land

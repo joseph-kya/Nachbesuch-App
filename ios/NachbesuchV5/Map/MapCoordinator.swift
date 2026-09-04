@@ -28,6 +28,9 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     /// The 1-based number of the tapped draft vertex while drawing, so the UI can
     /// offer moving that one point instead of undoing everything after it.
     var onTapDraftPoint: ((Int) -> Void)?
+    /// The tapped street encounter, by id. Same fast path as house pins: the
+    /// pin's own recognizer answers on finger lift, no MapKit round trip.
+    var onTapPassant: ((UUID) -> Void)?
     /// Insert position and map coordinate of a tap onto the drawn boundary line
     /// between two vertices. `nil` outside drawing mode, where taps belong to pins.
     var onTapBoundary: ((Int, CLLocationCoordinate2D) -> Void)?
@@ -36,6 +39,9 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     var reduceMotionEnabled = false
 
     private var annotationsByHouseID: [UUID: HouseAnnotation] = [:]
+    /// Street encounters live outside the house pin pipeline: dozens, never
+    /// thousands, no scale tiers, synced as a whole set on every pass.
+    private var passantAnnotationsByID: [UUID: PassantAnnotation] = [:]
     private var pins: PreparedMapSnapshot = .empty
     private var lastStructuralVersion = -1
     private var lastContentVersion = -1
@@ -300,6 +306,51 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         onTapDraftPoint?(annotation.number)
     }
 
+    /// Syncs street encounters as a whole set. Dozens, never thousands, so no
+    /// watermark, no tiers — add what's missing, move what's moved, drop what's
+    /// gone. Runs without animation like the house sync, for the same recycled
+    /// half-transparent reason.
+    func syncPassantAnnotations(_ mapView: MKMapView, pins: [PassantPin]) {
+        var live = Set(passantAnnotationsByID.keys)
+        var toAdd: [PassantAnnotation] = []
+        for pin in pins {
+            live.remove(pin.id)
+            if let annotation = passantAnnotationsByID[pin.id] {
+                if annotation.coordinate.latitude != pin.coordinate.latitude
+                    || annotation.coordinate.longitude != pin.coordinate.longitude {
+                    annotation.coordinate = pin.coordinate
+                }
+                annotation.outcome = pin.outcome
+                annotation.note = pin.note
+                if let view = mapView.view(for: annotation) as? PassantPinView {
+                    view.configure()
+                }
+            } else {
+                let annotation = PassantAnnotation(pin: pin)
+                passantAnnotationsByID[pin.id] = annotation
+                toAdd.append(annotation)
+            }
+        }
+        var toRemove: [PassantAnnotation] = []
+        for id in live {
+            if let annotation = passantAnnotationsByID.removeValue(forKey: id) {
+                toRemove.append(annotation)
+            }
+        }
+        UIView.performWithoutAnimation {
+            if !toRemove.isEmpty { mapView.removeAnnotations(toRemove) }
+            if !toAdd.isEmpty { mapView.addAnnotations(toAdd) }
+        }
+    }
+
+    func passantTapped(_ id: UUID) {
+        if let annotation = passantAnnotationsByID[id] {
+            mapView?.deselectAnnotation(annotation, animated: false)
+        }
+        UISelectionFeedbackGenerator().selectionChanged()
+        onTapPassant?(id)
+    }
+
     /// Listens for taps onto the boundary line itself, so a new vertex lands
     /// exactly between two existing ones instead of only at the end. Installed
     /// once; the handler ignores everything while `onTapBoundary` is nil.
@@ -332,6 +383,7 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         for wrapped in mapView.annotations(in: mapView.visibleMapRect) {
             guard let annotation = wrapped as? MKAnnotation,
                   annotation is HouseAnnotation || annotation is DraftPointAnnotation
+                    || annotation is PassantAnnotation
             else { continue }
             let center = mapView.convert(annotation.coordinate, toPointTo: mapView)
             if hypot(center.x - point.x, center.y - point.y) <= radius { return true }
@@ -442,6 +494,7 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         onTapHouse = nil
         onStackedPins = nil
         onTapDraftPoint = nil
+        onTapPassant = nil
         onTapBoundary = nil
         onDropConsumed = nil
         menuProvider = nil
@@ -586,6 +639,15 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
             ) as? DraftPointView else { return nil }
             view.coordinator = self
             view.editSelected = (draft.number == selectedDraftNumber)
+            return view
+
+        case let passant as PassantAnnotation:
+            guard let view = mapView.dequeueReusableAnnotationView(
+                withIdentifier: PassantPinView.reuseIdentifier,
+                for: passant
+            ) as? PassantPinView else { return nil }
+            view.coordinator = self
+            view.configure()
             return view
 
         default:

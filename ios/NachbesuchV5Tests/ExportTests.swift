@@ -65,6 +65,21 @@ struct ExportTests {
         #expect(document.includedHouses == 2)
     }
 
+    @Test("Passanten erscheinen im Export")
+    func passantenAppearInExport() async {
+        let gebiet = makeGebiet()
+        let passant = Passant(note: "Frau mit Hund", latitude: 48.2, longitude: 16.3, gebietID: gebiet.id)
+        passant.outcome = .joined
+        let document = await DayExportService.makeDocument(
+            gebiet: gebiet, houses: [], scope: .combined, options: ExportOptions(), passanten: [passant]
+        )
+        #expect(!document.isEmpty)
+        #expect(document.passanten.count == 1)
+        let text = DayExportService.makeText(document)
+        #expect(text.contains("Frau mit Hund"))
+        #expect(text.contains(VisitOutcome.joined.title))
+    }
+
     /// A building where three of eight doors were answered should say so — and list
     /// only those three, not five "Offen" rows.
     @Test("Mehrparteienhäuser listen nur die beantworteten Türen")

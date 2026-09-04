@@ -570,6 +570,20 @@ struct ArchiveScreen: View {
         }
     }
 
+    /// Street encounters of one territory, fetched for the moment they are
+    /// needed — the export sheet is the only thing on this screen that wants
+    /// them, same one-shot rule as houses.
+    private func passanten(in gebietID: UUID) -> [Passant] {
+        do {
+            return try modelContext.fetch(
+                FetchDescriptor<Passant>(predicate: #Predicate { $0.gebietID == gebietID })
+            )
+        } catch {
+            notices.report(error, context: "Passanten konnten nicht gelesen werden")
+            return []
+        }
+    }
+
     /// Memoized: the search used to run inside `body`, so it re-executed against an
     /// unchanged query on every keystroke, filter tap and notice.
     private func recomputeResults() {
@@ -648,6 +662,7 @@ struct ArchiveScreen: View {
                 ExportSheet(
                     gebiet: gebiet,
                     houses: houses(in: id),
+                    passanten: passanten(in: id),
                     scope: .combined
                 )
                 .presentationDetents([.medium, .large])

@@ -10,6 +10,10 @@ struct ExportSheet: View {
 
     let gebiet: Gebiet
     let houses: [House]
+    /// Street encounters of the territory. The pin-selection export carries
+    /// houses only — passanten are not selectable — the archive export passes
+    /// the whole set.
+    let passanten: [Passant]
     let scope: DayScope
     /// Set when the caller already picked the houses by hand, so the sheet doesn't
     /// quietly drop some of them again.
@@ -247,7 +251,8 @@ struct ExportSheet: View {
             gebiet: gebiet,
             houses: houses,
             scope: scope,
-            options: options
+            options: options,
+            passanten: passanten
         )
         guard !Task.isCancelled else { return }
         document = built

@@ -32,6 +32,10 @@ nonisolated struct ExportDocument: Sendable {
     let generatedAt: Date
     /// In the order the round actually happened.
     let houses: [ExportHouse]
+    /// Street encounters, oldest first. Day-agnostic by design: a conversation
+    /// belongs to no campaign day, so it appears in every scope's report
+    /// rather than vanishing from all but one.
+    let passanten: [ExportPassant]
     let summary: ExportSummary
     let includedHouses: Int
     let totalHouses: Int
@@ -40,7 +44,28 @@ nonisolated struct ExportDocument: Sendable {
     /// an apparently successful but incomplete export is never produced.
     let validationFailure: String?
 
-    var isEmpty: Bool { houses.isEmpty }
+    init(
+        title: String, place: String, dateRange: String, legacyDateLabel: String,
+        scopeLabel: String, generatedAt: Date, houses: [ExportHouse],
+        passanten: [ExportPassant], summary: ExportSummary, includedHouses: Int,
+        totalHouses: Int, visitedOnly: Bool, validationFailure: String?
+    ) {
+        self.title = title
+        self.place = place
+        self.dateRange = dateRange
+        self.legacyDateLabel = legacyDateLabel
+        self.scopeLabel = scopeLabel
+        self.generatedAt = generatedAt
+        self.houses = houses
+        self.passanten = passanten
+        self.summary = summary
+        self.includedHouses = includedHouses
+        self.totalHouses = totalHouses
+        self.visitedOnly = visitedOnly
+        self.validationFailure = validationFailure
+    }
+
+    var isEmpty: Bool { houses.isEmpty && passanten.isEmpty }
     var isExportable: Bool { validationFailure == nil }
 
     /// "Ottakring · 1160 Wien · 19. August 2026 · Gesamt"
@@ -69,6 +94,14 @@ nonisolated struct ExportDoor: Sendable {
     let result: String
     let symbol: String
     let recordedAt: Date?
+}
+
+nonisolated struct ExportPassant: Sendable {
+    let note: String
+    let result: String
+    /// Booked return time, when the encounter ended with one.
+    let revisitAt: Date?
+    let recordedAt: Date
 }
 
 nonisolated struct ExportSummary: Sendable {
@@ -105,11 +138,19 @@ enum DayExportService {
         let unitsData: Data
     }
 
+    private nonisolated struct RawExportPassant: Sendable {
+        let note: String
+        let outcome: VisitOutcome?
+        let revisitAt: Date?
+        let createdAt: Date
+    }
+
     static func makeDocument(
         gebiet: Gebiet,
         houses: [House],
         scope: DayScope,
-        options: ExportOptions
+        options: ExportOptions,
+        passanten: [Passant] = []
     ) async -> ExportDocument {
         let title = gebiet.displayName
         let place = gebiet.districtOrCity
@@ -124,10 +165,18 @@ enum DayExportService {
                 unitsData: $0.unitsData
             )
         }
+        let rawPassanten = passanten.map {
+            RawExportPassant(
+                note: $0.note,
+                outcome: $0.outcome,
+                revisitAt: $0.revisitAt,
+                createdAt: $0.createdAt
+            )
+        }
         return await Task.detached(priority: .userInitiated) {
             build(
                 title: title, place: place, dateRange: dateRange, legacyDateLabel: legacyDateLabel,
-                isTwoDay: isTwoDay, raw: raw, scope: scope, options: options
+                isTwoDay: isTwoDay, raw: raw, rawPassanten: rawPassanten, scope: scope, options: options
             )
         }.value
     }
@@ -139,6 +188,7 @@ enum DayExportService {
         legacyDateLabel: String,
         isTwoDay: Bool,
         raw: [RawExportHouse],
+        rawPassanten: [RawExportPassant],
         scope: DayScope,
         options: ExportOptions
     ) -> ExportDocument {
@@ -230,6 +280,20 @@ enum DayExportService {
                 < ($1.recordedAt ?? .distantFuture, $1.address)
         }
 
+        // Street encounters, oldest first. The note follows the same toggle as
+        // house notes: without it the row is just "Passant — Dabei".
+        let exportedPassanten = rawPassanten
+            .sorted { $0.createdAt < $1.createdAt }
+            .map { passant in
+                ExportPassant(
+                    note: options.includeNotes
+                        ? passant.note.trimmingCharacters(in: .whitespacesAndNewlines) : "",
+                    result: passant.outcome?.title ?? "Noch kein Status",
+                    revisitAt: passant.outcome == .later ? passant.revisitAt : nil,
+                    recordedAt: passant.createdAt
+                )
+            }
+
         let scopeLabel: String
         switch scope {
         case .day1: scopeLabel = "Tag 1"
@@ -245,6 +309,7 @@ enum DayExportService {
             scopeLabel: scopeLabel,
             generatedAt: .now,
             houses: exported,
+            passanten: exportedPassanten,
             summary: summary,
             includedHouses: included,
             totalHouses: raw.count,
@@ -299,6 +364,17 @@ enum DayExportService {
             }
             if !house.note.isEmpty {
                 lines.append("    Notiz: \(house.note)")
+            }
+        }
+        if !document.passanten.isEmpty {
+            lines.append("")
+            lines.append("Passanten:")
+            for passant in document.passanten {
+                var row = "· \(passant.note.isEmpty ? "Passant" : passant.note) — \(passant.result)"
+                if let revisitAt = passant.revisitAt {
+                    row += " (zurück \(revisitAt.formatted(date: .omitted, time: .shortened)))"
+                }
+                lines.append(row)
             }
         }
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -467,6 +543,20 @@ private struct PDFRenderer {
             y = drawHouse(house, from: y)
         }
 
+        if !document.passanten.isEmpty {
+            if !fits(34) { newPage() }
+            y += 8
+            y += draw(
+                "Passanten",
+                at: CGRect(x: margin, y: y, width: contentWidth, height: 20),
+                size: 12, weight: .semibold, color: ink
+            ) + 4
+            for passant in document.passanten {
+                if !fits(passantHeight(passant)) { newPage() }
+                y = drawPassant(passant, from: y)
+            }
+        }
+
         drawFooter(pageIndex: pageIndex)
         return pageIndex
     }
@@ -544,6 +634,46 @@ private struct PDFRenderer {
             height += measure("Notiz: " + house.note, width: addressColumnWidth() - doorIndent, size: 9) + 3
         }
         return height + 6
+    }
+
+    private func passantHeight(_ passant: ExportPassant) -> CGFloat {
+        var height = max(
+            measure(passant.note.isEmpty ? "Passant" : passant.note, width: addressColumnWidth(), size: 10.5),
+            measure(passant.result, width: resultColumnWidth, size: 10.5)
+        ) + 6
+        if passant.revisitAt != nil { height += 12 + 3 }
+        return height + 6
+    }
+
+    private func drawPassant(_ passant: ExportPassant, from top: CGFloat) -> CGFloat {
+        var y = top + 4
+        let addressWidth = addressColumnWidth()
+        let addressX = margin + addressIndent
+        let resultX = pageSize.width - margin - resultColumnWidth
+
+        let noteHeight = draw(
+            passant.note.isEmpty ? "Passant" : passant.note,
+            at: CGRect(x: addressX, y: y, width: addressWidth, height: 40),
+            size: 10.5, color: ink
+        )
+        _ = draw(
+            passant.result,
+            at: CGRect(x: resultX, y: y, width: resultColumnWidth, height: 20),
+            size: 10.5, color: secondaryInk, alignment: .right
+        )
+        y += max(noteHeight, 13) + 3
+
+        if let revisitAt = passant.revisitAt {
+            y += draw(
+                "Zurück " + revisitAt.formatted(date: .omitted, time: .shortened),
+                at: CGRect(x: addressX + doorIndent, y: y, width: addressWidth - doorIndent, height: 20),
+                size: 9.5, color: secondaryInk
+            ) + 3
+        }
+
+        y += 5
+        drawRule(at: y, color: UIColor(white: 0.9, alpha: 1))
+        return y + 1
     }
 
     private func drawHouse(_ house: ExportHouse, from top: CGFloat) -> CGFloat {

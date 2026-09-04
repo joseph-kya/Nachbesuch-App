@@ -376,6 +376,26 @@ struct MapPinTests {
         #expect(MapPinSnapshotBuilder.removing(base, ids: []).pinsByID.count == 2)
     }
 
+    /// Every outcome (and none) bakes exactly one disc artwork. Headless proof
+    /// that the pin factory covers the full vocabulary without crashing.
+    @Test("Passanten-Artwork existiert für jedes Ergebnis")
+    @MainActor
+    func passantArtworkBuildsForEveryOutcome() {
+        let outcomes: [VisitOutcome?] = [nil, .notHome, .earlyNo, .lateNo, .joined, .later]
+        for outcome in outcomes {
+            let view = PassantPinView(
+                annotation: PassantAnnotation(pin: PassantPin(
+                    id: UUID(),
+                    coordinate: CLLocationCoordinate2D(latitude: 48.2, longitude: 16.3),
+                    outcome: outcome,
+                    note: "Test"
+                )),
+                reuseIdentifier: PassantPinView.reuseIdentifier
+            )
+            #expect(view.image != nil)
+        }
+    }
+
     /// Tapping the line inserts between the neighbours — never just at the end.
     /// Pure screen geometry, so the rule holds without a map underneath.
     @Test("Linie antippen fügt zwischen den Nachbarn ein")
