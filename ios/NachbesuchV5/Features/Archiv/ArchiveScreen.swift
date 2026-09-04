@@ -63,6 +63,9 @@ struct ArchiveScreen: View {
     /// themselves are read in batches by `rebuildIndex`, off this context, and dropped.
     @State private var houseCount = 0
     @State private var builtIndexKey: IndexKey?
+    /// Street encounters per territory. Territories, not houses, so one cheap
+    /// indexed count each — the same reason `houseCount` exists as a number.
+    @State private var passantCounts: [UUID: Int] = [:]
 
 
     enum ArchiveFilter: String, CaseIterable, Identifiable {
@@ -163,6 +166,7 @@ struct ArchiveScreen: View {
         }
         .task {
             refreshHouseCount()
+            refreshPassantCounts()
             refreshAutoBackup()
         }
         .task(id: IndexTaskKey(index: indexKey, isActive: isActive)) {
@@ -180,6 +184,7 @@ struct ArchiveScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
             dataVersion &+= 1
             refreshHouseCount()
+            refreshPassantCounts()
             refreshAutoBackup()
         }
     }
@@ -218,7 +223,8 @@ struct ArchiveScreen: View {
                     BalanceSection(
                         gebiet: activeGebiet,
                         entry: index.entry(for: activeGebiet.id),
-                        scope: $scope
+                        scope: $scope,
+                        passantCount: passantCounts[activeGebiet.id] ?? 0
                     )
                     .padding(.horizontal, AppSpacing.regular)
                     }
@@ -541,6 +547,20 @@ struct ArchiveScreen: View {
     /// Keeps `indexKey` honest without keeping the rows.
     private func refreshHouseCount() {
         houseCount = (try? modelContext.fetchCount(FetchDescriptor<House>())) ?? houseCount
+    }
+
+    /// Street encounters per territory for the balance row. One indexed count
+    /// per territory; territories are few, houses are many.
+    private func refreshPassantCounts() {
+        var counts: [UUID: Int] = [:]
+        counts.reserveCapacity(gebiete.count)
+        for gebiet in gebiete {
+            let id = gebiet.id
+            counts[id] = (try? modelContext.fetchCount(
+                FetchDescriptor<Passant>(predicate: #Predicate { $0.gebietID == id })
+            )) ?? passantCounts[id] ?? 0
+        }
+        passantCounts = counts
     }
 
     /// Picks up a launch backup that finished after this screen appeared.

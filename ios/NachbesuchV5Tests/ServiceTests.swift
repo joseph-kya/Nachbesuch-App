@@ -696,3 +696,34 @@ struct DistanceSortTests {
         #expect(unknown.formattedDistance == nil, "Ohne Standort keine Entfernung")
     }
 }
+
+@Suite("Straßen-Aufklappzustand")
+struct StreetCollapseTests {
+
+    private func row(street: String, completed: Int) -> HouseRowModel {
+        HouseRowModel(
+            id: UUID(), address: "\(street) 1", note: "", street: street,
+            houseNumber: "1", shortAddress: "\(street) 1",
+            markerOutcome: nil, unitCount: 1, completedCount: completed,
+            followUpCount: 0, joinedCount: 0, laterCount: 0, openCount: 1 - completed,
+            createdAt: .now, searchText: "", latitude: 0, longitude: 0,
+            recordedAt: nil, nextRevisitAt: nil
+        )
+    }
+
+    @Test("Nur unberührte Straßen starten zugeklappt")
+    func untouchedStreetsStartCollapsed() {
+        let collapsed = HouseListBuilder.initiallyCollapsedSectionIDs(rows: [
+            row(street: "Offen", completed: 1),
+            row(street: "Offen", completed: 0),
+            row(street: "Neu", completed: 0),
+        ])
+        #expect(!collapsed.contains("street:Offen"), "Erste Eintragung öffnet die Straße")
+        #expect(collapsed.contains("street:Neu"))
+    }
+
+    @Test("Leere Liste klappt nichts zu")
+    func emptyListCollapsesNothing() {
+        #expect(HouseListBuilder.initiallyCollapsedSectionIDs(rows: []).isEmpty)
+    }
+}

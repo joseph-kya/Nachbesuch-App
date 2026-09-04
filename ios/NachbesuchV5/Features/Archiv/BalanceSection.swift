@@ -9,6 +9,9 @@ struct BalanceSection: View {
     let gebiet: Gebiet
     let entry: ArchiveEntry?
     @Binding var scope: DayScope
+    /// Street encounters recorded in this territory. Shown as its own row when
+    /// non-zero — like every figure here, only results that occurred.
+    var passantCount: Int = 0
 
     private var tally: OutcomeTally {
         guard let entry else { return .empty }
@@ -52,6 +55,22 @@ struct BalanceSection: View {
                     revisitSummary(entry: entry)
                         .transition(.blockSwap(reduceMotion: reduceMotion))
                 }
+
+                if passantCount > 0 {
+                    HStack(spacing: AppSpacing.snug) {
+                        Image(systemName: "person.fill")
+                            .foregroundStyle(.secondary)
+                        Text("\(passantCount) \(passantCount == 1 ? "Passant" : "Passanten") erfasst")
+                            .font(.subheadline.weight(.medium))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentPanel(cornerRadius: AppRadius.control)
+                    .transition(.blockSwap(reduceMotion: reduceMotion))
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(passantCount) \(passantCount == 1 ? "Passant" : "Passanten") erfasst")
+                }
             }
         }
         .padding(14)
@@ -72,6 +91,7 @@ struct BalanceSection: View {
         let isTwoDay: Bool
         let houseCount: Int
         let damagedHouseCount: Int
+        let passantCount: Int
         let tally: OutcomeTally
     }
 
@@ -81,6 +101,7 @@ struct BalanceSection: View {
             isTwoDay: gebiet.isTwoDay,
             houseCount: entry?.houseCount ?? 0,
             damagedHouseCount: entry?.damagedHouseCount ?? 0,
+            passantCount: passantCount,
             tally: tally
         )
     }

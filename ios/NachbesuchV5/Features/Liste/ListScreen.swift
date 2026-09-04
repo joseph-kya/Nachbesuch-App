@@ -28,6 +28,10 @@ struct ListScreen: View {
     @State private var sections: [StreetSection] = []
     @State private var counts: [ListFilter: Int] = [:]
     @State private var collapsedSections: Set<String> = []
+    /// The territory the collapse state was defaulted for. Data saves rebuild
+    /// the corpus constantly and must never clobber manual toggles — only a
+    /// territory switch re-seeds the defaults.
+    @State private var collapseDefaultsTerritory: UUID?
 
     @State private var searchText = ""
     @State private var debouncedQuery = ""
@@ -389,6 +393,7 @@ struct ListScreen: View {
             rows = []
             sections = []
             counts = [:]
+            collapseDefaultsTerritory = nil
             builtCorpusKey = key
             return
         }
@@ -414,6 +419,10 @@ struct ListScreen: View {
         rows = built
         counts = HouseListBuilder.counts(for: built)
         recomputeSections()
+        if collapseDefaultsTerritory != territoryID {
+            collapseDefaultsTerritory = territoryID
+            collapseUntouchedStreets()
+        }
         builtCorpusKey = key
     }
 
@@ -450,6 +459,13 @@ struct ListScreen: View {
 
     private func recomputeSections() {
         sections = makeSections(filter: filter)
+    }
+
+    /// Streets open where work already happened; untouched streets start shut.
+    /// Runs once per territory — saves rebuild the corpus constantly and must
+    /// never clobber manual toggles, and scope switches keep them too.
+    private func collapseUntouchedStreets() {
+        collapsedSections = HouseListBuilder.initiallyCollapsedSectionIDs(rows: rows)
     }
 
     private func makeSections(filter: ListFilter) -> [StreetSection] {

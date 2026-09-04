@@ -331,4 +331,16 @@ nonisolated enum HouseListBuilder {
         }
         return result
     }
+
+    /// Section ids that start shut: streets where nobody recorded anything yet.
+    /// The list opens where work already happened. Derived from the street
+    /// grouping itself, never from the distance/time views, whose single
+    /// synthetic section must not decide for the streets.
+    static func initiallyCollapsedSectionIDs(rows: [HouseRowModel]) -> Set<String> {
+        Set(
+            sections(from: sort(rows))
+                .filter { $0.rows.allSatisfy { $0.completedCount == 0 } }
+                .map(\.id)
+        )
+    }
 }

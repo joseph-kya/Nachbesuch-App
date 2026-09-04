@@ -557,15 +557,6 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         return max((mapView.region.span.latitudeDelta * 111_320) / height, 0.0001)
     }
 
-    /// The visible rect plus a margin, so a pin that is one gesture away from
-    /// coming on screen is already drawn at the right size when it arrives.
-    private func paddedVisibleRect(_ mapView: MKMapView) -> MKMapRect {
-        mapView.visibleMapRect.insetBy(
-            dx: -mapView.visibleMapRect.width * 0.25,
-            dy: -mapView.visibleMapRect.height * 0.25
-        )
-    }
-
     // MARK: - Pin scale
 
     /// How big the pins are drawn at the current zoom.
@@ -591,16 +582,47 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     /// Cheap enough to run on every frame of a gesture, so the size tracks the
     /// pinch instead of snapping once the camera stops. Early-outs on the common
     /// frame, where the tier has not changed at all.
+    ///
+    /// Rapid successive flips coalesce: a finger hovering at a tier boundary
+    /// used to flip every realised pin back and forth every frame — thousands
+    /// of image swaps per second for a change nobody can see settle. A flip
+    /// applies at most every 0.2 s mid-gesture and immediately when the camera
+    /// settles, so sizes still track the pinch live. Steady state stays a pure
+    /// function of zoom — deliberately no hysteresis bands, which would make
+    /// the same zoom show different sizes depending on pinch direction.
+    private var pendingScale: PinScale?
+    private var lastScaleApplied: Date = .distantPast
+    private static let scaleCoalesceInterval: TimeInterval = 0.2
+
     private func updatePinScale(_ mapView: MKMapView) {
         let metersAcross = mapView.region.span.latitudeDelta * 111_320
         let next = Self.scale(forMetersAcross: metersAcross)
-        guard next != pinScale else { return }
-        pinScale = next
+        guard next != pinScale else {
+            pendingScale = nil
+            return
+        }
+        pendingScale = next
+        guard Date.now.timeIntervalSince(lastScaleApplied) >= Self.scaleCoalesceInterval else { return }
+        applyPinScale(next, mapView: mapView)
+    }
 
+    /// Applies a coalesced tier change the moment the gesture ends, so sizes
+    /// land exactly instead of up to 0.2 s later.
+    private func flushPendingScale(_ mapView: MKMapView) {
+        guard let pending = pendingScale, pending != pinScale else { return }
+        applyPinScale(pending, mapView: mapView)
+    }
+
+    private func applyPinScale(_ next: PinScale, mapView: MKMapView) {
+        pinScale = next
+        pendingScale = nil
+        lastScaleApplied = Date.now
         // Push to what is on screen for an immediate redraw. Correctness does not
         // depend on this loop — every view re-reads the scale in `prepareForDisplay`
         // and in `configure`, so anything missed here fixes itself on redisplay.
-        for annotation in mapView.annotations(in: paddedVisibleRect(mapView)) {
+        // Plain visible rect, not the padded one: redisplay covers stragglers by
+        // design, and the margin pulled ~50 % more views into every flip.
+        for annotation in mapView.annotations(in: mapView.visibleMapRect) {
             guard let house = annotation as? HouseAnnotation,
                   let view = mapView.view(for: house) as? HousePinView else { continue }
             view.refreshScale()
@@ -804,6 +826,7 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
 
     func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
         updatePinScale(mapView)
+        flushPendingScale(mapView)
         refreshPuck()
         onCameraIdle?(mapView.region)
     }
