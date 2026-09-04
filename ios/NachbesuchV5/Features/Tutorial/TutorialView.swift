@@ -175,15 +175,16 @@ struct TutorialPage: Identifiable {
 
 private struct TutorialCard: View {
     @Environment(\.appAccent) private var accent
+    @ScaledMetric(relativeTo: .largeTitle) private var heroSize: CGFloat = 44
     let page: TutorialPage
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppSpacing.regular) {
                 Image(systemName: page.systemImage)
-                    .font(.system(size: 44))
+                    .font(.system(size: heroSize))
                     .foregroundStyle(.white)
-                    .frame(width: 88, height: 88)
+                    .frame(width: heroSize * 2, height: heroSize * 2)
                     .background(accent.gradient, in: Circle())
                     .accessibilityHidden(true)
 

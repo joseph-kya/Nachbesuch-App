@@ -977,13 +977,14 @@ struct GebietRow: View, Equatable {
 
 struct ShareSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @ScaledMetric(relativeTo: .largeTitle) private var checkSize: CGFloat = 46
     let url: URL
 
     var body: some View {
         NavigationStack {
             VStack(spacing: AppSpacing.regular) {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 46))
+                    .font(.system(size: checkSize))
                     .foregroundStyle(Color.doneTone)
                 Text("Backup erstellt")
                     .font(.headline)
