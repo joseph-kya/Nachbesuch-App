@@ -599,7 +599,29 @@ struct ApartmentStatusPreview: View {
         }
         .padding(AppSpacing.regular)
         .frame(minWidth: 260, maxWidth: 340)
-        .background(.regularMaterial)
+        .legacyPreviewSurface()
+    }
+}
+
+/// Long-press preview over the map. A material samples the live tiles every
+/// frame — on an iPhone 11 the least legible and most expensive option, same
+/// finding as the floating chrome. Opaque on the legacy branch, like it.
+private struct LegacyPreviewSurface: ViewModifier {
+    func body(content: Content) -> some View {
+        if LegacyChrome.isActive {
+            let shape = RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+            content
+                .background(Color(uiColor: .secondarySystemBackground), in: shape)
+                .overlay { shape.strokeBorder(Color(uiColor: .separator), lineWidth: 0.5) }
+        } else {
+            content.background(.regularMaterial)
+        }
+    }
+}
+
+private extension View {
+    func legacyPreviewSurface() -> some View {
+        modifier(LegacyPreviewSurface())
     }
 }
 
