@@ -37,12 +37,13 @@ object BilanzStats {
         for (house in houses) {
             overall += house.tally(DayScope.COMBINED)
             day1 += house.tally(DayScope.DAY_1)
-            day2 += house.tally(DayScope.DAY_2)
+            val targets = house.units.filter { it.outcome == null || it.outcome.isOpenWork || it.day2Outcome != null }
+            day2 += OutcomeTally.from(targets, DayScope.DAY_2, recordedOnly = true)
             for (door in house.units) {
                 if (door.isPendingRevisit) pendingRevisits++
                 // A revisit target is any door never answered on day 1, or answered
                 // with something that leaves it open — "niemand da" or "später".
-                if (door.outcome == null || door.outcome.isOpenWork) revisitTargets++
+                if (door.outcome == null || door.outcome.isOpenWork || door.day2Outcome != null) revisitTargets++
             }
         }
         return BilanzSnapshot(houses.size, overall, day1, day2, pendingRevisits, revisitTargets)
@@ -71,15 +72,18 @@ data class TerritorySummary(
 )
 
 object TerritorySummarizer {
-    fun summarize(gebiete: List<Gebiet>, allHouses: List<House>): List<TerritorySummary> = gebiete.map { territory ->
-        val houses = allHouses.filter { it.gebietID == territory.id }
-        val bilanz = BilanzStats.snapshot(houses)
-        val dateText = listOf(territory.dateLabel(), territory.formattedDateRange()).distinct().joinToString(" ")
-        TerritorySummary(
-            territory = territory,
-            houseCount = houses.size,
-            bilanz = bilanz,
-            searchText = listOf(territory.displayName, territory.districtOrCity, dateText).joinToString(" ")
-        )
+    fun summarize(gebiete: List<Gebiet>, allHouses: List<House>): List<TerritorySummary> {
+        val housesByTerritory = allHouses.groupBy { it.gebietID }
+        return gebiete.map { territory ->
+            val houses = housesByTerritory[territory.id].orEmpty()
+            val bilanz = BilanzStats.snapshot(houses)
+            val dateText = listOf(territory.dateLabel(), territory.formattedDateRange()).distinct().joinToString(" ")
+            TerritorySummary(
+                territory = territory,
+                houseCount = houses.size,
+                bilanz = bilanz,
+                searchText = listOf(territory.displayName, territory.districtOrCity, dateText).joinToString(" ")
+            )
+        }
     }
 }

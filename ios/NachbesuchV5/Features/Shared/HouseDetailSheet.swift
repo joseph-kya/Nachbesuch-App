@@ -317,7 +317,7 @@ struct HouseDetailSheet: View {
 
     private func apply(_ outcome: VisitOutcome, to door: DoorResult, current: VisitOutcome?) {
         house.setOutcome(current == outcome ? nil : outcome, for: door.id, day: writeDay)
-        save()
+        save(feedback: true)
         // Any non-"Später" answer settles the door, so its pending reminder has to
         // go — otherwise a phone buzzes at 18:00 for a household that joined at 17.
         cancelReminder(for: door.id)
@@ -417,9 +417,9 @@ struct HouseDetailSheet: View {
         save()
     }
 
-    private func save() {
-        if modelContext.save(reporting: notices, context: "Änderung konnte nicht gespeichert werden") {
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+    private func save(feedback: Bool = false) {
+        if modelContext.save(reporting: notices, context: "Änderung konnte nicht gespeichert werden"), feedback {
+            UISelectionFeedbackGenerator().selectionChanged()
         }
     }
 }

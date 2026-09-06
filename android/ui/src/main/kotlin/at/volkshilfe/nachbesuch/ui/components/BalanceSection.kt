@@ -95,7 +95,7 @@ private fun ProgressCard(tally: OutcomeTally) {
             .padding(12.dp)
             .clearAndSetSemantics {
                 contentDescription = "Fortschritt"
-                stateDescription = "${tally.completed} von ${tally.unitCount} Türen erledigt"
+                stateDescription = "${tally.completed} von ${tally.unitCount} Türen erfasst"
             },
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
@@ -105,7 +105,7 @@ private fun ProgressCard(tally: OutcomeTally) {
                 style = MaterialTheme.typography.headlineLarge
             )
             Text(
-                " % erledigt",
+                " % erfasst",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 3.dp)

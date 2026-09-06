@@ -44,16 +44,13 @@ object MapPinSnapshotBuilder {
     fun build(houses: List<House>, scope: DayScope): PreparedMapSnapshot =
         PreparedMapSnapshot(houses.associate { house ->
             val tally = house.tally(scope)
-            val hasRevisit = house.units.any {
-                it.isPendingRevisit || it.displayOutcome(scope) == VisitOutcome.NOT_HOME
-            }
             val marker = markerOutcome(house.units, scope)
             house.id to MapPinSnapshot(
                 id = house.id, address = house.address, latitude = house.latitude,
                 longitude = house.longitude, markerOutcome = marker,
                 unitCount = tally.unitCount, completedCount = tally.completed,
                 followUpCount = house.units.count {
-                    it.isPendingRevisit || it.displayOutcome(scope) == VisitOutcome.NOT_HOME
+                    it.isOpen(scope) && it.displayOutcome(scope)?.isOpenWork == true
                 }, joinedCount = tally.joined,
                 earlyNoCount = tally.earlyNo, lateNoCount = tally.lateNo
             )

@@ -8,6 +8,72 @@ import Testing
 /// still restore.
 @Suite("Passant-Backup")
 struct PassantBackupTests {
+    @Test("Archiv-Sicherung enthält alle Datentypen und lässt sich wiederherstellen")
+    @MainActor
+    func archiveBackupIncludesEntireStore() async throws {
+        let source = try container()
+        let territoryID = try seed(source)
+        let context = ModelContext(source)
+        let house = House(address: "Teststraße 1", latitude: 48.2, longitude: 16.3,
+                          gebietID: territoryID, isApartmentBuilding: false, unitCount: 1)
+        context.insert(house)
+        try context.save()
+
+        // Exercise the entry point used by ArchiveScreen, not a hand-picked array.
+        let url = try await BackupService.makeBackup(in: context)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let backup = try await BackupService.readBackup(from: url)
+        #expect(backup.gebiete.count == 1)
+        #expect(backup.houses.count == 1)
+        #expect(backup.passanten.count == 1)
+
+        let restored = try container()
+        let result = try await BackupService.importBackup(backup, into: ModelContext(restored))
+        #expect(result.importedGebiete == 1)
+        #expect(result.importedHouses == 1)
+        #expect(result.importedPassanten == 1)
+        #expect(result.skippedHouses == 0)
+    }
+
+    @Test("Abgleich erhält Passanten-Termine und entfernt erledigte Begegnungen")
+    @MainActor
+    func reconciliationIncludesBookedEncounters() async throws {
+        let store = try container()
+        let territoryID = try seed(store)
+        let context = ModelContext(store)
+        let booked = Passant(note: "Termin", latitude: 48.2, longitude: 16.3, gebietID: territoryID)
+        booked.outcome = .later
+        booked.revisitAt = Date.now.addingTimeInterval(3600)
+        context.insert(booked)
+        let withoutTime = Passant(note: "Ohne Termin", latitude: 48.2, longitude: 16.3, gebietID: territoryID)
+        withoutTime.outcome = .later
+        context.insert(withoutTime)
+        let house = House(address: "Teststraße 1", latitude: 48.2, longitude: 16.3,
+                          gebietID: territoryID, isApartmentBuilding: false, unitCount: 1)
+        var door = try #require(house.units.first)
+        door.outcome = .later
+        door.revisitAt = booked.revisitAt
+        house.unitsData = try AppCoders.unitsEncoder().encode([door])
+        context.insert(house)
+        try context.save()
+
+        let candidates = try await HouseReadService(modelContainer: store).revisitCandidates()
+        #expect(candidates.count == 2)
+        let encounter = try #require(candidates.first { $0.houseID == booked.id })
+        #expect(encounter.doorID == booked.id)
+        #expect(encounter.day == 1)
+        #expect(encounter.date == booked.revisitAt)
+        #expect(encounter.address == booked.note)
+        #expect(ReminderService.plan(candidates, now: .now).scheduledCandidates.count == 2)
+
+        // A fresh reconciliation must read the persisted completion, not reschedule it.
+        booked.outcome = .joined
+        try context.save()
+        let afterCompletion = try await HouseReadService(modelContainer: store).revisitCandidates()
+        #expect(afterCompletion.count == 1)
+        #expect(afterCompletion.first?.houseID == house.id)
+    }
+
     private func container() throws -> ModelContainer {
         let schema = Schema(versionedSchema: SchemaV2.self)
         return try ModelContainer(

@@ -81,8 +81,8 @@ struct MapHost: UIViewRepresentable {
     let reduceMotion: Bool
     let dropHouseID: UUID?
     let cameraCommand: MapCameraCommand?
-    let userHeading: Double?
-    let userHeadingAccuracy: Double?
+    var userHeading: Double?
+    var userHeadingAccuracy: Double?
     /// Space occupied by the floating chrome, handed to MapKit as `layoutMargins`
     /// so its legal attribution, scale and compass stay clear of it.
     let chromeInsets: UIEdgeInsets
@@ -178,5 +178,19 @@ struct MapHost: UIViewRepresentable {
         )
 
         coordinator.applyCameraCommand(mapView, command: cameraCommand)
+    }
+}
+
+/// Compass updates belong to the map leaf. Reading the heading in MapScreen
+/// invalidated its menus, chrome and snapshot inputs on every compass sample.
+struct HeadingAwareMapHost: View {
+    @Environment(LocationService.self) private var location
+    let host: MapHost
+
+    var body: some View {
+        var updated = host
+        updated.userHeading = location.headingDegrees
+        updated.userHeadingAccuracy = location.headingAccuracy
+        return updated
     }
 }

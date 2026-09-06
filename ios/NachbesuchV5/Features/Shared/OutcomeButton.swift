@@ -18,7 +18,7 @@ struct OutcomeButton: View {
             VStack(spacing: 5) {
                 Text(outcome.emoji)
                     .font(.system(size: glyphSize))
-                    .scaleEffect(isSelected ? 1.12 : 1)
+                    .scaleEffect(isSelected && !reduceMotion ? 1.08 : 1)
                 Text(outcome.title)
                     .font(.subheadline.weight(.semibold))
                     .multilineTextAlignment(.center)
@@ -135,7 +135,7 @@ struct OutcomeGlyph: View {
         Image(systemName: outcome?.symbolName ?? "circle.dashed")
             .font(size)
             .foregroundStyle(outcome.displayTint)
-            .contentTransition(.symbolEffect(.replace.downUp))
+            .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace.downUp))
             .animation(.appFeedback(reduceMotion: reduceMotion), value: outcome)
             .accessibilityHidden(true)
     }

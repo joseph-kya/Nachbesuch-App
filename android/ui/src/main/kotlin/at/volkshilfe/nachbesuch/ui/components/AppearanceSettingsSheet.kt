@@ -1,5 +1,7 @@
 package at.volkshilfe.nachbesuch.ui.components
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -72,10 +74,11 @@ fun AppearanceSettingsSheet(
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow
     ) {
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 32.dp),
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text("Einstellungen", style = MaterialTheme.typography.headlineSmall)
+            PrivacySupportSection()
 
             SettingsGroup("Darstellung", Icons.Default.Brightness4) {
                 Row(

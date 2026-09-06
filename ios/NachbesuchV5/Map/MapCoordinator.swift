@@ -136,7 +136,7 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
 
         // Only the houses that actually changed need new payloads, so entering
         // selection mode with 5000 pins on screen touches two of them.
-        var dirty = changedHouseIDs
+        var dirty = contentChanged ? changedHouseIDs : []
         if selectionChanged {
             let before = previousSelection ?? []
             let after = selectedHouseIDs ?? []
@@ -148,7 +148,13 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
                 dirty.formUnion(after)
             }
         }
-        refresh(mapView, houseIDs: dirty.isEmpty ? nil : dirty)
+        // An empty selection delta means no work. It must not turn entering
+        // selection mode with zero selected houses into a repaint of every pin.
+        if contentChanged && changedHouseIDs.isEmpty {
+            refresh(mapView, houseIDs: nil)
+        } else if !dirty.isEmpty {
+            refresh(mapView, houseIDs: dirty)
+        }
     }
 
     /// Add/remove/move the annotation set to match the snapshot. Bulk operations

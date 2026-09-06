@@ -19,7 +19,11 @@
 - [x] Room schema v1 with frozen Gebiet/House blobs and `updatedAt` indexes
 - [x] DataStore camera persistence
 - [x] Apple-reference-date door blob codec and ISO backup models
-- [ ] Real iOS backup fixture round-trip (fixture still needs to be supplied)
+- [x] Shared iOS `LegacyV1Fixture.json` decode and v2 codec round-trip; legacy
+  notes, apartment flags, both outcomes and appointment timestamps preserved
+- [ ] End-to-end device restore and re-export across iOS and Android
+- [x] Reject unknown backup versions and files containing unsupported Passant
+  records before importing anything; v3 without encounters remains compatible
 - [ ] Corrupt-store recovery UI
 
 ## M3–M12 (current slice)

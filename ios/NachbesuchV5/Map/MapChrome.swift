@@ -94,7 +94,7 @@ struct StatStrip: View {
         layout {
             statItem(
                 value: stats.openCount,
-                unit: "offen",
+                unit: "Türen offen",
                 label: "offene Türen",
                 tint: stats.openCount > 0 ? VisitOutcome.notHome.tint : .green
             )

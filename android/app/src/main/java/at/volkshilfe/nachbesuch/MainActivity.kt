@@ -343,6 +343,7 @@ class MainActivity : ComponentActivity() {
         onExport: () -> Unit
     ) {
         val sections by viewModel.listSections.collectAsStateWithLifecycleCompat()
+        val listLoading by viewModel.listLoading.collectAsStateWithLifecycleCompat()
         val counts by viewModel.filterCounts.collectAsStateWithLifecycleCompat()
         val filter by viewModel.listFilter.collectAsStateWithLifecycleCompat()
         val sort by viewModel.listSort.collectAsStateWithLifecycleCompat()
@@ -355,6 +356,7 @@ class MainActivity : ComponentActivity() {
 
         ListScreen(
             state = ListScreenState(
+                isLoading = listLoading,
                 territoryName = gebiet?.displayName ?: "Kein Gebiet",
                 isTwoDay = gebiet?.isTwoDay == true,
                 scope = scope,
@@ -414,7 +416,7 @@ class MainActivity : ComponentActivity() {
     ) {
         val sections by viewModel.archiveSections.collectAsStateWithLifecycleCompat()
         val filter by viewModel.archiveFilter.collectAsStateWithLifecycleCompat()
-        val query by viewModel.query.collectAsStateWithLifecycleCompat()
+        val query by viewModel.archiveQuery.collectAsStateWithLifecycleCompat()
         val scope by viewModel.scope.collectAsStateWithLifecycleCompat()
         val activeID by viewModel.activeGebietID.collectAsStateWithLifecycleCompat()
         val activeSummary by viewModel.activeSummary.collectAsStateWithLifecycleCompat()
@@ -440,7 +442,7 @@ class MainActivity : ComponentActivity() {
                         isSelected = filter == value
                     )
                 },
-                onQuery = viewModel::setQuery,
+                onQuery = viewModel::setArchiveQuery,
                 onFilter = viewModel::setArchiveFilter,
                 onScope = viewModel::selectScope,
                 onSelect = { viewModel.selectGebiet(it) },

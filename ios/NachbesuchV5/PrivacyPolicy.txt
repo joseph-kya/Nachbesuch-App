@@ -1,0 +1,27 @@
+Daten und Berechtigungen
+Stand: 5. September 2026
+
+Nachbesuch hilft dir, Gebiete, Adressen, Besuche und Erinnerungen zu organisieren. Die App benötigt kein Benutzerkonto und enthält keine Werbung oder Analyse-SDKs. Sie betreibt keinen eigenen Synchronisationsserver.
+
+Auf deinem Gerät
+Gebiete, Adressen, Koordinaten, Besuchsergebnisse, Termine und eingegebene Notizen werden lokal gespeichert. Trage nur Informationen ein, die du für deine Arbeit speichern darfst. Gerätesicherungen können diese Daten je nach deinen Systemeinstellungen enthalten.
+
+Karten und Adressimport
+Apple Karten stellt Karten, Ortssuche und Geokodierung bereit. Bei deren Verwendung werden die dafür erforderlichen Such- und Kartenanfragen an Apple übermittelt. Bereits während der Eingabe können Suchvorschläge angefordert werden. Für Apple-Dienste gelten Apples Datenschutzhinweise.
+
+Beim Adressimport sendet die App die Koordinaten des von dir markierten Gebiets an einen Overpass-Dienst: overpass-api.de, overpass.kumi.systems oder lz4.overpass-api.de. Der jeweilige Betreiber erhält dabei auch die technisch notwendige IP-Adresse. Die Anfrage enthält keine Gesprächsnotizen oder Besuchsergebnisse. Die Verarbeitung von Serverprotokollen richtet sich nach den Regeln des jeweiligen Betreibers. OpenStreetMap liefert die Adressdaten.
+
+Standort
+Die Standortberechtigung ist optional und wird für deine Position auf der Karte und die Entfernungssortierung verwendet. Nachbesuch fordert keinen dauerhaften Hintergrundstandort an. Du kannst die Berechtigung in den iOS-Einstellungen ändern.
+
+Erinnerungen
+Mit deiner Zustimmung stellt iOS lokale Mitteilungen zu geplanten Besuchen und täglichen Erinnerungen zu. Diese können Adressen oder eingegebene Texte anzeigen, auch auf dem Sperrbildschirm. Du kannst Mitteilungen und Vorschauen in den iOS-Einstellungen einschränken.
+
+Sicherung und Weitergabe
+Die App legt automatische Sicherungsdateien im Dokumentenbereich der App an und behält bis zu sieben automatische Sicherungen. Manuelle JSON-Sicherungen und PDF- oder Textexporte können personenbezogene Inhalte enthalten. Eine Weitergabe über das Teilen-Menü erfolgt auf deine Initiative an die von dir gewählte App oder Person. Diagnoseexporte enthalten keine Adress- oder Gesprächsnotiztexte.
+
+Löschen
+Du kannst Einträge und Gebiete in der App löschen. Bereits erstellte Sicherungen und Exporte werden dadurch nicht nachträglich geändert. Entferne nicht mehr benötigte Dateien zusätzlich in der Dateien-App sowie bei Empfängern und aus eigenen Sicherungen. Das Entfernen der App löscht ihre lokalen App-Daten; bereits exportierte Dateien oder Gerätesicherungen können bestehen bleiben.
+
+Kontakt
+Die veröffentlichten Anbieter- und Kontaktangaben sowie die vollständige Datenschutzerklärung findest du unter „Datenschutz & Support“ und im App-Store-Eintrag.

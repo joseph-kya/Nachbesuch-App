@@ -3,6 +3,8 @@ package at.volkshilfe.nachbesuch.feature.list
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,7 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Favorite
@@ -32,15 +34,13 @@ import androidx.compose.material.icons.filled.HomeWork
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,6 +65,7 @@ import at.volkshilfe.nachbesuch.domain.model.DayScope
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
 import at.volkshilfe.nachbesuch.domain.revisit.RevisitPlanner
 import at.volkshilfe.nachbesuch.feature.shared.RevisitTimeSheet
+import at.volkshilfe.nachbesuch.ui.components.AppSearchField
 import at.volkshilfe.nachbesuch.ui.components.FilterBar
 import at.volkshilfe.nachbesuch.ui.components.FilterChipSpec
 import at.volkshilfe.nachbesuch.ui.components.MinTouchTarget
@@ -72,6 +73,7 @@ import at.volkshilfe.nachbesuch.ui.components.OutcomeGlyph
 import at.volkshilfe.nachbesuch.ui.components.UndoBanner
 import at.volkshilfe.nachbesuch.ui.status.icon
 import at.volkshilfe.nachbesuch.ui.status.tint
+import at.volkshilfe.nachbesuch.ui.theme.glossySurface
 import at.volkshilfe.nachbesuch.ui.theme.RadiusCard
 import at.volkshilfe.nachbesuch.ui.theme.RadiusControl
 import at.volkshilfe.nachbesuch.ui.theme.RadiusRow
@@ -143,13 +145,13 @@ fun ListScreen(
                 }
             }
             Spacer(Modifier.height(10.dp))
-            SearchField(state.query, state.onQuery)
+            AppSearchField(state.query, state.onQuery, "Adresse oder Notiz")
             Spacer(Modifier.height(10.dp))
             if (state.isTwoDay) {
                 DayScopeRow(state.scope, state.onScope)
                 Spacer(Modifier.height(8.dp))
             }
-            FilterBar(
+            if (!state.isLoading) FilterBar(
                 chips = state.chips,
                 contextLabel = "Filter",
                 onSelect = { state.onFilter(ListFilter.from(it)) },
@@ -158,7 +160,18 @@ fun ListScreen(
             Spacer(Modifier.height(10.dp))
         }
 
-        if (state.sections.isEmpty()) {
+        if (state.isLoading) {
+            Column(
+                Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.height(12.dp))
+                Text("Adressen werden geladen …", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else if (state.sections.isEmpty()) {
             EmptyState(state.filter, state.query)
         } else {
             LazyColumn(
@@ -169,7 +182,7 @@ fun ListScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 state.sections.forEach { section ->
-                    item(key = section.id) {
+                    item(key = "street:${section.id}", contentType = "street") {
                         StreetHeader(
                             section = section,
                             isExpanded = section.id !in state.collapsedSections,
@@ -177,9 +190,10 @@ fun ListScreen(
                         )
                     }
                     if (section.id !in state.collapsedSections) {
-                        items(section.rows, key = { it.id }) { row ->
+                        items(section.rows, key = { "house:${it.id}" }, contentType = { "house" }) { row ->
                             HouseRowItem(
                                 row = row,
+                                modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
                                 onClick = { onHouseSelected(row.id) },
                                 onQuickStatus = { outcome -> onQuickStatus(row, outcome) },
                                 onQuickLater = { revisitTarget = row }
@@ -210,39 +224,6 @@ fun ListScreen(
     }
 }
 
-@Composable
-private fun SearchField(query: String, onQuery: (String) -> Unit) {
-    TextField(
-        value = query,
-        onValueChange = onQuery,
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-        shape = RoundedCornerShape(RadiusControl),
-        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-        trailingIcon = {
-            if (query.isNotEmpty()) {
-                Icon(
-                    Icons.Default.Clear,
-                    contentDescription = "Suche löschen",
-                    modifier = Modifier
-                        .size(MinTouchTarget)
-                        .clickable { onQuery("") }
-                        .padding(14.dp)
-                )
-            }
-        },
-        placeholder = { Text("Adresse oder Notiz suchen") },
-        // The stock TextField underline is the one Material detail that never
-        // matched this app's rounded chrome.
-        colors = TextFieldDefaults.colors(
-            focusedIndicatorColor = Color.Transparent,
-            unfocusedIndicatorColor = Color.Transparent,
-            disabledIndicatorColor = Color.Transparent,
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-        )
-    )
-}
 
 @Composable
 private fun SortMenu(sort: ListSort, canSortByDistance: Boolean, onSort: (ListSort) -> Unit) {
@@ -252,6 +233,7 @@ private fun SortMenu(sort: ListSort, canSortByDistance: Boolean, onSort: (ListSo
             Modifier
                 .clip(RoundedCornerShape(14.dp))
                 .clickable { expanded = true }
+                .heightIn(min = MinTouchTarget)
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -302,8 +284,8 @@ private fun DayScopeRow(scope: DayScope, onScope: (DayScope) -> Unit) {
                         if (isSelected) MaterialTheme.colorScheme.surfaceContainerLowest else Color.Transparent,
                         RoundedCornerShape(12.dp)
                     )
-                    .clickable { onScope(value) }
-                    .heightIn(min = 38.dp),
+                    .selectable(selected = isSelected, role = Role.Tab, onClick = { onScope(value) })
+                    .heightIn(min = MinTouchTarget),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -336,7 +318,7 @@ private fun StreetHeader(section: StreetSection, isExpanded: Boolean, onToggle: 
                 contentDescription = section.title
                 stateDescription = "${section.houseCount} ${if (section.houseCount == 1) "Haus" else "Häuser"}, " +
                     "${section.completedCount} von " +
-                    "${section.unitCount} Türen erledigt, " + if (isExpanded) "ausgeklappt" else "eingeklappt"
+                    "${section.unitCount} Türen erfasst, " + if (isExpanded) "ausgeklappt" else "eingeklappt"
             },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -383,17 +365,18 @@ private fun StreetHeader(section: StreetSection, isExpanded: Boolean, onToggle: 
 @Composable
 private fun HouseRowItem(
     row: HouseRow,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onQuickStatus: (VisitOutcome) -> Unit,
     onQuickLater: () -> Unit
 ) {
     var showQuick by remember { mutableStateOf(false) }
-    Box {
+    Box(modifier) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(RadiusRow))
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(RadiusRow))
+                .glossySurface(RoundedCornerShape(RadiusRow))
                 .combinedClickableCompat(onClick = onClick, onLongClick = { showQuick = true })
                 .padding(14.dp)
                 .heightIn(min = MinTouchTarget),
@@ -435,6 +418,12 @@ private fun HouseRowItem(
                     )
                 }
             }
+            Icon(
+                Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
         }
         // Long-press quick status, the Android-native equivalent of the iOS
         // swipe action: a swipe on a row inside a vertically scrolling list is

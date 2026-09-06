@@ -121,7 +121,7 @@ struct BalanceSection: View {
                     .fontDesign(.rounded)
                     .monospacedDigit()
                     .contentTransition(.numericText(value: Double(percentComplete)))
-                Text("% erledigt")
+                Text("% erfasst")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
@@ -138,7 +138,7 @@ struct BalanceSection: View {
         .contentPanel(cornerRadius: AppRadius.control)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Fortschritt")
-        .accessibilityValue("\(tally.completed) von \(tally.unitCount) Türen erledigt")
+        .accessibilityValue("\(tally.completed) von \(tally.unitCount) Türen erfasst")
     }
 
     private var metrics: some View {

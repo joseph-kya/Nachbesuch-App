@@ -129,6 +129,7 @@ struct FilterBar: View {
                 .imageScale(.small)
                 .foregroundStyle(chip.isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(chip.tint))
             Text(chip.title)
+                .fixedSize(horizontal: true, vertical: false)
             if let count = chip.count {
                 Text("\(count)")
                     .monospacedDigit()

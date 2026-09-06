@@ -194,6 +194,15 @@ struct AppearanceSettingsSheet: View {
                         .sensoryFeedback(.selection, trigger: deleteAfterExportPrompt)
                     }
 
+                    settingsGroup("Über Nachbesuch", systemImage: "info.circle") {
+                        NavigationLink {
+                            AppInformationView()
+                        } label: {
+                            Label("Datenschutz & Support", systemImage: "hand.raised")
+                                .frame(minHeight: AppTouch.minimum)
+                        }
+                    }
+
                     Text("Die Einstellung gilt sofort für Karte, Liste und Archiv.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -206,7 +215,7 @@ struct AppearanceSettingsSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .task(id: dailyListRemindersEnabled) {
                 await ReminderService.applyDailyListReminders(enabled: dailyListRemindersEnabled)
-                notificationsAllowed = await ReminderService.ensureAuthorized()
+                notificationsAllowed = await ReminderService.isAuthorized()
             }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

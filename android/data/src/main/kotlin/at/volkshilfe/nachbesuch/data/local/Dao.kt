@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.Flow
 interface GebietDao {
     @Query("SELECT * FROM Gebiet ORDER BY day1Date DESC")
     fun observeAll(): Flow<List<GebietEntity>>
+    @Query("SELECT * FROM Gebiet ORDER BY day1Date DESC")
+    suspend fun readAll(): List<GebietEntity>
     @Query("SELECT * FROM Gebiet WHERE id = :id LIMIT 1")
     suspend fun find(id: String): GebietEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -41,6 +43,8 @@ interface HouseDao {
     fun observeForGebiet(gebietID: String): Flow<List<HouseEntity>>
     @Query("SELECT * FROM House ORDER BY createdAt ASC, id ASC")
     fun observeAll(): Flow<List<HouseEntity>>
+    @Query("SELECT * FROM House ORDER BY createdAt ASC, id ASC")
+    suspend fun readAll(): List<HouseEntity>
     @Query("SELECT * FROM House WHERE id = :id LIMIT 1")
     suspend fun find(id: String): HouseEntity?
     @Query("SELECT * FROM House WHERE gebietID = :gebietID ORDER BY updatedAt DESC LIMIT :limit")

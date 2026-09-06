@@ -25,6 +25,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,14 +53,16 @@ import at.volkshilfe.nachbesuch.ui.theme.RadiusCard
  */
 @Composable
 fun NoticeBanner(notice: NoticeCenter.Notice?, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+    var lastNotice by remember { mutableStateOf(notice) }
+    SideEffect { if (notice != null) lastNotice = notice }
     AnimatedVisibility(
         visible = notice != null,
-        enter = slideInVertically { -it } + fadeIn(),
-        exit = slideOutVertically { -it } + fadeOut(),
+        enter = slideInVertically(tween(220)) { -it / 3 } + fadeIn(tween(160)),
+        exit = slideOutVertically(tween(160)) { -it / 3 } + fadeOut(tween(140)),
         modifier = modifier
     ) {
         // Held so the text does not blank out mid-exit-animation.
-        val shown = notice ?: return@AnimatedVisibility
+        val shown = notice ?: lastNotice ?: return@AnimatedVisibility
         BannerSurface(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Icon(
@@ -112,13 +120,15 @@ fun UndoBanner(
     onUndo: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var lastLabel by remember { mutableStateOf(label) }
+    SideEffect { if (label != null) lastLabel = label }
     AnimatedVisibility(
         visible = label != null,
-        enter = slideInVertically { it } + fadeIn(),
-        exit = slideOutVertically { it } + fadeOut(),
+        enter = slideInVertically(tween(220)) { it / 3 } + fadeIn(tween(160)),
+        exit = slideOutVertically(tween(160)) { it / 3 } + fadeOut(tween(140)),
         modifier = modifier
     ) {
-        val shown = label ?: return@AnimatedVisibility
+        val shown = label ?: lastLabel ?: return@AnimatedVisibility
         BannerSurface(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(

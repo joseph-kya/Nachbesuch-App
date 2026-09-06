@@ -45,7 +45,6 @@ struct RootView: View {
     @AppStorage("appearance.mode") private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage("appearance.accent") private var accentRaw = AppAccent.volkshilfe.rawValue
     @AppStorage(ReminderSettings.unscheduledCountKey) private var unscheduledRevisits = 0
-    @AppStorage(ReminderSettings.dailyListKey) private var dailyListReminders = false
 
     private var selectedGebietID: UUID? {
         get { UUID(uuidString: selectedGebietIDString) }
@@ -110,6 +109,7 @@ struct RootView: View {
                 )
             }
         }
+        .sensoryFeedback(.selection, trigger: tab)
         .environment(location)
         // Both, always together: `.tint` drives the controls SwiftUI colours for us,
         // `appAccent` drives everything we tint by hand. Setting only one is what let
@@ -228,7 +228,6 @@ struct RootView: View {
         }
         let result = await ReminderService.reconcile(candidates)
         unscheduledRevisits = result.unscheduled + result.failed
-        await ReminderService.applyDailyListReminders(enabled: dailyListReminders)
     }
 
     /// Gives a brand-new install something to work with.

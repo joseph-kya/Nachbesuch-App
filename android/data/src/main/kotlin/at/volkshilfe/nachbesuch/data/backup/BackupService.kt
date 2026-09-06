@@ -20,6 +20,20 @@ class UnreadableHouseException(val address: String) :
     IllegalStateException("Unlesbares Haus: $address")
 
 class BackupService(private val database: AppDatabase) {
+    /** Export a consistent persisted snapshot, independent of UI subscriptions. */
+    suspend fun export(): String {
+        val snapshot = database.withTransaction {
+            val territories = database.gebietDao().readAll().map {
+                requireNotNull(it.toDomain()) { "Ein Gebiet kann nicht gelesen werden; Sicherung abgebrochen." }
+            }
+            val houses = database.houseDao().readAll().map {
+                requireNotNull(it.toDomain()) { "Ein Haus kann nicht gelesen werden; Sicherung abgebrochen." }
+            }
+            territories to houses
+        }
+        return export(snapshot.first, snapshot.second)
+    }
+
     /**
      * Strict like the iOS exporter: one damaged house aborts the whole backup,
      * because a backup that quietly drops door data is worse than no backup.

@@ -17,6 +17,25 @@ iPhone 17 Pro sim, 0 Warnungen), Android 77 Unit-Tests grün
   Glasfläche und die Accessibility-Zustände funktionieren.
 
 ## Done
+- [x] iOS-Performance · 2026-09-05: Native List-Zeilenwiederverwendung statt
+  eager Straßenkarten, Cache für unveränderte Hauszeilen, Filter/Sortierung/
+  Gruppierung im Hintergrund, keine Start-Verzögerung durch den Save-Debounce.
+  Kompass beobachtet nur das Kartenblatt; leere Pin-Auswahl zeichnet nicht alles neu.
+  Messung iOS 18, 10.000 Häuser: kalter Zeilenaufbau 391 → 249 ms;
+  ein geändertes Haus im Cache 14 ms. iOS 26: 282 / 19 ms.
+  Je OS 143 Tests bestanden, einer übersprungen; 60 Tabwechsel mit 2.000 Häusern
+  abgeschlossen, beide Prozesse danach bei 0 % CPU. Listen-Screenshots geprüft.
+  Methodik, Grenzen und verbleibende Geräteabnahme: `ios/PERFORMANCE.md`.
+- [x] Review-Korrekturen · 2026-09-05: Archiv-Sicherung liest den vollständigen
+  Store inklusive Passanten; Lesefehler brechen ab, statt ein leeres Backup zu
+  erzeugen. Erinnerungsabgleich berücksichtigt Passanten-Termine. Android
+  bewahrt beim v1-Import Notizen, Mehrparteien-Kennzeichen, beide Tagesergebnisse
+  und Zeitstempel. Unbekannte Backup-Versionen und Dateien mit Passanten werden
+  vor dem Import abgelehnt; v3 ohne Passanten bleibt lesbar.
+  Verifiziert: 137 iOS-Tests auf iOS 18.5, 73 Android-Domain/Data-Tests,
+  Android Debug-Lint ohne Fehler (43 Warnungen, überwiegend Versionshinweise).
+  Regressionen prüfen den Archiv-Einstieg, Terminabgleich und die gemeinsame
+  iOS-v1-Fixture. Geräteabnahme und vollständiger Android-Passanten-Port bleiben offen.
 - [x] Passant (Begegnung statt Haus) · SchemaV2 + Backup-Format 3, eigene
   Entität (Notiz, Koordinate, Ergebnis, Rückkehrzeit, Gebiet), runde
   Ergebnis-Scheiben statt Tropfen, Platzierungsmodus mit Personen-Fadenkreuz,
@@ -298,3 +317,31 @@ iPhone 17 Pro sim, 0 Warnungen), Android 77 Unit-Tests grün
 - The baseline tag `v6.0-feld` must remain the exact field-tested code snapshot; do not rewrite it.
 - The acceptance grep for `backup` also matches required production source names; no backup/export JSON or PDF is tracked.
 - Remote: `https://github.com/joseph-kya/Nachbesuch-App.git`.
+
+### App Store preparation (2026-09-05)
+- Added settings → Datenschutz & Support, bundled German data/permission information, optional real publishing links via AppStoreMetadata.plist, and OpenStreetMap attribution link.
+- Added the file-timestamp required-reason API declaration (C617.1). Opening settings with daily reminders disabled no longer requests notification permission; removed redundant daily reminder scheduling from store-save reconciliation.
+- Unsigned iOS Release archive succeeded; iOS 18.5 and 26.5 regression suites passed (143 passed, 1 skipped each).
+- Prepared German public listing/review notes, six original iPhone/iPad screenshots with synthetic data, archive script and submission preflight. See ios/AppStore/PUBLISHING.md.
+- Not submitted: provider/contact/public support/privacy URLs still need actual owner details; privacy/age/trader declarations and Apple signing/TestFlight remain. Signing identity inspection was blocked by automatic approval review (usage-limit error).
+
+### Android and iPhone UI polish (2026-09-05)
+- Android list/archive now share a labelled search field, accessible clear button and Search keyboard action that dismisses the keyboard without clearing results.
+- Filter help remains visible beside horizontally scrolling chips. Filter, help, sort and day controls use 48 dp minimum targets; day selection is exposed to accessibility services.
+- Added list-row disclosure chevrons and distinct lazy-list content types/keys for street headers and houses, preserving row reuse.
+- iPhone list headers have slightly more breathing room, address rows have a 44 pt minimum content height, and filter titles keep their intrinsic width. Updated the iPhone list screenshot.
+- Verification: iOS simulator build passed; Android assembleDebug, lintDebug, 59 domain tests and 14 data tests passed. Lint: 0 errors, 43 existing warnings, 1 informational item. Use JDK 17 with the checked-in Gradle wrapper.
+- The earlier unsigned archive predates this visual pass; regenerate it before TestFlight/submission using ios/scripts/archive.sh after supplying the publishing configuration.
+
+### Motion and haptic refinement (2026-09-05)
+- Android: damped layer-only press feedback on outcome tiles, filters and tabs; animated tab highlight and light selection ticks only on actual tab/filter changes. Status picks use a lighter tick instead of a long-press vibration.
+- Android: retain saveable state per tab without mounting inactive map content; animate list-row placement without scroll-entry fades; retain banner text throughout shortened, shallow enter/exit transitions.
+- iOS: light tab-selection feedback; routine status-save confirmation uses a selection tick, while note/address autosaves stay quiet. Selected outcome scales less; Reduce Motion removes outcome scaling, symbol replacement motion, street-completion bounce and animated chevron rotation.
+- Verification: Android build/lint and 73 domain/data tests passed; iOS simulator build passed. Physical-device haptic intensity and frame pacing still require hands-on validation.
+
+### Information accuracy, glass surfaces and Play release preparation (2026-09-06)
+- Corrected open-work counting for day-two return visits on both platforms, Android's strict day-two archive statistics, and iOS's first-day “later” revisit targets. Clarified recorded/finished metrics and door/house units.
+- Split Android list/archive queries; avoid GPS-driven status-list rebuilds; reduce tally allocations and repeated archive scans. Backups now fetch a strict transactional database snapshot instead of UI caches. Added initial list-loading state.
+- Added glossy Android surfaces and richer iOS 18 navigation material with accessibility fallbacks; native iOS 26 glass gets a subtle rim.
+- Updated Android to API 36, AGP 8.9.2 and Gradle 8.11.1. Added public-release configuration checks, privacy/support UI, explicit backup extraction rules and native alignment verification. Unsigned AAB builds; 76 Android tests pass, lint has no errors. iOS 18/26 suites pass; refreshed unsigned iOS archive built.
+- See QUALITY_AND_RELEASE.md for verification and remaining store-owner/device checks. No submission performed.

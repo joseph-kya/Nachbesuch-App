@@ -76,11 +76,6 @@ actor HouseReadService {
         return result
     }
 
-    /// Pin inputs for one territory.
-    ///
-    /// `updatedAfter` is what makes a door tap cheap: the map keeps a watermark of
-    /// the newest row it drew, and asks for only what has been written since. A full
-    /// read (`nil`) happens on a territory switch or a first load.
     /// Every booked return time in the store.
     ///
     /// A revisit lives inside `unitsData`, a JSON blob, so no predicate can narrow
@@ -112,9 +107,23 @@ actor HouseReadService {
                 }
             }
         }
+        // Reconciliation replaces every revisit notification, including street
+        // encounters. Use the same identity as their immediate scheduling path.
+        try modelContext.enumerate(FetchDescriptor<Passant>(), batchSize: 200) { passant in
+            if visited.isMultiple(of: 64) { try Task.checkCancellation() }
+            visited += 1
+            guard passant.outcome == .later, let date = passant.revisitAt else { return }
+            result.append(.init(
+                houseID: passant.id, doorID: passant.id, day: 1,
+                address: passant.note, doorLabel: "Gespräch",
+                isApartmentBuilding: false, date: date
+            ))
+        }
         return result
     }
 
+    /// Pin inputs for one territory. A nil watermark performs a full read;
+    /// otherwise only houses changed since the last snapshot are returned.
     func mapSeeds(territoryID: UUID, updatedAfter: Date?) throws -> [RawMapHouse] {
         let descriptor: FetchDescriptor<House>
         if let updatedAfter {

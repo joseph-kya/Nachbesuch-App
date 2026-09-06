@@ -67,7 +67,7 @@ data class DoorResult(
 
     fun isOpen(inScope: DayScope): Boolean = when (inScope) {
         DayScope.DAY_1 -> outcome == null || outcome.isOpenWork
-        DayScope.DAY_2 -> isPendingRevisit || (outcome == null && day2Outcome == null)
+        DayScope.DAY_2 -> day2Outcome?.isOpenWork == true || isPendingRevisit || (outcome == null && day2Outcome == null)
         DayScope.COMBINED -> finalOutcome == null || finalOutcome!!.isOpenWork
     }
 

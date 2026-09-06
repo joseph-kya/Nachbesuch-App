@@ -23,6 +23,11 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material3.ripple
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -61,9 +66,11 @@ fun OutcomeButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val interaction = remember { MutableInteractionSource() }
     val scale by animateFloatAsState(if (isSelected) 1.12f else 1f, label = "outcome-glyph")
     Column(
         modifier = modifier
+            .touchMotion(interaction)
             .clip(RoundedCornerShape(RadiusControl))
             .background(
                 if (isSelected) outcome.tint.copy(alpha = 0.18f)
@@ -75,7 +82,7 @@ fun OutcomeButton(
                 color = if (isSelected) outcome.tint else Color.Transparent,
                 shape = RoundedCornerShape(RadiusControl)
             )
-            .clickable(onClick = onClick)
+            .clickable(interactionSource = interaction, indication = ripple(), onClick = onClick)
             .padding(vertical = 12.dp, horizontal = 8.dp)
             .heightIn(min = MinTouchTarget)
             .clearAndSetSemantics {
@@ -201,20 +208,23 @@ fun FilterBar(
     onHelp: (() -> Unit)? = null
 ) {
     Row(
-        modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 2.dp),
+        modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        chips.forEach { chip ->
-            FilterChipButton(chip, contextLabel, onClick = { onSelect(chip.id) })
+        Row(
+            Modifier.weight(1f).horizontalScroll(rememberScrollState()).padding(horizontal = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            chips.forEach { chip ->
+                FilterChipButton(chip, contextLabel, onClick = { onSelect(chip.id) })
+            }
         }
         if (onHelp != null) {
             Box(
                 Modifier
-                    .size(36.dp)
+                    .size(MinTouchTarget)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape)
                     .clickable(onClick = onHelp),
@@ -232,13 +242,16 @@ fun FilterBar(
 
 @Composable
 private fun FilterChipButton(chip: FilterChipSpec, contextLabel: String, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val haptics = LocalHapticFeedback.current
     val background =
         if (chip.isSelected) chip.tint.copy(alpha = 0.20f) else MaterialTheme.colorScheme.surfaceContainerHighest
     val foreground =
         if (chip.isSelected) chip.tint else MaterialTheme.colorScheme.onSurfaceVariant
     Row(
         Modifier
-            .height(36.dp)
+            .touchMotion(interaction)
+            .heightIn(min = MinTouchTarget)
             .clip(RoundedCornerShape(18.dp))
             .background(background, RoundedCornerShape(18.dp))
             .border(
@@ -246,8 +259,13 @@ private fun FilterChipButton(chip: FilterChipSpec, contextLabel: String, onClick
                 color = if (chip.isSelected) chip.tint else Color.Transparent,
                 shape = RoundedCornerShape(18.dp)
             )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp)
+            .clickable(interactionSource = interaction, indication = ripple(), onClick = {
+                if (!chip.isSelected) {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onClick()
+                }
+            })
+            .padding(horizontal = 12.dp, vertical = 8.dp)
             .clearAndSetSemantics {
                 contentDescription = "$contextLabel: ${chip.title}" +
                     (chip.count?.let { ", $it" } ?: "")

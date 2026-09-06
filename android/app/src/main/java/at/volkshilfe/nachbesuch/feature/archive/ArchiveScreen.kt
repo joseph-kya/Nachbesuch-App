@@ -2,6 +2,8 @@ package at.volkshilfe.nachbesuch.feature.archive
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,11 +23,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Archive
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -34,8 +35,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +54,7 @@ import at.volkshilfe.nachbesuch.domain.model.DayScope
 import at.volkshilfe.nachbesuch.domain.model.VisitOutcome
 import at.volkshilfe.nachbesuch.domain.stats.TerritorySummary
 import at.volkshilfe.nachbesuch.ui.components.BalanceSection
+import at.volkshilfe.nachbesuch.ui.components.AppSearchField
 import at.volkshilfe.nachbesuch.ui.components.FilterBar
 import at.volkshilfe.nachbesuch.ui.components.FilterChipSpec
 import at.volkshilfe.nachbesuch.ui.components.MinTouchTarget
@@ -112,7 +112,7 @@ fun ArchiveScreen(
                 ArchiveMenu(state)
             }
             Spacer(Modifier.height(10.dp))
-            ArchiveSearchField(state.query, state.onQuery)
+            AppSearchField(state.query, state.onQuery, "Gebiet, Ort, „offen“, „heute“ …")
             Spacer(Modifier.height(10.dp))
             FilterBar(
                 chips = state.chips,
@@ -230,34 +230,6 @@ private fun ArchiveMenu(state: ArchiveScreenState) {
     }
 }
 
-@Composable
-private fun ArchiveSearchField(query: String, onQuery: (String) -> Unit) {
-    TextField(
-        value = query,
-        onValueChange = onQuery,
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-        shape = RoundedCornerShape(RadiusControl),
-        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-        trailingIcon = {
-            if (query.isNotEmpty()) {
-                Icon(
-                    Icons.Default.Clear,
-                    contentDescription = "Suche löschen",
-                    modifier = Modifier.size(MinTouchTarget).clickable { onQuery("") }.padding(14.dp)
-                )
-            }
-        },
-        placeholder = { Text("Gebiet, Ort, „offen“, „heute“ …") },
-        colors = TextFieldDefaults.colors(
-            focusedIndicatorColor = Color.Transparent,
-            unfocusedIndicatorColor = Color.Transparent,
-            disabledIndicatorColor = Color.Transparent,
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-        )
-    )
-}
 
 @Composable
 private fun ScopeSegments(scope: DayScope, onScope: (DayScope) -> Unit) {
@@ -279,8 +251,8 @@ private fun ScopeSegments(scope: DayScope, onScope: (DayScope) -> Unit) {
                         if (isSelected) MaterialTheme.colorScheme.surfaceContainerLowest else Color.Transparent,
                         RoundedCornerShape(12.dp)
                     )
-                    .clickable { onScope(value) }
-                    .heightIn(min = 38.dp),
+                    .selectable(selected = isSelected, role = Role.Tab, onClick = { onScope(value) })
+                    .heightIn(min = MinTouchTarget),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -383,7 +355,7 @@ private fun TerritoryCard(
         Row(
             Modifier.fillMaxWidth().clearAndSetSemantics {
                 contentDescription = "Fortschritt"
-                stateDescription = "${tally.completed} von ${tally.unitCount} Türen erledigt"
+                stateDescription = "${tally.completed} von ${tally.unitCount} Türen erfasst"
             },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)

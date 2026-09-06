@@ -36,7 +36,8 @@ data class ListScreenState(
     val onFilter: (ListFilter) -> Unit,
     val onScope: (DayScope) -> Unit,
     val onSort: (ListSort) -> Unit,
-    val onToggleSection: (String) -> Unit
+    val onToggleSection: (String) -> Unit,
+    val isLoading: Boolean = false
 )
 
 /**

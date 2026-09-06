@@ -1,0 +1,15 @@
+Daten und Berechtigungen
+
+Nachbesuch speichert Gebiete, Adressen, Koordinaten, Besuchsergebnisse, Termine und Notizen lokal auf deinem Gerät. Die App benötigt kein Benutzerkonto und enthält keine Werbung oder eigenen Analyse-Dienste.
+
+Karten und Suche
+Google Maps lädt Karten über Google-Dienste. Dabei verarbeitet Google technisch erforderliche Geräte- und Verbindungsinformationen gemäß seinen Datenschutzhinweisen. Ortssuche und Geokodierung verwenden die auf dem Gerät verfügbaren Geocoder-Dienste. Beim OpenStreetMap-Adressimport und beim Laden von Wegen werden Gebietskoordinaten an öffentliche Overpass-Server übertragen. Diese sehen auch die IP-Adresse. Besuchsnotizen und Ergebnisse sind nicht Bestandteil dieser Abfragen.
+
+Berechtigungen
+Standort ist optional und dient der Kartenposition und Entfernungssortierung. Nachbesuch benötigt keinen dauerhaften Hintergrundstandort. Mitteilungen erinnern lokal an gebuchte Termine. Genaue Alarme sind optional; ohne Freigabe können Erinnerungen verspätet eintreffen. Adressen oder eingegebene Texte können in Benachrichtigungen auf dem Sperrbildschirm erscheinen. Berechtigungen und Vorschauen lassen sich in den Android-Einstellungen ändern.
+
+Sichern, Teilen und Löschen
+Du kannst JSON-Sicherungen und PDF-/Textexporte selbst erstellen und an von dir gewählte Speicherorte oder Apps weitergeben. Diese Dateien können personenbezogene Inhalte enthalten. Gelöschte Einträge werden nicht aus bestehenden Exporten oder Sicherungskopien entfernt. Entferne solche Dateien separat. Die automatische Android-Systemsicherung der App-Daten ist deaktiviert; sichere deine Daten vor einem Gerätewechsel über das Archiv.
+
+Kontakt
+Anbieter, Support und die veröffentlichte Datenschutzerklärung sind nach der Veröffentlichung in den Einstellungen und im Play-Store-Eintrag erreichbar. Teile bei Support-Anfragen keine personenbezogenen Besuchsnotizen.

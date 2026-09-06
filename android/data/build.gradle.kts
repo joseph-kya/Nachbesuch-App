@@ -9,8 +9,10 @@ plugins {
 
 android {
     namespace = "at.volkshilfe.nachbesuch.data"
-    compileSdk = 35
+    compileSdk = 36
     defaultConfig { minSdk = 26 }
+    // Use the actual iOS legacy fixture to catch cross-platform import loss.
+    sourceSets.getByName("test").resources.srcDir("../../ios/NachbesuchV5Tests/Fixtures")
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
 

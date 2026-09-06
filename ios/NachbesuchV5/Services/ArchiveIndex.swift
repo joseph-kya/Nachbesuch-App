@@ -123,21 +123,19 @@ nonisolated enum ArchiveIndexBuilder {
                 if let result = door.result(on: 1) {
                     accumulator.day1.completed += 1
                     accumulator.day1.add(result)
-                } else {
-                    accumulator.day1.open += 1
                 }
+                if door.isOpen(in: .day1) { accumulator.day1.open += 1 }
 
-                let isRevisitTarget = door.outcome == .notHome || door.outcome == nil || door.day2Outcome != nil
+                let isRevisitTarget = door.outcome?.isOpenWork == true || door.outcome == nil || door.day2Outcome != nil
                 guard isRevisitTarget else { continue }
                 accumulator.revisitTargets += 1
                 accumulator.day2.unitCount += 1
                 if let result = door.result(on: 2) {
                     accumulator.day2.completed += 1
                     accumulator.day2.add(result)
-                } else if door.isPendingRevisit {
-                    accumulator.day2.open += 1
-                    accumulator.pendingRevisits += 1
                 }
+                if door.isOpen(in: .day2) { accumulator.day2.open += 1 }
+                if door.isPendingRevisit { accumulator.pendingRevisits += 1 }
             }
         }
 

@@ -753,7 +753,7 @@ struct ArchiveScreen: View {
         isWorking = true
         defer { isWorking = false }
         do {
-            let url = try await BackupService.makeBackup(gebiete: gebiete, houses: houses(in: nil))
+            let url = try await BackupService.makeBackup(in: modelContext)
             route = .share(url)
         } catch {
             notices.report(error, context: "Backup konnte nicht erstellt werden")

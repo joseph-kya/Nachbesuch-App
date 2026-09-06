@@ -1,5 +1,6 @@
 package at.volkshilfe.nachbesuch.ui
 
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -34,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -42,10 +44,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.Role
+import at.volkshilfe.nachbesuch.ui.components.touchMotion
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import at.volkshilfe.nachbesuch.ui.theme.glossySurface
 import at.volkshilfe.nachbesuch.ui.theme.RadiusChrome
 
 /**
@@ -73,6 +81,7 @@ fun RootScaffold(
 ) {
     var selected by rememberSaveable { mutableIntStateOf(0) }
     var barHeight by remember { mutableStateOf(0.dp) }
+    val tabState = rememberSaveableStateHolder()
     val density = LocalDensity.current
     val statusBar = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
@@ -91,10 +100,13 @@ fun RootScaffold(
         val mapPadding = PaddingValues(top = statusBar, bottom = barHeight)
         val listPadding = PaddingValues(top = statusBar, bottom = barHeight)
 
-        when (selected) {
-            0 -> map(mapPadding)
-            1 -> list(listPadding)
-            else -> archive(listPadding)
+        // Preserve scroll/search state without keeping an inactive map rendering.
+        tabState.SaveableStateProvider(selected) {
+            when (selected) {
+                0 -> map(mapPadding)
+                1 -> list(listPadding)
+                else -> archive(listPadding)
+            }
         }
 
         // An overlay rather than an inline row: a banner that pushes the map or
@@ -133,19 +145,7 @@ private fun FloatingTabBar(selected: Int, onSelect: (Int) -> Unit, modifier: Mod
         Box(
             Modifier
                 .fillMaxWidth()
-                .shadow(6.dp, RoundedCornerShape(RadiusChrome), clip = false)
-                .background(
-                    MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),
-                    RoundedCornerShape(RadiusChrome)
-                )
-                // The same hairline every ChromePanel carries. A drop shadow alone
-                // defines nothing against the dark map, where the bar and the tiles
-                // are within a few percent of the same lightness.
-                .border(
-                    0.5.dp,
-                    MaterialTheme.colorScheme.outlineVariant,
-                    RoundedCornerShape(RadiusChrome)
-                )
+                .glossySurface(RoundedCornerShape(RadiusChrome), elevation = 6.dp)
         ) {
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -166,20 +166,34 @@ private fun TabItem(tab: TabSpec, isSelected: Boolean, onClick: () -> Unit) {
         label = "tab-tint"
     )
     val interactionSource = remember { MutableInteractionSource() }
+    val haptics = LocalHapticFeedback.current
+    val selectionFill by animateColorAsState(
+        if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
+        animationSpec = tween(180), label = "tab-selection"
+    )
     Column(
         modifier = Modifier
             .width(84.dp)
+            .touchMotion(interactionSource)
             .clip(RoundedCornerShape(16.dp))
-            .clickable(
+            .background(selectionFill)
+            .selectable(
+                selected = isSelected,
+                role = Role.Tab,
                 interactionSource = interactionSource,
                 indication = ripple(),
-                onClick = onClick
+                onClick = {
+                    if (!isSelected) {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onClick()
+                    }
+                }
             )
             .padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        Icon(tab.icon, contentDescription = tab.label, tint = tint, modifier = Modifier.size(24.dp))
+        Icon(tab.icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
         Text(
             tab.label,
             color = tint,

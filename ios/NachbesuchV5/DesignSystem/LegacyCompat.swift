@@ -21,9 +21,9 @@ import SwiftUI
 
 /// Whether to render the pre-iOS 26 chrome.
 ///
-/// There is no iOS 18 simulator runtime on a machine that builds against the iOS 26
-/// SDK, so the legacy path would otherwise be unreviewable. `NACHBESUCH_LEGACY_CHROME`
-/// forces it on a modern system for exactly that reason — the same trick
+/// `NACHBESUCH_LEGACY_CHROME` previews this tier on a modern simulator when an
+/// iOS 18 runtime is unavailable. Real iOS 18 testing remains the release check.
+/// This uses the same mechanism
 /// `AdaptiveSurface` uses for Reduce Transparency, and DEBUG-only for the same reason.
 ///
 ///     SIMCTL_CHILD_NACHBESUCH_LEGACY_CHROME=1 xcrun simctl launch booted at.volkshilfe.nachbesuch.v5
@@ -121,6 +121,8 @@ extension View {
 
 /// The iOS 18 floating surface: one fill, one border, one shadow, one shape.
 private struct LegacySurface<S: InsettableShape>: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var colorScheme
     let shape: S
     let role: CompatSurfaceRole
@@ -140,8 +142,23 @@ private struct LegacySurface<S: InsettableShape>: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background(fill, in: shape)
-            .overlay { shape.strokeBorder(Color(uiColor: .separator), lineWidth: 0.5) }
+            .background {
+                if reduceTransparency || contrast == .increased {
+                    shape.fill(fill)
+                } else {
+                    shape.fill(.regularMaterial)
+                        .overlay { shape.fill(fill.opacity(role == .map ? 0.65 : 0.35)) }
+                }
+            }
+            .overlay {
+                shape.strokeBorder(
+                    LinearGradient(colors: [
+                        .white.opacity(colorScheme == .dark ? 0.25 : 0.9),
+                        Color(uiColor: .separator).opacity(0.5),
+                        .white.opacity(colorScheme == .dark ? 0.05 : 0.3)
+                    ], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.75
+                )
+            }
             .shadow(
                 color: .black.opacity(shadowRadius > 0 ? (colorScheme == .dark ? 0.45 : 0.16) : 0),
                 radius: shadowRadius,

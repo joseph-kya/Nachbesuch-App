@@ -232,6 +232,29 @@ struct BilanzTests {
         return try #require(index.entry(for: territoryID))
     }
 
+    @Test("Spätere Zweitbesuche bleiben in Liste und Bilanz offen")
+    func dayTwoOpenWorkRemainsVisible() throws {
+        for outcome in [VisitOutcome.notHome, .later] {
+            let door = DoorResult(label: "1", outcome: .notHome, day2Outcome: outcome)
+            #expect(door.isOpen(in: .day2))
+            #expect(OutcomeTally.tally([door], scope: .day2).open == 1)
+            let summary = try entry(for: [door])
+            #expect(summary.day2.completed == 1)
+            #expect(summary.day2.open == 1)
+            #expect(summary.overall.open == 1)
+        }
+    }
+
+    @Test("Später am ersten Tag zählt als Zweitbesuchs-Ziel")
+    func laterIsARevisitTarget() throws {
+        let summary = try entry(for: [DoorResult(label: "1", outcome: .later)])
+        #expect(summary.revisitTargets == 1)
+        #expect(summary.pendingRevisits == 1)
+        #expect(summary.day2.unitCount == 1)
+        #expect(summary.day2.completed == 0)
+        #expect(summary.day2.open == 1)
+    }
+
     @Test("Tag 1 und Tag 2 werden getrennt gezählt")
     func daysAreSeparate() throws {
         let entry = try entry(for: [
@@ -725,5 +748,71 @@ struct StreetCollapseTests {
     @Test("Leere Liste klappt nichts zu")
     func emptyListCollapsesNothing() {
         #expect(HouseListBuilder.initiallyCollapsedSectionIDs(rows: []).isEmpty)
+    }
+}
+
+@Suite("Listen-Cache und Projektion")
+struct ListCacheTests {
+    private func seed(id: UUID = UUID(), address: String = "Teststraße 1", note: String = "",
+                      outcome: VisitOutcome? = nil) throws -> HouseListBuilder.Seed {
+        HouseListBuilder.Seed(
+            id: id, address: address, note: note, createdAt: .distantPast,
+            unitsData: try AppCoders.unitsEncoder().encode([
+                DoorResult(id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+                           label: "Haushalt", outcome: outcome)
+            ]), latitude: 48.2, longitude: 16.3
+        )
+    }
+
+    @Test("Nur geänderte Häuser werden neu dekodiert")
+    func rebuildsOnlyChangedRows() throws {
+        let first = try seed()
+        let second = try seed(address: "Andere Straße 2")
+        var cache = HouseListCache()
+        let original = try cache.update([first, second], scope: .combined)
+        #expect(cache.rebuiltRowCount == 2)
+        #expect(try cache.update([first, second], scope: .combined) == original)
+        #expect(cache.rebuiltRowCount == 0)
+        let changed = try seed(id: first.id, note: "Neue Notiz", outcome: .joined)
+        let updated = try cache.update([changed, second], scope: .combined)
+        #expect(cache.rebuiltRowCount == 1)
+        #expect(updated == HouseListBuilder.rows(from: [changed, second], scope: .combined))
+        #expect(updated[1] == original[1])
+    }
+
+    @Test("Löschen, Einfügen und Tagwechsel liefern dieselben Zeilen wie ein Neuaufbau")
+    func structureAndScopeChangesStayCorrect() throws {
+        let first = try seed(outcome: .notHome)
+        let second = try seed(address: "Neu 3", outcome: .joined)
+        var cache = HouseListCache()
+        _ = try cache.update([first], scope: .day1)
+        #expect(try cache.update([second], scope: .day1)
+                == HouseListBuilder.rows(from: [second], scope: .day1))
+        #expect(cache.rebuiltRowCount == 1)
+        #expect(try cache.update([second], scope: .day2)
+                == HouseListBuilder.rows(from: [second], scope: .day2))
+        #expect(cache.rebuiltRowCount == 1)
+        #expect(try cache.update([], scope: .day2).isEmpty)
+        _ = try cache.update([first], scope: .day2)
+        #expect(cache.rebuiltRowCount == 1)
+    }
+
+    @Test("Filterzähler und Hintergrundprojektion behalten ihre Bedeutung")
+    func projectionPreservesCountsAndSearch() throws {
+        let rows = HouseListBuilder.rows(from: [
+            try seed(address: "Äußere Straße 1", outcome: .joined),
+            try seed(address: "Andere Straße 2", outcome: .notHome),
+            try seed(address: "Andere Straße 3")
+        ], scope: .combined)
+        let counts = HouseListBuilder.counts(for: rows)
+        for filter in ListFilter.allCases {
+            #expect(counts[filter] == rows.filter(filter.matches).count)
+        }
+        let result = HouseListBuilder.presentedSections(rows: rows, filter: .joined,
+                                                       query: "aussere", origin: nil)
+        #expect(result.flatMap(\.rows).map(\.id) == [rows[0].id])
+        let empty = HouseListBuilder.presentedSections(rows: rows, filter: .later,
+                                                      query: "", origin: nil)
+        #expect(empty.isEmpty)
     }
 }

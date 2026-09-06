@@ -27,25 +27,30 @@ data class OutcomeTally(
     )
 
     companion object {
-        fun from(doors: Iterable<DoorResult>, scope: DayScope): OutcomeTally {
-            var tally = OutcomeTally()
+        fun from(doors: Iterable<DoorResult>, scope: DayScope, recordedOnly: Boolean = false): OutcomeTally {
+            var total = 0
+            var completed = 0
+            var open = 0
+            var earlyNo = 0
+            var lateNo = 0
+            var joined = 0
+            var notHome = 0
+            var later = 0
             for (door in doors) {
-                // Display outcome intentionally looks across the two-day window:
-                // a result recorded on day one remains completed on day two,
-                // while a pending "not home" door is still open on day two.
-                val outcome = door.displayOutcome(scope)
-                tally = tally.copy(
-                    unitCount = tally.unitCount + 1,
-                    completed = tally.completed + if (outcome != null) 1 else 0,
-                    open = tally.open + if (door.isOpen(scope)) 1 else 0,
-                    earlyNo = tally.earlyNo + if (outcome == VisitOutcome.EARLY_NO) 1 else 0,
-                    lateNo = tally.lateNo + if (outcome == VisitOutcome.LATE_NO) 1 else 0,
-                    joined = tally.joined + if (outcome == VisitOutcome.JOINED) 1 else 0,
-                    notHome = tally.notHome + if (outcome == VisitOutcome.NOT_HOME) 1 else 0,
-                    later = tally.later + if (outcome == VisitOutcome.LATER) 1 else 0
-                )
+                val outcome = if (recordedOnly) door.result(scope) else door.displayOutcome(scope)
+                total++
+                if (outcome != null) completed++
+                if (door.isOpen(scope)) open++
+                when (outcome) {
+                    VisitOutcome.EARLY_NO -> earlyNo++
+                    VisitOutcome.LATE_NO -> lateNo++
+                    VisitOutcome.JOINED -> joined++
+                    VisitOutcome.NOT_HOME -> notHome++
+                    VisitOutcome.LATER -> later++
+                    null -> Unit
+                }
             }
-            return tally
+            return OutcomeTally(total, completed, open, earlyNo, lateNo, joined, notHome, later)
         }
     }
 }

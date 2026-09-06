@@ -195,7 +195,7 @@ nonisolated struct StreetSection: Identifiable, Equatable, Sendable {
 /// Builds the list corpus once per data change, off the main actor.
 nonisolated enum HouseListBuilder {
     /// Coordinate-free house input.
-    struct Seed: Sendable {
+    struct Seed: Sendable, Equatable {
         let id: UUID
         let address: String
         let note: String
@@ -207,46 +207,52 @@ nonisolated enum HouseListBuilder {
 
     static func rows(from seeds: [Seed], scope: DayScope) -> [HouseRowModel] {
         let decoder = AppCoders.unitsDecoder()
-        return seeds.map { seed in
-            let doors = (try? decoder.decode([DoorResult].self, from: seed.unitsData)) ?? []
-            let tally = OutcomeTally.tally(doors, scope: scope)
-            let recordedAt = doors.compactMap { $0.timestamp(in: scope) }.max()
-            let street = StreetNameParser.street(from: seed.address)
-            var searchable = "\(seed.address) \(seed.note) \(street)"
-            for door in doors { searchable += " \(door.label)" }
-            return HouseRowModel(
-                id: seed.id,
-                address: seed.address,
-                note: seed.note,
-                street: street,
-                houseNumber: StreetNameParser.houseNumber(from: seed.address),
-                shortAddress: StreetNameParser.withoutLocality(seed.address),
-                markerOutcome: OutcomeTally.markerOutcome(for: doors, scope: scope),
-                unitCount: doors.count,
-                completedCount: tally.completed,
-                followUpCount: tally.notHome,
-                joinedCount: tally.joined,
-                laterCount: tally.later,
-                openCount: tally.open,
-                createdAt: seed.createdAt,
-                searchText: SearchText.fold(searchable),
-                latitude: seed.latitude,
-                longitude: seed.longitude,
-                recordedAt: recordedAt,
-                nextRevisitAt: doors.compactMap { $0.displayRevisitAt(in: scope) }.min()
-            )
+        var result: [HouseRowModel] = []
+        result.reserveCapacity(seeds.count)
+        for (index, seed) in seeds.enumerated() {
+            if index.isMultiple(of: 64), Task.isCancelled { return [] }
+            result.append(row(from: seed, scope: scope, decoder: decoder))
         }
+        return result
+    }
+
+    static func row(from seed: Seed, scope: DayScope, decoder: JSONDecoder) -> HouseRowModel {
+        let doors = (try? decoder.decode([DoorResult].self, from: seed.unitsData)) ?? []
+        let tally = OutcomeTally.tally(doors, scope: scope)
+        let recordedAt = doors.compactMap { $0.timestamp(in: scope) }.max()
+        let address = StreetNameParser.parse(seed.address)
+        let street = address.street
+        var searchable = "\(seed.address) \(seed.note) \(street)"
+        for door in doors { searchable += " \(door.label)" }
+        return HouseRowModel(
+            id: seed.id,
+            address: seed.address,
+            note: seed.note,
+            street: street,
+            houseNumber: address.number,
+            shortAddress: address.shortAddress,
+            markerOutcome: OutcomeTally.markerOutcome(for: doors, scope: scope),
+            unitCount: doors.count,
+            completedCount: tally.completed,
+            followUpCount: tally.notHome,
+            joinedCount: tally.joined,
+            laterCount: tally.later,
+            openCount: tally.open,
+            createdAt: seed.createdAt,
+            searchText: SearchText.fold(searchable),
+            latitude: seed.latitude,
+            longitude: seed.longitude,
+            recordedAt: recordedAt,
+            nextRevisitAt: doors.compactMap { $0.displayRevisitAt(in: scope) }.min()
+        )
     }
 
     static func filter(_ rows: [HouseRowModel], filter: ListFilter, query: String) -> [HouseRowModel] {
         let tokens = SearchText.tokenize(query)
-        var result = rows
-        if !tokens.isEmpty {
-            result = result.filter { row in
-                tokens.allSatisfy { row.searchText.contains($0) }
-            }
+        guard !tokens.isEmpty || filter != .all else { return rows }
+        return rows.filter { row in
+            filter.matches(row) && tokens.allSatisfy { row.searchText.contains($0) }
         }
-        return filter == .all ? result : result.filter(filter.matches)
     }
 
     /// Soonest appointment first, and overdue ones therefore at the very top.
@@ -326,10 +332,57 @@ nonisolated enum HouseListBuilder {
 
     static func counts(for rows: [HouseRowModel]) -> [ListFilter: Int] {
         var result: [ListFilter: Int] = [:]
-        for filter in ListFilter.allCases {
-            result[filter] = filter == .all ? rows.count : rows.filter(filter.matches).count
+        for filter in ListFilter.allCases { result[filter] = 0 }
+        result[.all] = rows.count
+        for row in rows {
+            if row.openCount > 0 { result[.open, default: 0] += 1 }
+            if row.laterCount > 0 { result[.later, default: 0] += 1 }
+            if row.completedCount < row.unitCount { result[.unanswered, default: 0] += 1 }
+            if row.joinedCount > 0 { result[.joined, default: 0] += 1 }
         }
         return result
+    }
+
+
+    static func presentedSections(
+        rows: [HouseRowModel], filter: ListFilter, query: String,
+        origin: CLLocationCoordinate2D?
+    ) -> [StreetSection] {
+        let filtered = HouseListBuilder.filter(rows, filter: filter, query: query)
+        guard !filtered.isEmpty, !Task.isCancelled else { return [] }
+        if let origin {
+            // Nearest-first is a flat ranking; grouping it back into streets would
+            // throw the ordering away again.
+            let ranked = HouseListBuilder.sortByDistance(filtered, from: origin)
+            return [
+                StreetSection(
+                    id: "nearest",
+                    title: "Nächste zuerst",
+                    rows: ranked,
+                    houseCount: ranked.count,
+                    unitCount: ranked.reduce(0) { $0 + $1.unitCount },
+                    completedCount: ranked.reduce(0) { $0 + $1.completedCount },
+                    openCount: ranked.reduce(0) { $0 + $1.openCount }
+                )
+            ]
+        } else if filter == .later {
+            // Under this filter the question is never "which street am I on" but
+            // "who is due next", so the rows arrive in one time-ordered run.
+            let byTime = HouseListBuilder.sortByRevisit(filtered)
+            return [
+                StreetSection(
+                    id: "revisit",
+                    title: "Nach Uhrzeit",
+                    rows: byTime,
+                    houseCount: byTime.count,
+                    unitCount: byTime.reduce(0) { $0 + $1.unitCount },
+                    completedCount: byTime.reduce(0) { $0 + $1.completedCount },
+                    openCount: byTime.reduce(0) { $0 + $1.openCount }
+                )
+            ]
+        } else {
+            return HouseListBuilder.sections(from: HouseListBuilder.sort(filtered))
+        }
     }
 
     /// Section ids that start shut: streets where nobody recorded anything yet.
@@ -337,10 +390,53 @@ nonisolated enum HouseListBuilder {
     /// grouping itself, never from the distance/time views, whose single
     /// synthetic section must not decide for the streets.
     static func initiallyCollapsedSectionIDs(rows: [HouseRowModel]) -> Set<String> {
-        Set(
-            sections(from: sort(rows))
-                .filter { $0.rows.allSatisfy { $0.completedCount == 0 } }
-                .map(\.id)
-        )
+        var untouched = Set<String>()
+        var visited = Set<String>()
+        for row in rows {
+            let id = "street:\(row.street)"
+            if row.completedCount == 0 { untouched.insert(id) }
+            else { visited.insert(id) }
+        }
+        return untouched.subtracting(visited)
+    }
+}
+
+
+/// Bounded to the currently displayed territory/scope. A save still reads current
+/// seeds (including deletions), but only changed houses pay for door decoding,
+/// address parsing and search folding. No live SwiftData objects are retained.
+nonisolated struct HouseListCache: Sendable {
+    private struct Entry: Sendable {
+        let seed: HouseListBuilder.Seed
+        let row: HouseRowModel
+    }
+    private var entries: [UUID: Entry] = [:]
+    private var scope: DayScope?
+    private(set) var rebuiltRowCount = 0
+
+    mutating func update(_ seeds: [HouseListBuilder.Seed], scope: DayScope) throws -> [HouseRowModel] {
+        let decoder = AppCoders.unitsDecoder()
+        var next: [UUID: Entry] = [:]
+        next.reserveCapacity(seeds.count)
+        var rows: [HouseRowModel] = []
+        rows.reserveCapacity(seeds.count)
+        var rebuilt = 0
+        for (index, seed) in seeds.enumerated() {
+            if index.isMultiple(of: 64) { try Task.checkCancellation() }
+            let entry: Entry
+            if self.scope == scope, let existing = entries[seed.id], existing.seed == seed {
+                entry = existing
+            } else {
+                entry = Entry(seed: seed, row: HouseListBuilder.row(from: seed, scope: scope, decoder: decoder))
+                rebuilt += 1
+            }
+            next[seed.id] = entry
+            rows.append(entry.row)
+        }
+        try Task.checkCancellation()
+        entries = next
+        self.scope = scope
+        rebuiltRowCount = rebuilt
+        return rows
     }
 }

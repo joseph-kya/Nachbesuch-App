@@ -134,7 +134,7 @@ struct MapScreen: View {
 
     private var mapStack: some View {
         ZStack {
-            MapHost(
+            HeadingAwareMapHost(host: MapHost(
                 startupRegion: camera.startupRegion,
                 pins: prepared,
                 structuralVersion: structuralVersion,
@@ -153,8 +153,8 @@ struct MapScreen: View {
                 reduceMotion: reduceMotion,
                 dropHouseID: dropHouseID,
                 cameraCommand: cameraCommand,
-                userHeading: location.headingDegrees,
-                userHeadingAccuracy: location.headingAccuracy,
+                userHeading: nil,
+                userHeadingAccuracy: nil,
                 chromeInsets: chromeInsets,
                 onCameraIdle: { region in
                     camera.record(region)
@@ -179,7 +179,7 @@ struct MapScreen: View {
                 },
                 menuProvider: contextMenu(for:),
                 previewProvider: contextPreview(for:)
-            )
+            ))
             .ignoresSafeArea()
             .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in
                 location.refreshHeadingOrientation()

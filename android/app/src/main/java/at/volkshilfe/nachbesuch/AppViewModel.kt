@@ -50,6 +50,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
@@ -101,8 +104,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         values.firstOrNull { it.id == selectedID } ?: values.firstOrNull()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    private val loadedHouseTerritory = MutableStateFlow<String?>(null)
     val houses: StateFlow<List<House>> = _activeGebietID.flatMapLatest { id ->
-        if (id == null) emptyFlow() else repository.observeHouses(id)
+        if (id == null) flowOf(emptyList()) else repository.observeHouses(id)
+            .onEach { loadedHouseTerritory.value = id }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val allHouses: StateFlow<List<House>> = repository.observeAllHouses()
@@ -128,6 +133,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
+    private val _archiveQuery = MutableStateFlow("")
+    val archiveQuery: StateFlow<String> = _archiveQuery.asStateFlow()
+    private val debouncedArchiveQuery = _archiveQuery.debounce(SEARCH_DEBOUNCE_MS)
 
     /**
      * Typing must not re-filter and re-group the whole corpus on every keystroke;
@@ -172,12 +180,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         withContext(Dispatchers.Default) { HouseListBuilder.rows(values, scope) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    val listLoading: StateFlow<Boolean> = combine(_activeGebietID, loadedHouseTerritory, houses, corpus) { id, loadedID, values, rows ->
+        id != null && (loadedID != id || values.size != rows.size || values.firstOrNull()?.id != rows.firstOrNull()?.id)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
     val filterCounts: StateFlow<Map<ListFilter, Int>> = corpus
         .map { rows -> withContext(Dispatchers.Default) { HouseListBuilder.counts(rows) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
+    // GPS updates must not rebuild a list that is sorted by visit status.
+    private val sortingLocation = combine(_listSort, location.location) { sort, fix ->
+        if (sort == ListSort.DISTANCE) fix else null
+    }.distinctUntilChanged()
+
     val listSections: StateFlow<List<StreetSection>> = combine(
-        corpus, debouncedQuery, _listFilter, _listSort, location.location
+        corpus, debouncedQuery, _listFilter, _listSort, sortingLocation
     ) { rows, query, filter, sort, fix ->
         withContext(Dispatchers.Default) {
             val matched = HouseListBuilder.filter(rows, filter, query)
@@ -204,7 +221,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val archiveSections: StateFlow<List<DaySection>> = combine(
-        summaries, debouncedQuery, _archiveFilter
+        summaries, debouncedArchiveQuery, _archiveFilter
     ) { values, query, filter ->
         withContext(Dispatchers.Default) {
             val matched = values.filter(filter::matches)
@@ -267,6 +284,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectScope(value: DayScope) { _scope.value = value }
     fun setQuery(value: String) { _query.value = value }
+    fun setArchiveQuery(value: String) { _archiveQuery.value = value }
     fun setListFilter(value: ListFilter) { _listFilter.value = value }
     fun setListSort(value: ListSort) { _listSort.value = value }
     fun setArchiveFilter(value: ArchiveFilter) { _archiveFilter.value = value }
@@ -517,7 +535,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // MARK: Export
 
-    suspend fun exportBackupJson(): String = backupService.export(gebiete.value, allHouses.value)
+    suspend fun exportBackupJson(): String {
+        check(!storeUnreadable) { "Die Datenbank ist nicht lesbar; eine leere Sicherung wird nicht erstellt." }
+        return backupService.export()
+    }
 
     suspend fun importBackup(raw: String): BackupImportResult = backupService.import(raw)
 

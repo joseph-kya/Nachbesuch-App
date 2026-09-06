@@ -18,9 +18,39 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import at.volkshilfe.nachbesuch.ui.components.touchMotion
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+
+/** Gloss comes from a fixed light gradient and rim, without live backdrop blur.
+ * Mostly opaque surfaces keep map labels from competing with control text.
+ */
+@Composable
+fun Modifier.glossySurface(
+    shape: Shape,
+    base: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    elevation: Dp = 0.dp
+): Modifier {
+    val dark = MaterialTheme.colorScheme.background.red < 0.5f
+    val face = Brush.verticalGradient(listOf(
+        lerp(base, Color.White, if (dark) 0.07f else 0.55f),
+        base.copy(alpha = 0.97f),
+        lerp(base, MaterialTheme.colorScheme.primary, if (dark) 0.025f else 0.015f)
+    ))
+    val rim = Brush.linearGradient(listOf(
+        Color.White.copy(alpha = if (dark) 0.26f else 0.95f),
+        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+        Color.White.copy(alpha = if (dark) 0.06f else 0.5f)
+    ))
+    return shadow(elevation, shape, clip = false)
+        .background(face, shape)
+        .border(0.75.dp, rim, shape)
+}
 
 @Composable
 fun GlassCard(
@@ -30,9 +60,7 @@ fun GlassCard(
 ) {
     androidx.compose.foundation.layout.Column(
         modifier = modifier
-            .shadow(8.dp, RoundedCornerShape(RadiusCard), clip = false)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(RadiusCard))
-            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(RadiusCard))
+            .glossySurface(RoundedCornerShape(RadiusCard), elevation = 4.dp)
             .padding(contentPadding),
         content = content
     )
@@ -42,9 +70,7 @@ fun GlassCard(
 fun GlassRow(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     androidx.compose.foundation.layout.Column(
         modifier = modifier
-            .shadow(3.dp, RoundedCornerShape(RadiusRow), clip = false)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(RadiusRow))
-            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(RadiusRow))
+            .glossySurface(RoundedCornerShape(RadiusRow))
             .padding(16.dp),
         content = content
     )
@@ -64,9 +90,7 @@ fun ChromePanel(
 ) {
     androidx.compose.foundation.layout.Column(
         modifier = modifier
-            .shadow(6.dp, RoundedCornerShape(cornerRadius), clip = false)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f), RoundedCornerShape(cornerRadius))
-            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(cornerRadius))
+            .glossySurface(RoundedCornerShape(cornerRadius), elevation = 6.dp)
             .padding(contentPadding),
         content = content
     )
@@ -86,16 +110,16 @@ fun ChromeIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     tint: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    size: Dp = 46.dp,
+    size: Dp = 48.dp,
     content: @Composable () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
             .size(size)
-            .shadow(4.dp, CircleShape, clip = false)
-            .background(tint, CircleShape)
-            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+            .touchMotion(interactionSource)
+            .glossySurface(CircleShape, base = tint, elevation = 4.dp)
+            .clip(CircleShape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = ripple(bounded = true, radius = size / 2),

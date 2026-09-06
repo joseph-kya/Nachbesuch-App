@@ -129,6 +129,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.cos
+import at.volkshilfe.nachbesuch.ui.theme.glossySurface
 import kotlin.math.floor
 
 /*
@@ -154,10 +155,11 @@ internal fun MapTopChrome(
 ) {
     val tally = remember(houses, scope) { houses.map { it.tally(scope) } }
     Surface(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
+        modifier = modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)
+            .glossySurface(RoundedCornerShape(28.dp), elevation = 4.dp),
+        color = Color.Transparent,
         shape = RoundedCornerShape(28.dp),
-        tonalElevation = 4.dp
+        tonalElevation = 0.dp
     ) {
         if (selecting) {
             Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -181,7 +183,7 @@ internal fun MapTopChrome(
                         Text(gebiet?.displayName ?: "Kein Gebiet", style = MaterialTheme.typography.titleLarge)
                         Text(
                             if (gebiet == null) "Lege im Archiv ein Gebiet an"
-                            else "${houses.size} Häuser · ${tally.sumOf { it.open }} offen · 🔥 ${tally.sumOf { it.joined }}",
+                            else "${houses.size} Häuser · ${tally.sumOf { it.open }} Türen offen",
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }

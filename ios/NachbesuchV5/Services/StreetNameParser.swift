@@ -5,7 +5,7 @@ import Foundation
 /// „Thaliastraße 12a/3“ → „Thaliastraße“ + „12a/3“, „Am Augarten 3“ → „Am Augarten“ + „3“.
 nonisolated enum StreetNameParser {
     nonisolated static func street(from address: String) -> String {
-        split(address).street
+        parse(address).street
     }
 
     /// What identifies the door once the street is already known.
@@ -17,7 +17,7 @@ nonisolated enum StreetNameParser {
     /// no number at all, so the caller can fall back to something that still names
     /// the row.
     nonisolated static func houseNumber(from address: String) -> String? {
-        split(address).number
+        parse(address).number
     }
 
     /// The address with the postal code and the city dropped: everything up to the
@@ -30,15 +30,15 @@ nonisolated enum StreetNameParser {
 
     /// One tokenisation for both halves, so the street and the number can never
     /// disagree about where the address divides.
-    private static func split(_ address: String) -> (street: String, number: String?) {
+    static func parse(_ address: String) -> (street: String, number: String?, shortAddress: String) {
         let trimmed = head(of: address)
-        guard !trimmed.isEmpty else { return (trimmed, nil) }
+        guard !trimmed.isEmpty else { return (trimmed, nil, trimmed) }
 
         // Splits on any whitespace, not just U+0020: geocoded and pasted addresses
         // regularly contain non-breaking spaces, which used to collapse the whole
         // string into one token.
         let tokens = trimmed.split(whereSeparator: \.isWhitespace).map(String.init)
-        guard tokens.count > 1 else { return (cleaned(trimmed), nil) }
+        guard tokens.count > 1 else { return (cleaned(trimmed), nil, trimmed) }
 
         // The first token after the start that begins with a digit is the house
         // number; everything before it is the street, everything from it on is the
@@ -50,9 +50,9 @@ nonisolated enum StreetNameParser {
             // Deliberately not `cleaned`: that strips punctuation, and the slash in
             // "12a/3" is part of the door's name.
             let number = tokens[index...].joined(separator: " ")
-            return (cleaned(street), number.isEmpty ? nil : number)
+            return (cleaned(street), number.isEmpty ? nil : number, trimmed)
         }
-        return (cleaned(trimmed), nil)
+        return (cleaned(trimmed), nil, trimmed)
     }
 
     /// The app's own OSM importer emits "<Straße> <Nr>, <PLZ> <Ort>". Without

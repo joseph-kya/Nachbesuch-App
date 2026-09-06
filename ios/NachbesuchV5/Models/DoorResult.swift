@@ -126,7 +126,7 @@ nonisolated struct DoorResult: Codable, Identifiable, Hashable, Sendable {
         case .day1:
             return outcome == nil || outcome?.isOpenWork == true
         case .day2:
-            return isPendingRevisit || (outcome == nil && day2Outcome == nil)
+            return day2Outcome?.isOpenWork == true || isPendingRevisit || (outcome == nil && day2Outcome == nil)
         case .combined:
             return finalOutcome == nil || finalOutcome?.isOpenWork == true
         }

@@ -291,7 +291,7 @@ fun HouseDetailSheet(
                                 onSelect = { outcome ->
                                     val wasCleared = outcome == null
                                     onOutcome(door.id, outcome)
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                     // Clearing a status is a correction: the user is
                                     // still working here, so the sheet stays put.
                                     if (!wasCleared && !touchExplorationEnabled) pendingDismiss++

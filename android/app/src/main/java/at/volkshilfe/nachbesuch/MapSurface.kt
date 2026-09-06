@@ -558,8 +558,11 @@ fun MapSurface(
                 shape = RoundedCornerShape(24.dp)
             ) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Google Maps API-Key fehlt", style = MaterialTheme.typography.titleMedium)
-                    Text("Trage MAPS_API_KEY in secrets.properties ein.", style = MaterialTheme.typography.bodyMedium)
+                    Text("Karte nicht verfügbar", style = MaterialTheme.typography.titleMedium)
+                    Text("Deine gespeicherten Adressen findest du weiterhin in der Liste.", style = MaterialTheme.typography.bodyMedium)
+                    if (BuildConfig.DEBUG) {
+                        Text("Entwicklung: MAPS_API_KEY in secrets.properties prüfen.", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
         }

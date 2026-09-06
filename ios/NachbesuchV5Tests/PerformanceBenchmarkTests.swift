@@ -11,6 +11,44 @@ nonisolated final class PerformanceBenchmarkTests: XCTestCase {
     private static let houseCount = 10_000
     private static let patchCount = 100
 
+    func testBuildTenThousandListRows() throws {
+        let seeds = try makeHouses().map {
+            HouseListBuilder.Seed(id: $0.id, address: $0.address, note: "",
+                                  createdAt: .distantPast, unitsData: $0.unitsData,
+                                  latitude: $0.latitude, longitude: $0.longitude)
+        }
+        var count = 0
+        measure(metrics: metrics, options: options) {
+            count = HouseListBuilder.rows(from: seeds, scope: .combined).count
+        }
+        XCTAssertEqual(count, Self.houseCount)
+    }
+
+    func testUpdateOneOfTenThousandListRows() throws {
+        let seeds = try makeHouses().map {
+            HouseListBuilder.Seed(id: $0.id, address: $0.address, note: "",
+                                  createdAt: .distantPast, unitsData: $0.unitsData,
+                                  latitude: $0.latitude, longitude: $0.longitude)
+        }
+        var changed = seeds
+        let first = seeds[0]
+        changed[0] = HouseListBuilder.Seed(id: first.id, address: first.address, note: "Geändert",
+                                          createdAt: first.createdAt, unitsData: first.unitsData,
+                                          latitude: first.latitude, longitude: first.longitude)
+        var cache = HouseListCache()
+        _ = try cache.update(seeds, scope: .combined)
+        var useChanged = false
+        var count = 0
+        measure(metrics: metrics, options: options) {
+            useChanged.toggle()
+            do {
+                count = try cache.update(useChanged ? changed : seeds, scope: .combined).count
+            } catch { XCTFail("Cache update failed: \(error)") }
+        }
+        XCTAssertEqual(count, Self.houseCount)
+        XCTAssertEqual(cache.rebuiltRowCount, 1)
+    }
+
     func testBuildTenThousandPins() throws {
         let houses = try makeHouses()
         _ = MapPinSnapshotBuilder.build(from: houses, scope: .combined)

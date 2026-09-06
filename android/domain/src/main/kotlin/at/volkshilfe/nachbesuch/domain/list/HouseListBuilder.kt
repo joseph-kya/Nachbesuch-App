@@ -52,7 +52,7 @@ data class HouseRow(
     val accessibilityValue: String
         get() {
             val base = if (isSingleDoor) (markerOutcome?.germanTitle ?: "Noch kein Status")
-            else "$completedCount von $unitCount Türen erledigt, $openCount offen"
+            else "$completedCount von $unitCount Türen erfasst, $openCount offen"
             return nextRevisitAt?.let { "$base, zurück um ${RevisitPlanner.clockText(it)}" } ?: base
         }
 }
@@ -102,7 +102,7 @@ data class StreetSection(
     val completedCount: Int,
     val openCount: Int
 ) {
-    val progress: Double get() = if (unitCount > 0) completedCount.toDouble() / unitCount else 0.0
+    val progress: Double get() = if (unitCount > 0) (unitCount - openCount).coerceAtLeast(0).toDouble() / unitCount else 0.0
 }
 
 /** Diacritic-insensitive text folding, shared by the list and the archive. */

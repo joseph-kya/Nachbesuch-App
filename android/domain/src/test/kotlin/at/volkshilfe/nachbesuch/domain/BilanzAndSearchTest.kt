@@ -39,8 +39,8 @@ class BilanzAndSearchTest {
         // Strict day tallies: day 1 shows the join AND the recorded "not home",
         // day 2 only what was written on day 2 (nothing yet).
         assertEquals(2, snapshot.day1.completed)
-        assertEquals(1, snapshot.day2.completed)
-        assertEquals(0.5, snapshot.day2Progress, 1e-9)
+        assertEquals(0, snapshot.day2.completed)
+        assertEquals(0.0, snapshot.day2Progress, 1e-9)
     }
 
     @Test fun territorySummariesRollUpPerTerritory() {

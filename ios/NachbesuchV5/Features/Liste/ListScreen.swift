@@ -76,6 +76,13 @@ struct ListScreen: View {
     /// once the objects are in memory and expensive when they are not.
     @State private var dataVersion = 0
     @State private var builtCorpusKey: CorpusKey?
+    @State private var rowCache = HouseListCache()
+    @State private var presentationVersion = 0
+
+    private struct PresentationTaskKey: Hashable {
+        let version: Int
+        let isActive: Bool
+    }
 
     @Namespace private var zoom
 
@@ -285,7 +292,11 @@ struct ListScreen: View {
         #endif
         .task(id: CorpusTaskKey(corpus: corpusKey, isActive: isActive)) {
             guard isActive, builtCorpusKey != corpusKey else { return }
-            try? await Task.sleep(for: .milliseconds(180))
+            // First display and scope switches should not wait behind a save debounce.
+            if builtCorpusKey?.territoryID == corpusKey.territoryID,
+               builtCorpusKey?.scope == corpusKey.scope {
+                try? await Task.sleep(for: .milliseconds(180))
+            }
             guard !Task.isCancelled, isActive else { return }
             await rebuildCorpus()
         }
@@ -295,6 +306,11 @@ struct ListScreen: View {
             debouncedQuery = searchText
         }
         .onChange(of: debouncedQuery) { _, _ in recomputeSections() }
+        .onChange(of: sortByDistance) { _, _ in recomputeSections() }
+        .task(id: PresentationTaskKey(version: presentationVersion, isActive: isActive)) {
+            guard isActive else { return }
+            await rebuildSections()
+        }
         // The signal the scan was standing in for, delivered instead of hunted for.
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
             dataVersion &+= 1
@@ -342,47 +358,49 @@ struct ListScreen: View {
         }
     }
 
-    /// One glass card per street, lazily built.
-    ///
-    /// A native `List` was tried here for iOS 18, on the theory that the freeze came
-    /// from row count — every expanded `StreetCard` holds an eager `VStack`, so the
-    /// reasoning went, forty-four open streets means five thousand rows at once. The
-    /// measurement said otherwise: swapping this whole surface for a cell-reusing
-    /// `List` changed the frozen app's CPU by nothing at all (89.9 % → 96.3 %), because
-    /// the freeze was never in this screen. `LazyVStack` also does not build a card
-    /// that is nowhere near the viewport, so the five thousand rows were never built
-    /// either. The card layout is what the design settled on, so the card layout stays.
+    /// Native row reuse keeps even a territory-wide nearest/time ranking lazy.
+    /// Each house is a List row; an expanded street no longer builds all of its
+    /// buttons before the first visible address can be drawn.
     private var listSurface: some View {
-        ScrollView {
-            CompatGlassContainer(spacing: 2) {
-                LazyVStack(spacing: AppSpacing.regular) {
-                    if sections.isEmpty {
-                        emptyState
-                            .contentCard(cornerRadius: AppRadius.card)
-                            .frame(maxWidth: .infinity, minHeight: 200)
-                    } else {
-                        ForEach(sections) { section in
-                            StreetCard(
-                                section: section,
-                                isExpanded: !collapsedSections.contains(section.id),
-                                now: clock,
-                                zoom: zoom,
-                                onToggle: { toggleSection(section.id) },
-                                onSelect: openHouse
-                            )
+        List {
+            if sections.isEmpty {
+                emptyState
+                    .frame(maxWidth: .infinity, minHeight: 200)
+            } else {
+                ForEach(sections) { section in
+                    Section {
+                        Button { toggleSection(section.id) } label: {
+                            StreetHeader(section: section, isExpanded: !collapsedSections.contains(section.id))
+                                .padding(.vertical, 4)
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Straße \(section.title)")
+                        .accessibilityValue("\(section.houseCount) Adressen, \(section.openCount) Türen offen")
+                        .accessibilityHint(collapsedSections.contains(section.id)
+                            ? "Blendet die Adressen ein" : "Blendet die Adressen aus")
+
+                        if !collapsedSections.contains(section.id) {
+                            ForEach(section.rows) { row in
+                                Button { openHouse(row.id) } label: {
+                                    HouseRow(row: row, now: clock)
+                                        .equatable()
+                                        .frame(minHeight: AppTouch.minimum)
+                                        .contentShape(.rect)
+                                }
+                                .buttonStyle(.plain)
+                                .matchedTransitionSource(id: row.id, in: zoom)
+                            }
                         }
                     }
+                    .listRowInsets(EdgeInsets(top: 11, leading: AppLayout.rowInset,
+                                              bottom: 11, trailing: AppLayout.rowInset))
                 }
-                .padding(.top, AppSpacing.tight)
-                .padding(.bottom, AppSpacing.loose + AppChrome.tabBarClearance)
-                .padding(.horizontal, AppSpacing.regular)
-                .animation(
-                    .smooth(duration: 0.36, extraBounce: 0)
-                        .speed(reduceMotion ? 1.8 : 1),
-                    value: collapsedSections
-                )
             }
         }
+        .listStyle(.insetGrouped)
+        .listSectionSpacing(AppSpacing.regular)
+        .scrollContentBackground(.hidden)
     }
 
     // MARK: Corpus
@@ -394,6 +412,8 @@ struct ListScreen: View {
             sections = []
             counts = [:]
             collapseDefaultsTerritory = nil
+            rowCache = HouseListCache()
+            recomputeSections()
             builtCorpusKey = key
             return
         }
@@ -401,27 +421,44 @@ struct ListScreen: View {
         let seeds: [HouseListBuilder.Seed]
         do {
             seeds = try await reader.listSeeds(territoryID: territoryID)
+        } catch is CancellationError {
+            return
         } catch {
             notices.report(error, context: "Liste konnte nicht gelesen werden")
             return
         }
         guard !Task.isCancelled else { return }
         let currentScope = scope
+        let previousCache = rowCache
+        let needsCollapseDefaults = collapseDefaultsTerritory != territoryID
         let buildTask = Task.detached(priority: .userInitiated) {
-            HouseListBuilder.rows(from: seeds, scope: currentScope)
+            var cache = previousCache
+            let built = try cache.update(seeds, scope: currentScope)
+            let counts = HouseListBuilder.counts(for: built)
+            let collapsed = needsCollapseDefaults
+                ? HouseListBuilder.initiallyCollapsedSectionIDs(rows: built) : nil
+            return (cache, built, counts, collapsed)
         }
-        let built = await withTaskCancellationHandler {
-            await buildTask.value
-        } onCancel: {
-            buildTask.cancel()
-        }
-        guard !Task.isCancelled else { return }
-        rows = built
-        counts = HouseListBuilder.counts(for: built)
-        recomputeSections()
-        if collapseDefaultsTerritory != territoryID {
-            collapseDefaultsTerritory = territoryID
-            collapseUntouchedStreets()
+        do {
+            let (cache, built, newCounts, collapsed) = try await withTaskCancellationHandler {
+                try await buildTask.value
+            } onCancel: {
+                buildTask.cancel()
+            }
+            guard !Task.isCancelled, key == corpusKey else { return }
+            rowCache = cache
+            rows = built
+            counts = newCounts
+            if let collapsed {
+                collapsedSections = collapsed
+                collapseDefaultsTerritory = territoryID
+            }
+            recomputeSections()
+        } catch is CancellationError {
+            return
+        } catch {
+            notices.report(error, context: "Liste konnte nicht aufgebaut werden")
+            return
         }
         builtCorpusKey = key
     }
@@ -458,58 +495,30 @@ struct ListScreen: View {
     }
 
     private func recomputeSections() {
-        sections = makeSections(filter: filter)
+        presentationVersion &+= 1
     }
 
-    /// Streets open where work already happened; untouched streets start shut.
-    /// Runs once per territory — saves rebuild the corpus constantly and must
-    /// never clobber manual toggles, and scope switches keep them too.
-    private func collapseUntouchedStreets() {
-        collapsedSections = HouseListBuilder.initiallyCollapsedSectionIDs(rows: rows)
-    }
-
-    private func makeSections(filter: ListFilter) -> [StreetSection] {
-        let filtered = HouseListBuilder.filter(rows, filter: filter, query: debouncedQuery)
-        if sortByDistance, let origin = sortOrigin {
-            // Nearest-first is a flat ranking; grouping it back into streets would
-            // throw the ordering away again.
-            let ranked = HouseListBuilder.sortByDistance(filtered, from: origin)
-            return [
-                StreetSection(
-                    id: "nearest",
-                    title: "Nächste zuerst",
-                    rows: ranked,
-                    houseCount: ranked.count,
-                    unitCount: ranked.reduce(0) { $0 + $1.unitCount },
-                    completedCount: ranked.reduce(0) { $0 + $1.completedCount },
-                    openCount: ranked.reduce(0) { $0 + $1.openCount }
-                )
-            ]
-        } else if filter == .later {
-            // Under this filter the question is never "which street am I on" but
-            // "who is due next", so the rows arrive in one time-ordered run.
-            let byTime = HouseListBuilder.sortByRevisit(filtered)
-            return [
-                StreetSection(
-                    id: "revisit",
-                    title: "Nach Uhrzeit",
-                    rows: byTime,
-                    houseCount: byTime.count,
-                    unitCount: byTime.reduce(0) { $0 + $1.unitCount },
-                    completedCount: byTime.reduce(0) { $0 + $1.completedCount },
-                    openCount: byTime.reduce(0) { $0 + $1.openCount }
-                )
-            ]
-        } else {
-            return HouseListBuilder.sections(from: HouseListBuilder.sort(filtered))
+    private func rebuildSections() async {
+        let version = presentationVersion
+        let currentRows = rows
+        let currentFilter = filter
+        let query = debouncedQuery
+        let origin = sortByDistance ? sortOrigin : nil
+        let built = await offMainActor {
+            HouseListBuilder.presentedSections(rows: currentRows, filter: currentFilter,
+                                               query: query, origin: origin)
         }
+        guard !Task.isCancelled, version == presentationVersion else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { sections = built }
     }
 
     /// Adopts a new origin only after a real move — 25 m is far enough that the
     /// order can meaningfully change, and short enough to feel live on foot.
     /// Never from a reduced-accuracy fix: it would re-sort the street by noise.
     private func updateSortOrigin(_ coordinate: CLLocationCoordinate2D?) {
-        guard sortByDistance, let coordinate, !location.isReducedAccuracy else { return }
+        guard isActive, sortByDistance, let coordinate, !location.isReducedAccuracy else { return }
         if let sortOrigin {
             let latitudeScale = 110_540.0
             let longitudeScale = 111_320.0 * cos(coordinate.latitude * .pi / 180)
@@ -522,26 +531,16 @@ struct ListScreen: View {
     }
 
     private func toggleSection(_ id: String) {
-        // No global withAnimation — StreetCard animates its own isExpanded via
-        // `.animation(value:isExpanded)`. A global transaction made every card
-        // with an implicit animation repaint, so a tap on one street made untouched
-        // streets shimmer and LazyVStack rows repop.
-        if collapsedSections.contains(id) {
-            collapsedSections.remove(id)
-        } else {
-            collapsedSections.insert(id)
+        withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) {
+            if collapsedSections.contains(id) { collapsedSections.remove(id) }
+            else { collapsedSections.insert(id) }
         }
     }
 
     private func applyFilter(_ value: ListFilter) {
         guard filter != value else { return }
-        let nextSections = makeSections(filter: value)
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            filter = value
-            sections = nextSections
-        }
+        filter = value
+        recomputeSections()
     }
 
     private func setAllStreets(expanded: Bool) {
@@ -700,79 +699,6 @@ struct ListScreen: View {
                 Text(filter.emptyMessage)
             }
         }
-    }
-}
-
-// MARK: - Street card
-
-/// One street and its addresses, drawn as a single glass card — the same
-/// material as Archive's `BalanceSection` and `GebietRow`. One `contentCard`
-/// per street keeps the material glossy and the text razor sharp.
-private struct StreetCard: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let section: StreetSection
-    let isExpanded: Bool
-    let now: Date
-    var zoom: Namespace.ID
-    let onToggle: () -> Void
-    let onSelect: (UUID) -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Button(action: onToggle) {
-                StreetHeader(section: section, isExpanded: isExpanded)
-                    .padding(.horizontal, AppLayout.rowInset)
-                    .padding(.vertical, 12)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Straße \(section.title)")
-            .accessibilityValue(
-                section.openCount > 0
-                    ? "\(section.houseCount) Adressen, \(section.openCount) von \(section.unitCount) Türen offen"
-                    : "\(section.houseCount) Adressen, fertig"
-            )
-            .accessibilityHint(isExpanded ? "Blendet alle Adressen dieser Straße aus" : "Blendet alle Adressen dieser Straße ein")
-            .contentShape(.rect)
-
-            if isExpanded {
-                Divider()
-                    .padding(.leading, AppLayout.textInset)
-                    .transition(.opacity)
-                ForEach(Array(section.rows.enumerated()), id: \.element.id) { index, row in
-                    let isLast = index == section.rows.count - 1
-                    Button { onSelect(row.id) } label: {
-                        HouseRow(row: row, now: now)
-                            .equatable()
-                            .padding(.horizontal, AppLayout.rowInset)
-                            .padding(.vertical, 11)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(MinimalRowStyle())
-                    .matchedTransitionSource(id: row.id, in: zoom)
-                    .transition(.opacity)
-                    if !isLast {
-                        Divider()
-                            .padding(.leading, AppLayout.textInset)
-                            .transition(.opacity)
-                    }
-                }
-            }
-        }
-        .contentCard(cornerRadius: AppRadius.card)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous))
-        .clipped()
-        .animation(.smooth(duration: 0.36, extraBounce: 0).speed(reduceMotion ? 1.8 : 1), value: isExpanded)
-    }
-}
-
-/// Minimal press feedback — no tinted pills, just a feather-light highlight.
-/// Keeps the card's glass intact and the motion cool rather than bouncy.
-private struct MinimalRowStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(Color.primary.opacity(configuration.isPressed ? 0.06 : 0))
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 }
 
@@ -995,6 +921,7 @@ private struct StreetHeader: View {
                         options: reduceMotion ? .nonRepeating : .default,
                         value: isDone
                     )
+                    .symbolEffectsRemoved(reduceMotion)
                     .transition(.blockSwap(reduceMotion: reduceMotion))
             } else {
                 Text("\(section.openCount) offen")
@@ -1038,7 +965,7 @@ private struct StreetHeader: View {
             .font(.caption2.weight(.bold))
             .foregroundStyle(.tertiary)
             .rotationEffect(.degrees(isExpanded ? 0 : -90))
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: isExpanded)
+            .animation(reduceMotion ? nil : .appFeedback(reduceMotion: false), value: isExpanded)
             .frame(width: 12)
             .accessibilityHidden(true)
     }

@@ -190,10 +190,19 @@ enum BackupService {
         }
     }
 
-    static func makeBackup(
+    /// The archive's complete-store entry point. Reads must succeed before any
+    /// file is written; a failed fetch is never an empty collection to back up.
+    static func makeBackup(in modelContext: ModelContext) async throws -> URL {
+        let gebiete = try modelContext.fetch(FetchDescriptor<Gebiet>())
+        let houses = try modelContext.fetch(FetchDescriptor<House>())
+        let passanten = try modelContext.fetch(FetchDescriptor<Passant>())
+        return try await makeBackup(gebiete: gebiete, houses: houses, passanten: passanten)
+    }
+
+    private static func makeBackup(
         gebiete: [Gebiet],
         houses: [House],
-        passanten: [Passant] = []
+        passanten: [Passant]
     ) async throws -> URL {
         let data = try await makeBackupData(gebiete: gebiete, houses: houses, passanten: passanten)
         return try await Task.detached(priority: .userInitiated) { () -> URL in

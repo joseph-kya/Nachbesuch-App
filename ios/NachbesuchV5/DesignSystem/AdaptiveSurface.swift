@@ -10,6 +10,7 @@ import SwiftUI
 /// system controls, but a custom panel has to opt in — and on a map already busy
 /// compositing thousands of pins, the opaque path is also the cheaper one.
 struct MapChromeModifier: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let cornerRadius: CGFloat
@@ -45,6 +46,17 @@ struct MapChromeModifier: ViewModifier {
                 role: role,
                 legacyShadowRadius: 8
             )
+            .overlay {
+                if !LegacyChrome.isActive {
+                    shape.strokeBorder(
+                        LinearGradient(colors: [
+                            .white.opacity(colorScheme == .dark ? 0.22 : 0.6),
+                            .white.opacity(0.02)
+                        ], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.5
+                    )
+                    .allowsHitTesting(false)
+                }
+            }
         }
     }
 }
