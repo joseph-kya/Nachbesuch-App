@@ -30,6 +30,12 @@ struct AddHouseSheet: View {
     @State private var duplicateIndex: HouseDuplicateIndex?
     @State private var duplicateWarning: String?
     @State private var didOverrideDuplicate = false
+    /// Geocode und Dublettenindex laufen still ins Leere — beide bekommen einen
+    /// sichtbaren Fehler plus Wiederholen statt schweigendem Nichts.
+    @State private var geocodeFailed = false
+    @State private var indexFailed = false
+    /// Spinner während der Index-Wiederholung — Geocode hat dafür `isLoadingAddress`.
+    @State private var isRetryingIndex = false
     @FocusState private var addressIsFocused: Bool
 
     private var clampedUnitCount: Binding<Int> {
@@ -39,10 +45,30 @@ struct AddHouseSheet: View {
         )
     }
 
+    /// Leer heißt: Sichern bleibt aus. Kein Alert — die Fußnote sagt es leise.
+    private var trimmedAddress: String {
+        address.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Warnung vom Sichern-Versuch oder Treffer beim Tippen — was zuerst da ist.
+    /// So sieht man die Dublette schon vor dem ersten Sichern-Tippen.
+    private var visibleDuplicate: String? {
+        if let duplicateWarning { return duplicateWarning }
+        guard !didOverrideDuplicate, !trimmedAddress.isEmpty else { return nil }
+        return duplicateIndex?.duplicate(for: trimmedAddress)
+    }
+
+    /// „8 m entfernt" zum Banner, falls der Index eine Nah-Distanz kennt —
+    /// sonst bleibt das Banner bei der Adresse allein.
+    private var visibleDuplicateDistanceText: String? {
+        guard let duplicate = visibleDuplicate else { return nil }
+        return duplicateIndex?.distanceText(for: duplicate)
+    }
+
     var body: some View {
         NavigationStack {
             Form {
-                Section("Adresse") {
+                Section {
                     HStack {
                         TextField("Straße und Hausnummer", text: $address, axis: .vertical)
                             .lineLimit(1...3)
@@ -61,14 +87,93 @@ struct AddHouseSheet: View {
                                 .font(.footnote)
                         }
                     }
+                    // Geocode ging leer aus und das Feld ist noch leer: Fehler
+                    // zeigen plus Wiederholen statt schweigendem Nichts.
+                    if geocodeFailed, !isLoadingAddress, trimmedAddress.isEmpty {
+                        Button {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            Task { await loadSuggestedAddress() }
+                        } label: {
+                            Label("Adresse konnte nicht ermittelt werden — erneut versuchen", systemImage: "arrow.clockwise")
+                                .font(.footnote)
+                        }
+                        .frame(minHeight: 44)
+                    }
+                } header: {
+                    Text("Adresse")
+                } footer: {
+                    // Leeres Feld: rote Fußnote statt Alert, Sichern bleibt aus.
+                    if trimmedAddress.isEmpty, !isLoadingAddress {
+                        Text("Bitte eine Adresse eingeben.")
+                            .foregroundStyle(.red)
+                    }
                 }
 
-                Section("Art") {
+                // Dublette als Banner im Sheet statt Alert: Öffnen ist der
+                // Hauptweg, Trotzdem-anlegen die bewusste Ausnahme.
+                if let duplicate = visibleDuplicate {
+                    Section {
+                        Label("„\(duplicate)“ ist bereits erfasst.", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        // Nah-Distanz aus dem Index („8 m entfernt") — sonst nur Adresse.
+                        if let distanceText = visibleDuplicateDistanceText {
+                            Text(distanceText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        Button {
+                            openExisting()
+                        } label: {
+                            Label("Vorhanden – öffnen", systemImage: "arrow.up.right.circle")
+                        }
+                        .frame(minHeight: 44)
+                        Button("Trotzdem anlegen") {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            didOverrideDuplicate = true
+                            duplicateWarning = nil
+                        }
+                        .foregroundStyle(.secondary)
+                        .frame(minHeight: 44)
+                    }
+                }
+
+                // Dublettenindex defekt: melden plus Wiederholen — ohne ihn
+                // würde das Sheet Duplikate still durchlassen.
+                if indexFailed {
+                    Section {
+                        Label("Dublettenprüfung fehlgeschlagen.", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Button {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            Task {
+                                isRetryingIndex = true
+                                defer { isRetryingIndex = false }
+                                indexFailed = false
+                                duplicateIndex = await buildDuplicateIndex()
+                            }
+                        } label: {
+                            HStack {
+                                Label("Erneut versuchen", systemImage: "arrow.clockwise")
+                                if isRetryingIndex {
+                                    Spacer()
+                                    ProgressView().controlSize(.small)
+                                }
+                            }
+                        }
+                        .frame(minHeight: 44)
+                        .disabled(isRetryingIndex)
+                    }
+                }
+
+                Section {
+                    // Deutsches Label „Art" plus 44pt-Treffläche für A11y.
                     Picker("Art", selection: $isApartment) {
                         Text("Einzelhaus").tag(false)
                         Text("Mehrparteienhaus").tag(true)
                     }
                     .pickerStyle(.segmented)
+                    .frame(minHeight: 44)
 
                     if isApartment {
                         HStack {
@@ -82,14 +187,18 @@ struct AddHouseSheet: View {
                             Stepper("", value: clampedUnitCount, in: 2...100)
                                 .labelsHidden()
                         }
+                        // Deutsches Label „Anzahl" plus 44pt-Treffläche für A11y.
+                        .frame(minHeight: 44)
                     }
+                } header: {
+                    Text("Art")
                 }
 
                 if !isApartment {
                     Section("Status (optional)") {
                         LazyVGrid(
-                            columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
-                            spacing: 10
+                            columns: [GridItem(.flexible(), spacing: AppSpacing.snug), GridItem(.flexible(), spacing: AppSpacing.snug)],
+                            spacing: AppSpacing.snug
                         ) {
                             // Results only. "Später" would need a return time, and
                             // a house that does not exist yet has nothing to book a
@@ -115,26 +224,9 @@ struct AddHouseSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Sichern", action: attemptSave)
                         .fontWeight(.semibold)
-                        .disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(trimmedAddress.isEmpty)
+                        .opacity(trimmedAddress.isEmpty ? 0.4 : 1)
                 }
-            }
-            .alert(
-                "Dieses Haus gibt es schon",
-                isPresented: Binding(
-                    get: { duplicateWarning != nil },
-                    set: { if !$0 { duplicateWarning = nil } }
-                ),
-                presenting: duplicateWarning
-            ) { _ in
-                Button("Öffnen") { openExisting() }
-                Button("Trotzdem anlegen") {
-                    didOverrideDuplicate = true
-                    duplicateWarning = nil
-                    attemptSave()
-                }
-                Button("Abbrechen", role: .cancel) { duplicateWarning = nil }
-            } message: { address in
-                Text("„\(address)“ ist bereits erfasst.")
             }
             .task {
                 // The fingerprints come from the background reader, and the index
@@ -155,7 +247,7 @@ struct AddHouseSheet: View {
     /// and returned an empty territory.
     private func buildDuplicateIndex() async -> HouseDuplicateIndex {
         let empty = HouseDuplicateIndex(fingerprints: [], coordinate: coordinate)
-        let reader = HouseReadService(modelContainer: modelContext.container)
+        let reader = await HouseReadService.background(container: modelContext.container)
         let fingerprints: [ExistingHouseFingerprint]
         do {
             fingerprints = try await reader.addressFingerprints(territoryID: gebietID)
@@ -163,6 +255,7 @@ struct AddHouseSheet: View {
             return empty
         } catch {
             notices.report(error, context: "Häuser konnten nicht gelesen werden")
+            indexFailed = true
             return empty
         }
         guard !Task.isCancelled else { return empty }
@@ -172,13 +265,16 @@ struct AddHouseSheet: View {
     }
 
     private func attemptSave() {
-        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = trimmedAddress
         guard !trimmed.isEmpty else { return }
         addressIsFocused = false
 
+        // Dublette: Banner zeigen statt Alert — der Button bleibt, ein zweites
+        // Tippen nach "Trotzdem anlegen" legt wirklich an.
         if !didOverrideDuplicate,
            let existing = duplicateIndex?.duplicate(for: trimmed) {
             duplicateWarning = existing
+            UISelectionFeedbackGenerator().selectionChanged()
             return
         }
         let safeUnitCount = min(max(unitCount, 2), 100)
@@ -205,6 +301,10 @@ struct AddHouseSheet: View {
             return
         }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
+        // Prüfspur: Wer die Dublettenwarnung bewusst überstimmt, sieht es als Quittung.
+        if didOverrideDuplicate {
+            notices.show("Trotz Dublette angelegt")
+        }
         onCreated(house)
         dismiss()
     }
@@ -213,7 +313,7 @@ struct AddHouseSheet: View {
     /// a second pin for it. Falls back to the override path when the house
     /// vanished between the warning and the tap.
     private func openExisting() {
-        guard let warned = duplicateWarning else { return }
+        guard let warned = visibleDuplicate else { return }
         duplicateWarning = nil
         let key = AddressNormalizer.normalize(warned)
         let descriptor = FetchDescriptor<House>(predicate: #Predicate {
@@ -231,9 +331,17 @@ struct AddHouseSheet: View {
     }
 
     private func loadSuggestedAddress() async {
+        // Spinner auch beim Wiederholen: Button setzt Haptik, hier läuft der Indikator.
+        isLoadingAddress = true
         defer { isLoadingAddress = false }
+        geocodeFailed = false
         let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
-        guard let suggestion = await Self.suggestedAddress(at: location), !Task.isCancelled else { return }
+        guard let suggestion = await Self.suggestedAddress(at: location), !Task.isCancelled else {
+            // Abgebrochen ist kein Fehler; nur leeres Ergebnis bei lebendigem
+            // Task meldet sich — mit Wiederholen im Adress-Abschnitt.
+            if !Task.isCancelled { geocodeFailed = true }
+            return
+        }
         guard address.isEmpty else { return }
         address = suggestion
         addressIsFocused = false
@@ -276,10 +384,13 @@ struct AddHouseSheet: View {
 struct HouseDuplicateIndex: Sendable {
     private let byNormalizedAddress: [String: String]
     private let nearby: [String]
+    /// Kürzeste Entfernung je normalisierter Adresse im Nahbereich, für „8 m entfernt".
+    private let nearbyDistances: [String: Double]
 
     nonisolated init(fingerprints: [ExistingHouseFingerprint], coordinate: CLLocationCoordinate2D) {
         var index: [String: String] = [:]
         var near: [String] = []
+        var distances: [String: Double] = [:]
         // Flat equirectangular metres — no `CLLocation` object per house, which at a
         // few thousand houses was thousands of ObjC allocations while the sheet
         // animated in.
@@ -291,10 +402,20 @@ struct HouseDuplicateIndex: Sendable {
             if !key.isEmpty, index[key] == nil { index[key] = fingerprint.address }
             let dLat = (fingerprint.latitude - coordinate.latitude) * latitudeScale
             let dLon = (fingerprint.longitude - coordinate.longitude) * longitudeScale
-            if dLat * dLat + dLon * dLon <= 12 * 12 { near.append(fingerprint.address) }
+            let distance = (dLat * dLat + dLon * dLon).squareRoot()
+            if distance <= 12 {
+                near.append(fingerprint.address)
+                // Kürzeste Distanz je Adresse behalten — mehrere Treffer am Spot.
+                if let known = distances[key] {
+                    distances[key] = min(known, distance)
+                } else if !key.isEmpty {
+                    distances[key] = distance
+                }
+            }
         }
         byNormalizedAddress = index
         nearby = near
+        nearbyDistances = distances
     }
 
     /// A different address at the same spot is a legitimate second entrance, a corner
@@ -305,6 +426,14 @@ struct HouseDuplicateIndex: Sendable {
         guard !key.isEmpty else { return nil }
         if let exact = byNormalizedAddress[key] { return exact }
         return nearby.first { AddressNormalizer.normalize($0) == key }
+    }
+
+    /// „8 m entfernt" zum Banner, falls der Treffer im Nahbereich liegt —
+    /// sonst nil und das Banner bleibt bei der Adresse allein.
+    func distanceText(for address: String) -> String? {
+        let key = AddressNormalizer.normalize(address)
+        guard !key.isEmpty, let distance = nearbyDistances[key] else { return nil }
+        return "\(Int(distance.rounded())) m entfernt"
     }
 }
 

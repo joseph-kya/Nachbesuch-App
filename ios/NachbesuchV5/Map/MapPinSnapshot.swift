@@ -40,7 +40,11 @@ nonisolated struct MapPinSnapshot: Identifiable, Sendable, Equatable {
     /// a progress counter for an apartment building.
     var markerText: String {
         if isDamaged { return "!" }
-        return unitCount == 1 ? markerOutcome.displayEmojiRaw : "\(completedCount)/\(unitCount)"
+        if unitCount == 1 { return markerOutcome.displayEmojiRaw }
+        // Riesige Zähler („1243/5871") würden je Haus eigene Bitmap-Varianten
+        // erzeugen — ab 4 Stellen nur noch „>999". „12/124" bleibt lesbar.
+        if unitCount > 999 || completedCount > 999 { return ">999" }
+        return "\(completedCount)/\(unitCount)"
     }
 
     /// Same source as everything else that says "offen".

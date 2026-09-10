@@ -92,7 +92,7 @@ object ArchiveSearchEngine {
     private val OPEN_WORDS = setOf("offen", "open")
     private val DONE_WORDS = setOf("fertig", "erledigt", "done", "komplett")
     private val JOINED_WORDS = setOf("dabei", "beitritt", "joined")
-    private val EARLY_WORDS = setOf("fruh", "earlyno", "fruher", "fruhe")
+    private val EARLY_WORDS = setOf("abblocker", "fruh", "earlyno", "fruher", "fruhe")
     private val LATE_WORDS = setOf("spat", "lateno", "spater")
     private val NOT_HOME_WORDS = setOf("niemand", "nichtda", "nothome", "abwesend")
     private val REVISIT_WORDS = setOf("nachbesuch", "revisit", "wiederkommen", "2termin")

@@ -9,6 +9,7 @@ struct HouseDetailSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(AppNoticeCenter.self) private var notices
 
     @Bindable var house: House
@@ -25,7 +26,18 @@ struct HouseDetailSheet: View {
     @State private var draftNote: String
     @State private var sheetRoute: DetailRoute?
     @State private var showDeleteConfirmation = false
+    /// Ausstehende Umwandlung (Ziel-Parteienzahl), bis der Datenverlust-Dialog entschieden ist.
+    @State private var pendingConvertCount: Int?
+    @State private var showConvertConfirm = false
+    /// Ausstehende Verkleinerung — gleiches Dialogmuster wie Umwandeln (wiederverwendet).
+    @State private var pendingResizeCount: Int?
+    @State private var showResizeConfirm = false
     @State private var dismissTask: Task<Void, Never>?
+    /// Entprelltes Notiz-Autosave, damit Tippen weder pro Taste schreibt noch beim Wischen verloren geht.
+    @State private var draftAutosave: Task<Void, Never>?
+    @State private var pendingSave = PendingSave()
+    /// Feuert die Fertig-Haptik genau einmal pro Fertigstellung (Token-Muster wie StreetHeader).
+    @State private var celebrateToken = 0
 
     init(house: House, scope: DayScope, writeDay: Int, onDelete: @escaping (UUID) -> Void = { _ in }) {
         self.house = house
@@ -57,6 +69,8 @@ struct HouseDetailSheet: View {
 
     var body: some View {
         let summary = house.summary(for: scope)
+        // Fertig heißt: keine offene Tür übrig — nicht schon bei „erfasst".
+        let isDone = !summary.units.isEmpty && summary.openCount == 0
 
         NavigationStack {
             Form {
@@ -72,11 +86,30 @@ struct HouseDetailSheet: View {
 
                 Section { header(summary: summary) }
 
+                // Haus fertig: inline feiern statt Alert — einmalig, RM-sicher.
+                if isDone {
+                    Section {
+                        Label("Fertig — alle Türen erledigt", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .transition(.blockSwap(reduceMotion: reduceMotion))
+                            .accessibilityLabel("Fertig, alle Türen erledigt")
+                    }
+                }
+
                 if house.isApartmentBuilding {
                     apartmentSection(units: summary.units)
                 } else if let door = summary.units.first {
                     Section("Ergebnis") {
                         singleDoorEditor(door: door)
+                            // Form still clips a transparent row to its grouped
+                            // corners. Concentric spacing keeps the smaller tile
+                            // corners entirely inside that outer silhouette.
+                            .padding(AppRadius.card - AppRadius.control)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
                     }
                     Section {
                         Button {
@@ -87,9 +120,17 @@ struct HouseDetailSheet: View {
                     }
                 }
 
-                Section("Notiz") {
+                Section {
                     TextField("Notiz", text: $draftNote, axis: .vertical)
                         .lineLimit(2...6)
+                } header: {
+                    Text("Notiz")
+                } footer: {
+                    // Zeichenzahl als Hinweis, kein Limit — lange Notizen bleiben erlaubt.
+                    Text("\(draftNote.count)/500")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
 
                 Section {
@@ -98,6 +139,8 @@ struct HouseDetailSheet: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background { AppBackdrop() }
             .navigationTitle(house.isApartmentBuilding ? "Mehrparteienhaus" : "Hausbesuch")
             .navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)
@@ -149,10 +192,10 @@ struct HouseDetailSheet: View {
                         initialCount: max(2, UserDefaults.standard.integer(forKey: "lastApartmentUnitCount")),
                         currentCount: nil
                     ) { count in
-                        house.convertToApartmentBuilding(unitCount: count)
-                        UserDefaults.standard.set(count, forKey: "lastApartmentUnitCount")
-                        save()
+                        requestConvert(to: count)
                     }
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
                 case .resizeUnits:
                     UnitCountSheet(
                         title: "Anzahl der Parteien",
@@ -160,9 +203,10 @@ struct HouseDetailSheet: View {
                         initialCount: max(2, summary.units.count),
                         currentCount: summary.units.count
                     ) { count in
-                        house.resizeUnits(to: count)
-                        save()
+                        requestResize(to: count)
                     }
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
                 case let .revisitTime(door):
                     RevisitTimeSheet(
                         subject: subjectText(for: door),
@@ -174,11 +218,15 @@ struct HouseDetailSheet: View {
                             ? { clearOutcome(for: door.id) }
                             : nil
                     )
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
                 case .revisitTimeForOpenDoors:
                     RevisitTimeSheet(
                         subject: "\(house.address) — alle offenen Türen",
                         onPick: { date in applyLaterToOpenDoors(at: date) }
                     )
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
                 }
             }
             .confirmationDialog(
@@ -188,17 +236,75 @@ struct HouseDetailSheet: View {
             ) {
                 Button("Haus löschen", role: .destructive) {
                     let houseID = house.id
+                    // Adresse vorher sichern: Nach `delete` ist das Modell weg und kein Undo mehr möglich.
+                    let deletedAddress = house.address
                     Task { await ReminderService.cancelAllRevisits(house: houseID) }
                     modelContext.delete(house)
                     if modelContext.save(reporting: notices, context: "Haus konnte nicht gelöscht werden") {
+                        // Kein Undo — Modell ist fort — darum wenigstens eine lesbare Quittung mit Adresse.
+                        notices.show("Haus „\(deletedAddress)“ gelöscht")
                         onDelete(houseID)
                         dismiss()
                     }
                 }
                 Button("Abbrechen", role: .cancel) {}
             }
+            // Datenverlust-Dialoge: alle deutsch, Bestätigung destruktiv.
+            // Fokus-Rücksprung aufs auslösende Element ist Systemstandard.
+            .confirmationDialog(
+                "Türen haben bereits Status",
+                isPresented: $showConvertConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Trotzdem umwandeln", role: .destructive) {
+                    if let count = pendingConvertCount { applyConvert(to: count) }
+                    pendingConvertCount = nil
+                }
+                Button("Abbrechen", role: .cancel) { pendingConvertCount = nil }
+            } message: {
+                Text("Der bestehende Status bleibt als „Tür 1“ erhalten, die Bezeichnung wird zurückgesetzt. Trotzdem umwandeln?")
+            }
+            .confirmationDialog(
+                "Ergebnisse gehen verloren",
+                isPresented: $showResizeConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Trotzdem verkleinern", role: .destructive) {
+                    if let count = pendingResizeCount { applyResize(to: count) }
+                    pendingResizeCount = nil
+                }
+                Button("Abbrechen", role: .cancel) { pendingResizeCount = nil }
+            } message: {
+                Text("Die hintersten Türen werden mitsamt ihren Ergebnissen entfernt. Trotzdem verkleinern?")
+            }
+            // Erfolg nur bei false→true: Token steigt nur beim Fertigwerden, nie beim Wiederöffnen.
+            .animation(.appCelebrate(reduceMotion: reduceMotion), value: isDone)
+            .sensoryFeedback(.success, trigger: celebrateToken)
+            .onChange(of: isDone) { _, done in
+                guard done else { return }
+                celebrateToken &+= 1
+            }
+            .onChange(of: sheetRoute?.id) { _, newValue in
+                // Sheet ist zu, erst jetzt darf der Bestätigungsdialog hoch —
+                // zwei gleichzeitige Präsentationen verliert SwiftUI still.
+                if newValue == nil {
+                    if pendingConvertCount != nil { showConvertConfirm = true }
+                    else if pendingResizeCount != nil { showResizeConfirm = true }
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                // Hintergrund braucht die Entwürfe im Modell, nicht nur den
+                // Puffer-Flush — sonst geht Tippen beim Weglegen verloren.
+                if phase != .active { commitDrafts() }
+            }
+            // Entprelltes Autosave: kein Schreiben pro Taste, aber nach 2 s
+            // Ruhe steht die Notiz im Modell — Wisch-Geste verliert nichts.
+            .onChange(of: draftNote) { _, _ in scheduleDraftAutosave() }
+            .onChange(of: draftAddress) { _, _ in scheduleDraftAutosave() }
             .onDisappear {
                 dismissTask?.cancel()
+                draftAutosave?.cancel()
+                // Wisch-Geste zum Schließen landet hier — Entwürfe sichern.
                 commitDrafts()
             }
         }
@@ -212,7 +318,7 @@ struct HouseDetailSheet: View {
                 .font(.title3)
                 .foregroundStyle(.white)
                 .frame(width: 44, height: 44)
-                .background(accent, in: RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
+                .background(accent.gradient, in: Circle())
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -223,7 +329,7 @@ struct HouseDetailSheet: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
-                    .contentTransition(.numericText(value: Double(summary.completedCount)))
+                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(summary.completedCount)))
                     .animation(
                         .appFeedback(reduceMotion: reduceMotion),
                         value: summary.completedCount
@@ -238,8 +344,8 @@ struct HouseDetailSheet: View {
         let current = door.result(on: writeDay)
         return VStack(spacing: AppSpacing.snug) {
             LazyVGrid(
-                columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
-                spacing: 10
+                columns: [GridItem(.flexible(), spacing: AppSpacing.snug), GridItem(.flexible(), spacing: AppSpacing.snug)],
+                spacing: AppSpacing.snug
             ) {
                 ForEach(VisitOutcome.primary) { outcome in
                     OutcomeButton(outcome: outcome, isSelected: current == outcome) {
@@ -255,6 +361,14 @@ struct HouseDetailSheet: View {
                 // Tapping an already-postponed door edits its time; the sheet's
                 // own "Zeit entfernen" is the way back to no status.
                 sheetRoute = .revisitTime(door: door)
+            }
+
+            // Gebuchte Zeit als indigofarbene Glanz-Zeile mit relativem Label;
+            // tippen öffnet denselben Zeit-Sheet wie der Später-Button.
+            if current == .later, let booked = door.revisitTime(on: writeDay) {
+                BookedTimeGlance(bookedAt: booked) {
+                    sheetRoute = .revisitTime(door: door)
+                }
             }
 
             if let timestamp = door.timestamp(in: scope) {
@@ -280,18 +394,22 @@ struct HouseDetailSheet: View {
                     onLater: { sheetRoute = .revisitTime(door: door) },
                     onRename: { name in
                         house.renameUnit(name, id: door.id)
-                        save()
+                        scheduleSave()
                     }
                 )
             }
         } header: {
             Text("Türen")
         } footer: {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: AppSpacing.snug) {
                 Button {
                     guard house.setOutcomeForOpenDoors(.notHome, day: writeDay) > 0 else { return }
-                    save()
-                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    // Leichtes Tippen sofort, Erfolg erst beim Schreiben: so fühlt
+                    // sich die Masse an wie eine Einzeltür, nur lauter.
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    pendingSave.schedule(in: modelContext, reporting: notices) {
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    }
                 } label: {
                     Label("Alle offenen Türen als „Niemand da“", systemImage: "arrow.clockwise.circle")
                         .font(.footnote.weight(.medium))
@@ -316,8 +434,11 @@ struct HouseDetailSheet: View {
     // MARK: Actions
 
     private func apply(_ outcome: VisitOutcome, to door: DoorResult, current: VisitOutcome?) {
+        // Zustand zuerst, Speichern danach: Das Modell steht sofort, der Chip
+        // füllt sich im selben Frame — der verzögerte Save darf nie sichtbar sein.
         house.setOutcome(current == outcome ? nil : outcome, for: door.id, day: writeDay)
-        save(feedback: true)
+        UISelectionFeedbackGenerator().selectionChanged()
+        scheduleSave()
         // Any non-"Später" answer settles the door, so its pending reminder has to
         // go — otherwise a phone buzzes at 18:00 for a household that joined at 17.
         cancelReminder(for: door.id)
@@ -338,37 +459,56 @@ struct HouseDetailSheet: View {
     }
 
     /// Postpones one door to `date` and books the reminder.
+    ///
+    /// Kein eigenes Feedback hier: Der Zeit-Sheet feuert beim Übernehmen bereits
+    /// den Erfolg — doppelt vibriert schlechter als gar nicht.
     private func applyLater(to unitID: UUID, at date: Date) {
         house.setOutcome(.later, for: unitID, day: writeDay, revisitAt: date)
-        save()
+        scheduleSave()
         scheduleReminder(for: unitID, at: date)
         notices.show("Später um \(RevisitPlanner.clockFormatter.string(from: date))")
     }
 
     /// The building-wide version, booking the same time for every open door.
+    ///
+    /// Wie der Masse-nichtZuhause-Button: leichtes Tippen sofort, Erfolg erst
+    /// beim Schreiben — Einzeltüren bleiben dagegen leise.
+    /// Batch über `scheduleRevisits`: eine Prüfung, ein Hintergrund-Task.
     private func applyLaterToOpenDoors(at date: Date) {
         guard house.setOutcomeForOpenDoors(.later, day: writeDay, revisitAt: date) > 0 else { return }
-        save()
-        let openDoors = house.units.filter { $0.isOpen(in: writeDay == 2 ? .day2 : .day1) }
+        UISelectionFeedbackGenerator().selectionChanged()
+        pendingSave.schedule(in: modelContext, reporting: notices) {
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        }
+        // Snapshot für den Hintergrund: nur sendbare Werte, kein Modellzugriff dort.
+        let filterScope: DayScope = writeDay == 2 ? .day2 : .day1
         let houseID = house.id
         let address = house.address
         let isApartment = house.isApartmentBuilding
         let day = writeDay
-        Task {
-            for door in openDoors.prefix(ReminderService.revisitBudget) {
-                await ReminderService.scheduleRevisit(
-                    house: houseID, door: door.id, day: day,
+        let batch: [RevisitReminderCandidate] = house.units
+            .filter { $0.isOpen(in: filterScope) }
+            .prefix(ReminderService.revisitBudget)
+            .map { door in
+                RevisitReminderCandidate(
+                    houseID: houseID, doorID: door.id, day: day,
                     address: address, doorLabel: door.label,
-                    isApartmentBuilding: isApartment, at: date
+                    isApartmentBuilding: isApartment, date: date
                 )
             }
+        let total = batch.count
+        // Ein Call statt Schleife: die einzelne Prüfung lebt in der Batch-API.
+        // Fällt die Batch-API weg, hier auf Einzelschleife mit `scheduleRevisit` zurückfallen.
+        Task.detached(priority: .utility) {
+            await ReminderService.scheduleRevisits(batch)
         }
-        notices.show("\(openDoors.count) Türen: später um \(RevisitPlanner.clockFormatter.string(from: date))")
+        notices.show("\(total) Türen: später um \(RevisitPlanner.clockFormatter.string(from: date))")
     }
 
+    /// Kein eigenes Feedback: Der Zeit-Sheet bestätigt "Zeit entfernen" selbst.
     private func clearOutcome(for unitID: UUID) {
         house.setOutcome(nil, for: unitID, day: writeDay)
-        save()
+        scheduleSave()
         cancelReminder(for: unitID)
     }
 
@@ -397,30 +537,89 @@ struct HouseDetailSheet: View {
         Task { await ReminderService.cancelRevisit(house: houseID, door: unitID, day: day) }
     }
 
+    /// Ob irgendeine Tür je einen Status bekam (Tag 1 oder 2) — dann ist
+    /// Umwandeln/Verkleinern möglicher Datenverlust und braucht Bestätigung.
+    private var hasAnyOutcome: Bool {
+        house.units.contains { $0.outcome != nil || $0.day2Outcome != nil }
+    }
+
+    /// Ob beim Verkleinern auf `target` eine Tür mit Ergebnis wegfiele.
+    private func removedDoorsHaveOutcomes(target: Int) -> Bool {
+        let units = house.units
+        guard target < units.count else { return false }
+        return units[target...].contains { $0.outcome != nil || $0.day2Outcome != nil }
+    }
+
+    /// Entwürfe zuerst ins Modell, dann prüfen: Ohne Status geht es sofort,
+    /// mit Status entscheidet der Bestätigungsdialog nach dem Schließen des Sheets.
+    private func requestConvert(to count: Int) {
+        commitDrafts()
+        guard hasAnyOutcome else {
+            applyConvert(to: count)
+            return
+        }
+        pendingConvertCount = count
+    }
+
+    private func applyConvert(to count: Int) {
+        commitDrafts()
+        house.convertToApartmentBuilding(unitCount: count)
+        UserDefaults.standard.set(count, forKey: "lastApartmentUnitCount")
+        scheduleSave()
+    }
+
+    /// Gleiches Muster wie Umwandeln: Vergrößern ist harmlos, Verkleinern mit
+    /// Ergebnissen auf den hinteren Türen braucht Bestätigung.
+    private func requestResize(to count: Int) {
+        commitDrafts()
+        guard removedDoorsHaveOutcomes(target: count) else {
+            applyResize(to: count)
+            return
+        }
+        pendingResizeCount = count
+    }
+
+    private func applyResize(to count: Int) {
+        commitDrafts()
+        house.resizeUnits(to: count)
+        scheduleSave()
+    }
+
+    /// Schreibt die Entwürfe nach 2 s Tipppause — kein Schreiben pro Taste.
+    private func scheduleDraftAutosave() {
+        draftAutosave?.cancel()
+        draftAutosave = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            commitDrafts()
+        }
+    }
+
     /// Address and note are buffered while typing so there is no SwiftData write per
     /// keystroke, then written once here.
     private func commitDrafts() {
-        var changed = false
+        var touched = false
         let address = draftAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         if !address.isEmpty, address != house.address {
             house.address = address
-            changed = true
+            touched = true
         }
         if draftNote != house.note {
             house.note = draftNote
-            changed = true
+            touched = true
         }
-        guard changed else { return }
         // Both fields feed the archive's search index, which keys off `updatedAt` —
         // an edited note used to stay unsearchable until something else changed.
-        house.touch()
-        save()
+        if touched { house.touch() }
+        flushPendingSave()
     }
 
-    private func save(feedback: Bool = false) {
-        if modelContext.save(reporting: notices, context: "Änderung konnte nicht gespeichert werden"), feedback {
-            UISelectionFeedbackGenerator().selectionChanged()
-        }
+    private func scheduleSave() {
+        pendingSave.schedule(in: modelContext, reporting: notices)
+    }
+
+    private func flushPendingSave() {
+        pendingSave.flush(in: modelContext, reporting: notices)
     }
 }
 
@@ -456,7 +655,7 @@ private struct ApartmentDoorRow: View {
 
     var body: some View {
         let current = door.result(on: writeDay)
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: AppSpacing.tight) {
             HStack(spacing: AppSpacing.tight) {
                 OutcomeGlyph(outcome: current)
                 if isEditingLabel {
@@ -489,7 +688,7 @@ private struct ApartmentDoorRow: View {
                 }
             }
 
-            HStack(spacing: 6) {
+            HStack(spacing: AppSpacing.tight) {
                 ForEach(VisitOutcome.primary) { outcome in
                     OutcomeChip(
                         emoji: outcome.emoji,
@@ -514,6 +713,11 @@ private struct ApartmentDoorRow: View {
                 .accessibilityLabel(VisitOutcome.later.title)
                 .accessibilityHint("Fragt nach einer Uhrzeit")
                 .accessibilityAddTraits(current == .later ? [.isButton, .isSelected] : .isButton)
+            }
+
+            // Gebuchte Zeit mit relativem Label; tippen öffnet den Zeit-Sheet.
+            if current == .later, let booked = door.revisitTime(on: writeDay) {
+                BookedTimeGlance(bookedAt: booked, action: onLater)
             }
         }
         .padding(.vertical, 4)
@@ -550,6 +754,7 @@ private struct ApartmentDoorRow: View {
 /// conditional fill and border — was past what the type checker would solve in one
 /// expression.
 private struct OutcomeChip: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let emoji: String
     let tint: Color
     let isSelected: Bool
@@ -559,20 +764,41 @@ private struct OutcomeChip: View {
 
     var body: some View {
         Button(action: action) {
-            Text(emoji)
-                .font(.body)
-                .frame(maxWidth: width == nil ? .infinity : nil)
-                .frame(width: width, height: 38)
-                .background {
-                    RoundedRectangle(cornerRadius: AppRadius.small, style: .continuous)
-                        .fill(isSelected ? tint.opacity(0.2) : Color(uiColor: .tertiarySystemFill))
+            ZStack(alignment: .topTrailing) {
+                Text(emoji)
+                    .font(.body)
+                    .frame(maxWidth: width == nil ? .infinity : nil)
+                    .frame(width: width, height: 38)
+                    .contentCard(cornerRadius: AppRadius.control, elevated: false)
+                    .selectionRing(isSelected, tint: tint, cornerRadius: AppRadius.control)
+                    .contentShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
+
+                // Kein Chip-Skalieren: In der Form clippt das an den
+                // Abschnittsrändern. Stattdessen wächst nur das Häkchen
+                // (0.6 → 1, RM-sicher) und hüpft einmal — das Emoji ist Text,
+                // kein Symbol, darum lebt der Bounce auf dem Badge.
+                if isSelected {
+                    badge
+                        .offset(x: 5, y: -5)
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
-                .overlay {
-                    RoundedRectangle(cornerRadius: AppRadius.small, style: .continuous)
-                        .strokeBorder(isSelected ? tint : .clear, lineWidth: 1.5)
-                }
+            }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableRowStyle())
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: isSelected)
+    }
+
+    @ViewBuilder
+    private var badge: some View {
+        let image = Image(systemName: "checkmark.circle.fill")
+            .font(.caption)
+            .foregroundStyle(tint)
+            .background(.background, in: Circle())
+        if reduceMotion {
+            image
+        } else {
+            image.symbolEffect(.bounce, value: isSelected)
+        }
     }
 }
 
@@ -617,6 +843,8 @@ private struct UnitCountSheet: View {
                         Stepper("", value: clamped, in: 2...100)
                             .labelsHidden()
                     }
+                    // Deutsches Label „Anzahl" plus 44pt-Treffläche für A11y.
+                    .frame(minHeight: 44)
                 } footer: {
                     if let currentCount, count < currentCount {
                         Text("\(currentCount - count) Türen am Ende der Liste werden mitsamt ihren Ergebnissen entfernt.")
@@ -651,8 +879,6 @@ private struct UnitCountSheet: View {
                     Button("Fertig") { isFocused = false }
                 }
             }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
         }
     }
 }

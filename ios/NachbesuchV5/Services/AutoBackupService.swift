@@ -35,10 +35,13 @@ actor AutoBackupService {
             // or a launch that raced the seeding would block the real backup
             // until tomorrow.
             guard !gebietSnapshots.isEmpty || !houseSnapshots.isEmpty || !passantSnapshots.isEmpty else { return }
+            // Codierung im Hintergrund: Die Sicherung darf Pins/Scrolls keine CPU
+            // wegnehmen — manuell bleibt userInitiated, automatisch background.
             let data = try await BackupService.encodeBackup(
                 gebietSnapshots: gebietSnapshots,
                 houseSnapshots: houseSnapshots,
-                passantSnapshots: passantSnapshots
+                passantSnapshots: passantSnapshots,
+                priority: .background
             )
             guard !Task.isCancelled else { return }
             let url = try write(data: data, day: today)

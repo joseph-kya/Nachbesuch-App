@@ -40,7 +40,7 @@ nonisolated enum VisitOutcome: String, Codable, CaseIterable, Hashable, Identifi
     nonisolated var title: String {
         switch self {
         case .notHome: "Niemand da"
-        case .earlyNo: "Frühes Nein"
+        case .earlyNo: "Abblocker"
         case .lateNo: "Spätes Nein"
         case .joined: "Dabei"
         case .later: "Später"

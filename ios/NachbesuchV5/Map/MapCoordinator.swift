@@ -34,8 +34,13 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     /// Insert position and map coordinate of a tap onto the drawn boundary line
     /// between two vertices. `nil` outside drawing mode, where taps belong to pins.
     var onTapBoundary: ((Int, CLLocationCoordinate2D) -> Void)?
+    /// Leerer Kartentap (kein Pin, keine Linie): Fade-Deselect ohne Kamerasprung.
+    var onTapEmpty: (() -> Void)?
     var menuProvider: ((MapPinSnapshot) -> UIMenu)?
     var previewProvider: ((MapPinSnapshot) -> UIViewController?)?
+    /// Feuert bei Puck-Wechsel uncertain↔trusted (Hysterese in PuckConfidence) —
+    /// der Screen lässt den Folgen-Button dann einmal aufpoppen.
+    var onPuckConfidenceChanged: ((PuckConfidence) -> Void)?
     var reduceMotionEnabled = false
 
     private var annotationsByHouseID: [UUID: HouseAnnotation] = [:]
@@ -49,6 +54,11 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
 
     private var boundaryOverlay: MKOverlay?
     private var boundaryHash: Int?
+    /// Letzter echter Overlay-Neuaufbau. Bei 100+ Punkten kostet jedes
+    /// remove/addOverlay einen Renderpass — höchstens alle 100 ms neu
+    /// zeichnen, dazwischen bleibt der Hash alt damit der nächste Pass nachholt.
+    private var lastBoundaryRedraw = Date.distantPast
+    private static let boundaryRedrawThrottle: TimeInterval = 0.1
     private var draftAnnotations: [DraftPointAnnotation] = []
 
     private var lastCommandID: UUID?
@@ -259,6 +269,14 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     // MARK: - Boundary & draft points
 
     func syncBoundary(_ mapView: MKMapView, boundary: [CLLocationCoordinate2D]) {
+        // Drossel für lange Polygone (100+ Punkte): Jeder Punkt würde sonst ein
+        // remove/addOverlay auslösen. Höchstens alle 100 ms neu aufbauen —
+        // bei Rückgabe ohne Hash-Update holt der nächste Pass automatisch nach.
+        // Löschen (<2 Punkte) und kleine Polygone laufen immer sofort durch.
+        if boundary.count > 50,
+           Date.now.timeIntervalSince(lastBoundaryRedraw) < Self.boundaryRedrawThrottle {
+            return
+        }
         // Order-sensitive: a commutative sum would treat a reordered polygon as
         // unchanged and leave a stale overlay on screen.
         var hasher = Hasher()
@@ -270,6 +288,7 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         let value = hasher.finalize()
         guard value != boundaryHash else { return }
         boundaryHash = value
+        lastBoundaryRedraw = Date.now
 
         if let boundaryOverlay {
             mapView.removeOverlay(boundaryOverlay)
@@ -322,8 +341,11 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         for pin in pins {
             live.remove(pin.id)
             if let annotation = passantAnnotationsByID[pin.id] {
-                if annotation.coordinate.latitude != pin.coordinate.latitude
-                    || annotation.coordinate.longitude != pin.coordinate.longitude {
+                let moved = annotation.coordinate.latitude != pin.coordinate.latitude
+                    || annotation.coordinate.longitude != pin.coordinate.longitude
+                let changed = moved || annotation.outcome != pin.outcome || annotation.note != pin.note
+                guard changed else { continue }
+                if moved {
                     annotation.coordinate = pin.coordinate
                 }
                 annotation.outcome = pin.outcome
@@ -371,15 +393,24 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     }
 
     @objc private func handleBoundaryTap(_ recognizer: UITapGestureRecognizer) {
-        guard let onTapBoundary, let mapView, recognizer.state == .ended else { return }
+        guard let mapView, recognizer.state == .ended else { return }
         let point = recognizer.location(in: mapView)
         // Pins and draft vertices handle their own taps — a tap near one is
         // meant for it, never for the line behind it.
         guard !tapsAnnotation(at: point, in: mapView) else { return }
-        let vertices = draftAnnotations.map { mapView.convert($0.coordinate, toPointTo: mapView) }
-        guard let index = Self.insertionIndex(tap: point, vertices: vertices) else { return }
-        UISelectionFeedbackGenerator().selectionChanged()
-        onTapBoundary(index, mapView.convert(point, toCoordinateFrom: mapView))
+        if let onTapBoundary {
+            let vertices = draftAnnotations.map { mapView.convert($0.coordinate, toPointTo: mapView) }
+            if let index = Self.insertionIndex(tap: point, vertices: vertices) {
+                UISelectionFeedbackGenerator().selectionChanged()
+                onTapBoundary(index, mapView.convert(point, toCoordinateFrom: mapView))
+                return
+            }
+        }
+        // Leertreffer: Auswahl mit Fade lösen (kein Kamerasprung), Rest per Callback.
+        for selected in mapView.selectedAnnotations {
+            mapView.deselectAnnotation(selected, animated: !isMotionReduced)
+        }
+        onTapEmpty?()
     }
 
     private func tapsAnnotation(at point: CGPoint, in mapView: MKMapView) -> Bool {
@@ -502,7 +533,9 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         onTapDraftPoint = nil
         onTapPassant = nil
         onTapBoundary = nil
+        onTapEmpty = nil
         onDropConsumed = nil
+        onPuckConfidenceChanged = nil
         menuProvider = nil
         previewProvider = nil
     }
@@ -533,9 +566,16 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         )
         if let accuracy, accuracy > 0 {
             puck.apply(accuracyRadiusInPoints: CGFloat(accuracy / metersPerPoint(mapView)))
-            puckConfidence = PuckConfidence.from(horizontalAccuracy: accuracy, current: puckConfidence)
+            // Nur bei echtem Bandwechsel melden — Hysterese steckt in
+            // PuckConfidence.from, kein Flackern an der Schwelle.
+            let next = PuckConfidence.from(horizontalAccuracy: accuracy, current: puckConfidence)
+            if next != puckConfidence {
+                puckConfidence = next
+                onPuckConfidenceChanged?(next)
+            }
         }
         puck.apply(confidence: puckConfidence)
+        // Puls nur im Follow-Modus — sonst steht der Puck still (kein Dauerpuls).
         puck.setPulsing(mapView.userTrackingMode != .none)
     }
 
@@ -548,11 +588,13 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     }
 
     #if DEBUG
-    nonisolated private static var fakeAccuracyOverride: String? {
+    // Einmalig cachen: Environment baut pro Zugriff ein frisches Dict — pro
+    // Puck-Update wäre das Dauer-Overhead im Renderpfad.
+    nonisolated private static let fakeAccuracyOverride: String? = {
         ProcessInfo.processInfo.environment["NACHBESUCH_FAKE_ACCURACY"]
-    }
+    }()
     #else
-    nonisolated private static var fakeAccuracyOverride: String? { nil }
+    nonisolated private static let fakeAccuracyOverride: String? = nil
     #endif
 
     /// Hysteresis state for the puck — see `PuckConfidence`.
@@ -601,8 +643,18 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     private static let scaleCoalesceInterval: TimeInterval = 0.2
 
     private func updatePinScale(_ mapView: MKMapView) {
-        let metersAcross = mapView.region.span.latitudeDelta * 111_320
-        let next = Self.scale(forMetersAcross: metersAcross)
+        // Übersicht (>0,5° Spanne ≈ Stadtgröße): immer Dot — schneidet die
+        // Full/Compact-Bitmapvarianten weg, wo Adressen ohnehin unlesbar sind.
+        // Redundant zu den Meters-Schwellen unten, aber explizit damit eine
+        // künftige Schwellenänderung die Übersicht nicht aufbläht.
+        let span = mapView.region.span
+        let next: PinScale
+        if span.latitudeDelta > 0.5 || span.longitudeDelta > 0.5 {
+            next = .dot
+        } else {
+            let metersAcross = span.latitudeDelta * 111_320
+            next = Self.scale(forMetersAcross: metersAcross)
+        }
         guard next != pinScale else {
             pendingScale = nil
             return
@@ -729,7 +781,12 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
             let cutoff = now.addingTimeInterval(-2)
             lastDirectTapByHouse = lastDirectTapByHouse.filter { $0.value > cutoff }
         }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        // Auswahl-Haptik (einmalig, UIKit-Pfad) + Pop nur am getroffenen Pin.
+        UISelectionFeedbackGenerator().selectionChanged()
+        if let annotation = annotationsByHouseID[houseID],
+           let view = mapView?.view(for: annotation) as? HousePinView {
+            view.performSelectPop()
+        }
 
         let stacked = stackedHouseIDs(around: houseID)
         if stacked.count > 1 {
@@ -759,8 +816,10 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
 
     private func deselect(_ mapView: MKMapView, _ annotation: MKAnnotation?) {
         guard let annotation else { return }
+        // Fade statt Sprung: löst nur die Callout-Auswahl, bewegt nie die Kamera.
+        let animated = !isMotionReduced
         Task { @MainActor [weak mapView] in
-            mapView?.deselectAnnotation(annotation, animated: false)
+            mapView?.deselectAnnotation(annotation, animated: animated)
         }
     }
 

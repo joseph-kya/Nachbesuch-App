@@ -7,6 +7,7 @@ struct ExportSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(AppNoticeCenter.self) private var notices
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let gebiet: Gebiet
     let houses: [House]
@@ -38,17 +39,19 @@ struct ExportSheet: View {
         let gebietID: UUID
         let scope: DayScope
         let count: Int
-        let newestUpdate: Date?
         let visitedOnly: Bool
         let includeNotes: Bool
     }
 
     private var buildKey: BuildKey {
+        // No max(updatedAt) scan: houses is a snapshot taken in prepareExport
+        // and never mutates in place while open. The old key faulted updatedAt
+        // on every house on every body eval (every toggle) — the exact
+        // main-thread fault storm List/Archive already removed.
         BuildKey(
             gebietID: gebiet.id,
             scope: scope,
             count: houses.count,
-            newestUpdate: houses.max(by: { $0.updatedAt < $1.updatedAt })?.updatedAt,
             visitedOnly: options.visitedOnly,
             includeNotes: options.includeNotes
         )
@@ -115,6 +118,19 @@ struct ExportSheet: View {
 
     private var contentSection: some View {
         Section {
+            // „N Häuser, M Passanten" mit Zahlen-Morph — derselbe Stand, den die
+            // Teilen-Buttons gleich darunter verschicken.
+            HStack {
+                Text("Umfang")
+                Spacer()
+                Text("\(summaryCounts.houses) Häuser, \(summaryCounts.passanten) Passanten")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(summaryTotal)))
+                    .animation(.appFeedback(reduceMotion: reduceMotion), value: summaryTotal)
+            }
+            .accessibilityLabel("\(summaryCounts.houses) Häuser, \(summaryCounts.passanten) Passanten im Export")
+
             Toggle("Notizen einbeziehen", isOn: $includeNotes)
 
             if let document, !document.isEmpty {
@@ -167,6 +183,7 @@ struct ExportSheet: View {
                             systemImage: "doc.richtext"
                         )
                     }
+                    .simultaneousGesture(shareTap)
                 } else {
                     HStack {
                         Label("PDF wird erstellt …", systemImage: "doc.text")
@@ -184,6 +201,7 @@ struct ExportSheet: View {
                             systemImage: "text.alignleft"
                         )
                     }
+                    .simultaneousGesture(shareTap)
                     ShareLink(item: DayExportService.makeLegacyText(document)) {
                         exportAction(
                             title: "Legacy-Adressliste",
@@ -191,6 +209,7 @@ struct ExportSheet: View {
                             systemImage: "list.bullet.rectangle"
                         )
                     }
+                    .simultaneousGesture(shareTap)
                 }
             }
         } header: {
@@ -201,7 +220,7 @@ struct ExportSheet: View {
     }
 
     private func exportAction(title: String, subtitle: String, systemImage: String) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: AppSpacing.snug) {
             Image(systemName: systemImage)
                 .font(.title3)
                 .foregroundStyle(.tint)
@@ -221,6 +240,25 @@ struct ExportSheet: View {
 
     // MARK: Build
 
+    /// Was im Export landet: Dokument-Stand, sonst Schnappschuss des Callers.
+    private var summaryCounts: (houses: Int, passanten: Int) {
+        if let document {
+            (document.includedHouses, document.passanten.count)
+        } else {
+            (houses.count, passanten.count)
+        }
+    }
+
+    private var summaryTotal: Int { summaryCounts.houses + summaryCounts.passanten }
+
+    /// Teilen-Tippen bestätigt den Erfolg: ShareLink meldet kein Fertig zurück,
+    /// darum bestätigt der Tipp selbst — stumm teilen fühlt sich kaputt an.
+    private var shareTap: some Gesture {
+        TapGesture().onEnded { _ in
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        }
+    }
+
     private var cleanupSection: some View {
         Section {
             if let document, document.isExportable, !document.isEmpty {
@@ -236,7 +274,11 @@ struct ExportSheet: View {
     }
 
     private func deleteGebiet() async {
+        // Namen vorher sichern: Nach dem Löschen ist das Modell fort.
+        let name = gebiet.displayName
         guard await GebietDeletion.delete(gebiet.id, in: modelContext, notices: notices) else { return }
+        // Quittung nach Export+Löschen; Navigation bleibt beim Aufrufer.
+        notices.show("„\(name)“ gelöscht. Der Export bleibt bestehen.")
         dismiss()
     }
 

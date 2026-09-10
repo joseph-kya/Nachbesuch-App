@@ -7,11 +7,18 @@ import SwiftUI
 /// `contentCard` and the app backdrop, so iOS 26 renders them in glass and
 /// iOS 18 on the opaque branch — the same split every other screen uses.
 /// Reached deliberately from Archiv → ⋯ → Anleitung, never unasked.
+/// WAVE4: bewusst kein „Nicht mehr zeigen"-Schalter und kein Auto-Zeigen nach
+/// Schemawechsel — die Anleitung erscheint nur auf Wunsch aus dem Archiv, ein
+/// Schalter hätte nichts zu schalten und ein Auto-Aufpoppen bräche genau das.
 struct TutorialView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAccent) private var accent
 
     @State private var page = TutorialView.initialPage
+    /// WAVE2: single selection haptic per Weiter-tap, including the final
+    /// "Los geht's" which changes no page and would miss a page-trigger.
+    @State private var advanceTaps = 0
 
     /// Screenshot/review harness: open directly on a page.
     /// `SIMCTL_CHILD_NACHBESUCH_TUTORIAL_PAGE=3 xcrun simctl launch …`
@@ -37,16 +44,29 @@ struct TutorialView: View {
                             .padding(.vertical, AppSpacing.snug)
                     }
                 }
-                .tabViewStyle(.page(indexDisplayMode: .automatic))
-                .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: page)
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .animation(.appSettle(reduceMotion: reduceMotion), value: page)
+
+                // WAVE2: active pill morph — Capsule 16 vs 6, appFeedback.
+                // System dots hidden above; these carry German VO labels.
+                HStack(spacing: 6) {
+                    ForEach(TutorialPage.all) { entry in
+                        TutorialDot(isActive: entry.id == page, accent: accent)
+                    }
+                }
+                .padding(.vertical, AppSpacing.tight)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Seite \(page + 1) von \(TutorialPage.all.count)")
 
                 Button(action: advance) {
                     Text(page < TutorialPage.all.count - 1 ? "Weiter" : "Los geht's")
                         .font(.headline)
                         .frame(maxWidth: .infinity, minHeight: AppTouch.minimum)
                 }
-                .buttonStyle(.borderedProminent)
+                .compatGlassButton(prominent: true)
                 .buttonBorderShape(.capsule)
+                .tint(accent)
+                .sensoryFeedback(.selection, trigger: advanceTaps)
                 .padding(.horizontal, AppSpacing.regular)
                 .padding(.bottom, AppSpacing.regular)
                 .accessibilityLabel(page < TutorialPage.all.count - 1 ? "Weiter zur nächsten Seite" : "Anleitung schließen")
@@ -64,7 +84,7 @@ struct TutorialView: View {
     }
 
     private func advance() {
-        UISelectionFeedbackGenerator().selectionChanged()
+        advanceTaps += 1
         if page < TutorialPage.all.count - 1 {
             page += 1
         } else {
@@ -173,19 +193,47 @@ struct TutorialPage: Identifiable {
     ]
 }
 
+private struct TutorialDot: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let isActive: Bool
+    let accent: Color
+
+    var body: some View {
+        Capsule(style: .continuous)
+            .fill(isActive ? AnyShapeStyle(accent) : AnyShapeStyle(.quaternary))
+            .frame(width: isActive ? 16 : 6, height: 6)
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: isActive)
+            .accessibilityHidden(true)
+    }
+}
+
 private struct TutorialCard: View {
     @Environment(\.appAccent) private var accent
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .largeTitle) private var heroSize: CGFloat = 44
     let page: TutorialPage
+
+    /// Capped: at AX5 the uncapped metric reaches ~176 pt, pushing the points
+    /// off-screen and forcing the ScrollView + card to re-layout across all 7
+    /// preloaded pages. Decorative hero stays decorative.
+    private var cappedHero: CGFloat { min(heroSize, 60) }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppSpacing.regular) {
                 Image(systemName: page.systemImage)
-                    .font(.system(size: heroSize))
+                    .font(.system(size: cappedHero))
                     .foregroundStyle(.white)
-                    .frame(width: heroSize * 2, height: heroSize * 2)
+                    .frame(width: cappedHero * 2, height: cappedHero * 2)
                     .background(accent.gradient, in: Circle())
+                    // WAVE3: dezentes Aufploppen je Seite, einmalig (Wert = Seiten-ID).
+                    // RM: nonRepeating, kein Rauschen beim Blättern.
+                    .symbolEffect(
+                        .bounce,
+                        options: reduceMotion ? .nonRepeating : .default,
+                        value: page.id
+                    )
+                    .symbolEffectsRemoved(reduceMotion)
                     .accessibilityHidden(true)
 
                 Text(page.title)

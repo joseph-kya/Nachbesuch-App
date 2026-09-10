@@ -40,7 +40,10 @@ nonisolated struct HouseRowModel: Identifiable, Equatable, Sendable {
     var formattedDistance: String? {
         guard let distance else { return nil }
         if distance < 950 { return "\(Int((distance / 10).rounded() * 10)) m" }
-        return String(format: "%.1f km", distance / 1000)
+        // Manual one-decimal km: String(format:) re-parses the format string
+        // on every visible row on every body eval.
+        let tenths = Int((distance / 100).rounded())
+        return "\(tenths / 10).\(abs(tenths % 10)) km"
     }
 
     /// What the row leads with.
@@ -175,6 +178,11 @@ nonisolated struct StreetSection: Identifiable, Equatable, Sendable {
     let completedCount: Int
     let openCount: Int
 
+    /// Synthetische Sektion ("nearest"/"revisit"): fasst mehrere Straßen zu einer
+    /// Rangfolge zusammen — Fortschritt/Balken wären über den gefilterten
+    /// Ausschnitt irreführend, nur die Adresszahl bleibt.
+    var isSynthetic: Bool { !id.hasPrefix("street:") }
+
     /// Doors with nothing left to do on them.
     ///
     /// **Not** `completedCount`. A door counts as *completed* the moment an outcome
@@ -248,7 +256,11 @@ nonisolated enum HouseListBuilder {
     }
 
     static func filter(_ rows: [HouseRowModel], filter: ListFilter, query: String) -> [HouseRowModel] {
-        let tokens = SearchText.tokenize(query)
+        // Token-Deckel: mehr als 10 Token prüft niemand per Hand — begrenzt die
+        // contains-Durchläufe pro Zeile auf eine Konstante. Absprache mit dem
+        // List-Agenten: Query-seitig gilt derselbe Deckel; dieses `prefix(10)` ist
+        // die Builder-seitige Abwehr-Tiefe, keine zweite Token-Logik.
+        let tokens = Array(SearchText.tokenize(query).prefix(10))
         guard !tokens.isEmpty || filter != .all else { return rows }
         return rows.filter { row in
             filter.matches(row) && tokens.allSatisfy { row.searchText.contains($0) }
@@ -299,17 +311,26 @@ nonisolated enum HouseListBuilder {
         return measured.sorted { ($0.distance ?? .infinity) < ($1.distance ?? .infinity) }
     }
 
-    static func sections(from rows: [HouseRowModel]) -> [StreetSection] {
+    static func sections(from rows: [HouseRowModel], streetOrder: [String]? = nil) -> [StreetSection] {
         var byStreet: [String: [HouseRowModel]] = [:]
-        var order: [String] = []
         for row in rows {
-            if byStreet[row.street] == nil { order.append(row.street) }
             byStreet[row.street, default: []].append(row)
         }
+        // The corpus sorts its street names once; per-keystroke filtering reuses
+        // that order instead of paying localizedStandardCompare per section again.
+        // Streets the snapshot predates (import while open) sort in behind it.
+        let order: [String]
+        if let streetOrder {
+            let extra = byStreet.keys.filter { !streetOrder.contains($0) }
+                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            order = streetOrder.filter { byStreet[$0] != nil } + extra
+        } else {
+            order = byStreet.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        }
         return order
-            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
             .map { street in
                 let rows = byStreet[street] ?? []
+                // Single pass: the old code reduced the same array three times.
                 var unitCount = 0
                 var completed = 0
                 var open = 0
@@ -344,9 +365,14 @@ nonisolated enum HouseListBuilder {
     }
 
 
+    /// Street names in display order, sorted once per corpus — not per keystroke.
+    static func sortedStreetOrder(_ streets: [String]) -> [String] {
+        streets.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
     static func presentedSections(
         rows: [HouseRowModel], filter: ListFilter, query: String,
-        origin: CLLocationCoordinate2D?
+        origin: CLLocationCoordinate2D?, streetOrder: [String]? = nil
     ) -> [StreetSection] {
         let filtered = HouseListBuilder.filter(rows, filter: filter, query: query)
         guard !filtered.isEmpty, !Task.isCancelled else { return [] }
@@ -354,34 +380,50 @@ nonisolated enum HouseListBuilder {
             // Nearest-first is a flat ranking; grouping it back into streets would
             // throw the ordering away again.
             let ranked = HouseListBuilder.sortByDistance(filtered, from: origin)
+            var units = 0
+            var done = 0
+            var open = 0
+            for row in ranked {
+                units += row.unitCount
+                done += row.completedCount
+                open += row.openCount
+            }
             return [
                 StreetSection(
                     id: "nearest",
                     title: "Nächste zuerst",
                     rows: ranked,
                     houseCount: ranked.count,
-                    unitCount: ranked.reduce(0) { $0 + $1.unitCount },
-                    completedCount: ranked.reduce(0) { $0 + $1.completedCount },
-                    openCount: ranked.reduce(0) { $0 + $1.openCount }
+                    unitCount: units,
+                    completedCount: done,
+                    openCount: open
                 )
             ]
         } else if filter == .later {
             // Under this filter the question is never "which street am I on" but
             // "who is due next", so the rows arrive in one time-ordered run.
             let byTime = HouseListBuilder.sortByRevisit(filtered)
+            var units = 0
+            var done = 0
+            var open = 0
+            for row in byTime {
+                units += row.unitCount
+                done += row.completedCount
+                open += row.openCount
+            }
             return [
                 StreetSection(
                     id: "revisit",
                     title: "Nach Uhrzeit",
                     rows: byTime,
                     houseCount: byTime.count,
-                    unitCount: byTime.reduce(0) { $0 + $1.unitCount },
-                    completedCount: byTime.reduce(0) { $0 + $1.completedCount },
-                    openCount: byTime.reduce(0) { $0 + $1.openCount }
+                    unitCount: units,
+                    completedCount: done,
+                    openCount: open
                 )
             ]
         } else {
-            return HouseListBuilder.sections(from: HouseListBuilder.sort(filtered))
+            return HouseListBuilder.sections(from: HouseListBuilder.sort(filtered), streetOrder: streetOrder)
         }
     }
 

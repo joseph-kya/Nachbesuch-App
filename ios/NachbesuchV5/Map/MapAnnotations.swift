@@ -144,13 +144,24 @@ final class HousePinView: MKAnnotationView {
         // `MKMarkerAnnotationView` map (which defaults to `.defaultLow`) does not.
         // So priority is always explicit here, and never `.required`; houses with
         // open work outrank finished ones if MapKit ever has to choose.
-        displayPriority = pin.followUpCount > 0
-            ? .defaultHigh
-            : (pin.joinedCount > 0 ? MKFeatureDisplayPriority(600) : .defaultLow)
+        // Auswahl liegt oben: knapp unter .required (Render-Budget bleibt),
+        // dazu zPosition oben — kein Checkmark-Badge (zu riskant im Bitmap).
+        if annotation.isPinSelected {
+            displayPriority = MKFeatureDisplayPriority(999)
+        } else {
+            displayPriority = pin.followUpCount > 0
+                ? .defaultHigh
+                : (pin.joinedCount > 0 ? MKFeatureDisplayPriority(600) : .defaultLow)
+        }
+        layer.zPosition = annotation.isPinSelected ? 1 : 0
 
         // Semantic identity is independent of bitmap identity. Address-only edits
         // must reach VoiceOver even when the cached artwork is unchanged.
+        // Deutsch: „Haus Adresse, Status" als Label, offene Türen als Wert.
         accessibilityLabel = Self.accessibilityText(for: pin)
+        accessibilityValue = pin.openCount > 0
+            ? "\(pin.openCount) offene Türen"
+            : "keine offenen Türen"
 
         let scale = scale
         let key = PinArtCache.Key(
@@ -201,12 +212,30 @@ final class HousePinView: MKAnnotationView {
         }
     }
 
+    /// Kurzes Aufpoppen des angetippten Pins (0.9→1, appFeedback-nah).
+    /// Nur der getroffene Pin, RM-sicher, kein Layoutsprung (reine Skalierung).
+    func performSelectPop() {
+        guard !UIAccessibility.isReduceMotionEnabled else { return }
+        // Schnelles Tappen darf keine Skalen stapeln.
+        layer.removeAnimation(forKey: "selectPop")
+        transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
+        UIView.animate(
+            withDuration: 0.24,
+            delay: 0,
+            usingSpringWithDamping: 0.7,
+            initialSpringVelocity: 0.3
+        ) {
+            self.transform = .identity
+        }
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
         // A view recycled mid fade-in must never come back half-transparent.
         layer.removeAllAnimations()
         alpha = 1
         transform = .identity
+        layer.zPosition = 0
         renderedKey = nil
     }
 
@@ -361,14 +390,17 @@ final class PassantPinView: MKAnnotationView {
         outcome?.rawValue ?? "none"
     }
 
-    private static let artwork: [String: UIImage] = {
-        var images: [String: UIImage] = [:]
-        let cases: [VisitOutcome?] = [nil, .notHome, .earlyNo, .lateNo, .joined, .later]
-        for outcome in cases {
-            images[key(for: outcome)] = makeArtwork(color: uiColor(for: outcome))
-        }
-        return images
-    }()
+    /// Rendered on demand per outcome, not all six up front: a territory with
+    /// only grey encounters never pays for the other five bitmaps.
+    private static var artworkCache: [String: UIImage] = [:]
+
+    private static func artwork(for outcome: VisitOutcome?) -> UIImage {
+        let k = key(for: outcome)
+        if let cached = artworkCache[k] { return cached }
+        let image = makeArtwork(color: uiColor(for: outcome))
+        artworkCache[k] = image
+        return image
+    }
 
     private static func uiColor(for outcome: VisitOutcome?) -> UIColor {
         switch outcome {
@@ -423,6 +455,10 @@ final class PassantPinView: MKAnnotationView {
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
         canShowCallout = false
+        // Explicit, never .required: custom views default to .required, which
+        // opts every passant out of MapKit's render budget. Houses already do
+        // this correctly; drafts stay .required (only ever a handful).
+        displayPriority = .defaultHigh
         collisionMode = .circle
         frame = CGRect(x: 0, y: 0, width: 36, height: 36)
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
@@ -452,7 +488,7 @@ final class PassantPinView: MKAnnotationView {
 
     func configure() {
         guard let passant = annotation as? PassantAnnotation else { return }
-        image = Self.artwork[Self.key(for: passant.outcome)]
+        image = Self.artwork(for: passant.outcome)
         accessibilityLabel = passant.note.isEmpty
             ? "Passant"
             : "Passant: \(passant.note)"

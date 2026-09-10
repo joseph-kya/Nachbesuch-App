@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Asks when to come back, after a door is marked "Später".
 ///
@@ -40,10 +41,37 @@ struct RevisitTimeSheet: View {
     private var suggestions: [RevisitSuggestion] { RevisitPlanner.suggestions(now: now) }
 
     var body: some View {
-        NavigationStack {
+        // Dringlichkeit aus einer Quelle: `RevisitGlance` entscheidet überfällig vs. gebucht,
+        // rot vs. indigo folgt derselben Hilfe — keine doppelte Datumslogik.
+        let existingGlance = RevisitGlance.make(at: existing, laterDoors: 1, now: now)
+        let isOverdue = existingGlance?.urgency == .overdue
+        return NavigationStack {
             Form {
+                // Eine überfällige Buchung ist kein Vorschlag mehr — sie steht
+                // rot oben, damit niemand versehentlich dieselbe Zeit behält.
+                if isOverdue, let existing {
+                    Section {
+                        Label(
+                            "Überfällig seit \(RevisitPlanner.clockFormatter.string(from: existing)) — bitte eine neue Zeit wählen.",
+                            systemImage: "clock.badge.exclamationmark.fill"
+                        )
+                        .foregroundStyle(.red)
+                    }
+                } else if let existing, !matchesExisting(existing) {
+                    Section {
+                        Label(
+                            "Bereits gebucht für \(RevisitPlanner.clockFormatter.string(from: existing)).",
+                            systemImage: "checkmark.circle"
+                        )
+                        .foregroundStyle(VisitOutcome.later.tint)
+                    }
+                }
+
                 Section {
                     ForEach(suggestions) { suggestion in
+                        // Die bereits gebuchte Zeit trägt Häkchen plus Tönung,
+                        // damit ein erneutes Öffnen zeigt, was schon steht.
+                        let isExisting = isExistingSuggestion(suggestion.date)
                         Button {
                             commit(suggestion.date)
                         } label: {
@@ -53,14 +81,21 @@ struct RevisitTimeSheet: View {
                                     .frame(width: 24)
                                 Text(suggestion.title)
                                     .foregroundStyle(.primary)
+                                    .fontWeight(isExisting ? .semibold : .regular)
                                 Spacer(minLength: AppSpacing.tight)
                                 Text(suggestion.clockText)
                                     .foregroundStyle(.secondary)
                                     .monospacedDigit()
+                                if isExisting {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(VisitOutcome.later.tint)
+                                        .accessibilityLabel("Bereits gebucht")
+                                }
                             }
                             .frame(minHeight: AppTouch.minimum)
                         }
                         .accessibilityLabel("\(suggestion.title), \(suggestion.clockText)")
+                        .accessibilityAddTraits(isExisting ? [.isButton, .isSelected] : .isButton)
                     }
                 } header: {
                     Text("Wann noch einmal hingehen?")
@@ -76,11 +111,16 @@ struct RevisitTimeSheet: View {
                         displayedComponents: [.hourAndMinute]
                     )
                     .datePickerStyle(.compact)
+                    // Deutsches Label „Genaue Zeit" plus 44pt-Treffläche für A11y.
+                    .frame(minHeight: 44)
                     .onChange(of: customTime) { _, _ in isPickingCustomTime = true }
 
+                    // Bewusst Form-Stil statt Glas: Forms bleiben glasfrei,
+                    // der CTA bleibt trotzdem prominent.
                     Button("Diese Zeit übernehmen") {
                         commit(customTime)
                     }
+                    .buttonStyle(.borderedProminent)
                     .fontWeight(.semibold)
                     .frame(minHeight: AppTouch.minimum)
                 } footer: {
@@ -95,7 +135,10 @@ struct RevisitTimeSheet: View {
 
                 if let onClear {
                     Section {
+                        // Bleibt sofort und ohne Rückfrage: das Zurücknehmen
+                        // einer Zeit ist kein Löschen von Daten.
                         Button("Zeit entfernen", role: .destructive) {
+                            UISelectionFeedbackGenerator().selectionChanged()
                             onClear()
                             dismiss()
                         }
@@ -110,8 +153,6 @@ struct RevisitTimeSheet: View {
                     Button("Abbrechen") { dismiss() }
                 }
             }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
         }
     }
 
@@ -122,9 +163,87 @@ struct RevisitTimeSheet: View {
         }
     }
 
+    /// Ob ein Vorschlag der bereits gebuchten Zeit entspricht (Minutentoleranz,
+    /// weil Runden und Picker-Abweichungen sonst nie treffen).
+    private func isExistingSuggestion(_ date: Date) -> Bool {
+        guard let existing else { return false }
+        return abs(existing.timeIntervalSince(date)) < 60
+    }
+
+    private func matchesExisting(_ existing: Date) -> Bool {
+        suggestions.contains { abs($0.date.timeIntervalSince(existing)) < 60 }
+    }
+
     private func commit(_ date: Date) {
-        guard date > now else { return }
+        // Wächter bleibt `date > now` (kein 5-Min-Minimum: Vorschläge liegen
+        // ohnehin in der Zukunft) — ungültiges Tippen meldet sich per Fehler-Haptik.
+        guard date > now else {
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            return
+        }
         onPick(date)
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
         dismiss()
+    }
+}
+
+/// Gebuchte Rückkehrzeit als Glanz-Zeile: Uhr-Icon plus relatives Label
+/// ("in 25 Min") aus `RevisitGlance`, damit kein Caller die Arithmetik wiederholt.
+/// Überfällig wird rot mit „Überfällig"-Label, künftig bleibt indigo — dieselbe
+/// Rot/Indigo-Abbildung wie überall, aus derselben Hilfe.
+///
+/// Einmalig hier statt je Datei, damit Haus-Detail und beide Passanten-Sheets
+/// dieselbe Zeile zeigen. Tippen öffnet den Zeit-Sheet des Callers erneut.
+struct BookedTimeGlance: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let bookedAt: Date
+    let action: () -> Void
+
+    var body: some View {
+        let glance = RevisitGlance.make(at: bookedAt, laterDoors: 1)
+        // Dringlichkeit aus der Hilfe, kein eigener Datumsvergleich.
+        let isOverdue = glance?.urgency == .overdue
+        let tint: Color = isOverdue ? .red : VisitOutcome.later.tint
+        return Button {
+            UISelectionFeedbackGenerator().selectionChanged()
+            action()
+        } label: {
+            HStack(spacing: AppSpacing.tight) {
+                Image(systemName: glance?.systemImage ?? VisitOutcome.later.symbolName)
+                    .foregroundStyle(tint)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(glance?.label ?? RevisitPlanner.clockFormatter.string(from: bookedAt))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(tint)
+                        .monospacedDigit()
+                        .contentTransition(reduceMotion ? .identity : .numericText())
+                    // Überfällig steht als Wort dabei, nicht nur als Farbe.
+                    if isOverdue {
+                        Text("Überfällig")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.red)
+                    }
+                }
+                Spacer(minLength: AppSpacing.tight)
+                Text(RevisitPlanner.clockFormatter.string(from: bookedAt))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, minHeight: AppTouch.minimum, alignment: .leading)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .contentCard(cornerRadius: AppRadius.control, elevated: false)
+            .selectionRing(true, tint: tint)
+            .contentShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
+        }
+        .buttonStyle(PressableRowStyle())
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: bookedAt)
+        .accessibilityLabel("Gebuchte Zeit, \(glance?.voiceOver ?? RevisitPlanner.clockFormatter.string(from: bookedAt))")
+        .accessibilityHint("Fragt nach einer Uhrzeit")
     }
 }

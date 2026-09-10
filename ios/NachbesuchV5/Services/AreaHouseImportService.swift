@@ -123,6 +123,25 @@ nonisolated enum AreaHouseImportService {
         }
     }
 
+    /// Dekodieren + Filtern + Sortieren abseits vom Main-Thread: Das Sheet hängt
+    /// an MainActor, 5 000 Adressen mit lokalisiertem Sort würden sonst das
+    /// Öffnen ruckeln lassen. Nur das Zuweisen bleibt auf Main.
+    nonisolated static func decodeAndFilter(
+        from data: Data,
+        inside boundary: [CLLocationCoordinate2D],
+        existing: [ExistingHouseFingerprint]
+    ) async throws -> AreaImportSelection {
+        let task = Task.detached(priority: .userInitiated) { () throws -> AreaImportSelection in
+            let addresses = try decodeAddresses(from: data, inside: boundary)
+            return excludingExistingHouses(from: addresses, existing: existing)
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
     nonisolated static func excludingExistingHouses(
         from addresses: [ImportedAreaAddress],
         existing: [ExistingHouseFingerprint]
@@ -212,12 +231,17 @@ nonisolated enum AreaHouseImportService {
         cellSize: Double
     ) -> Bool {
         let cell = CoordinateCell(latitude: address.latitude, longitude: address.longitude, cellSize: cellSize)
-        let candidateLocation = CLLocation(latitude: address.latitude, longitude: address.longitude)
+        // Equirectangular approx, not CLLocation per probe: two object allocs +
+        // haversine per candidate for a 12 m radius on flat city streets is pure
+        // overhead — at this range the flat-earth error is centimetres.
+        let lonScale = cos(address.latitude * .pi / 180)
         for latitudeOffset in -1...1 {
             for longitudeOffset in -1...1 {
                 let neighbor = CoordinateCell(latitudeIndex: cell.latitudeIndex + latitudeOffset, longitudeIndex: cell.longitudeIndex + longitudeOffset)
                 if buckets[neighbor]?.contains(where: {
-                    candidateLocation.distance(from: CLLocation(latitude: $0.latitude, longitude: $0.longitude)) < duplicateRadius
+                    let dLat = ($0.latitude - address.latitude) * 111_320
+                    let dLon = ($0.longitude - address.longitude) * 111_320 * lonScale
+                    return (dLat * dLat + dLon * dLon).squareRoot() < duplicateRadius
                 }) == true { return true }
             }
         }

@@ -153,7 +153,14 @@ final class Gebiet {
 
     // MARK: - Boundary
 
-    var hasBoundary: Bool { boundaryCoordinates.count >= 3 }
+    /// Kurzschluss ohne Decode: Leere Blobs (der Normalfall „keine Grenze",
+    /// also der disabled Menü-Pfad) kosten kein JSON-Decode pro Body-Auswertung;
+    /// der Rest läuft über den Cache von `boundaryCoordinates`.
+    var hasBoundary: Bool {
+        if let cachedBoundary { return cachedBoundary.count >= 3 }
+        if boundaryData.isEmpty { return false }
+        return boundaryCoordinates.count >= 3
+    }
 
     var boundaryCoordinates: [CLLocationCoordinate2D] {
         get {
@@ -170,6 +177,11 @@ final class Gebiet {
             return coordinates
         }
         set {
+            // Bewusst synchron auf dem Aufruf-Thread: Polygone sind klein (Grenzen
+            // mit wenigen Hundert Punkten), Encode kostet Mikrosekunden — ein
+            // Hintergrund-Hop würde Cache (`cachedBoundary`), Blob und `touch()`
+            // auseinanderreißen. Wer je riesige Polygone setzt, lagert den Aufruf
+            // selbst aus; Verhalten hier bleibt absichtlich unverändert.
             guard !newValue.isEmpty else {
                 boundaryData = Data()
                 cachedBoundary = []

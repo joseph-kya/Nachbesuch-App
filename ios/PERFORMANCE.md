@@ -77,3 +77,49 @@ visually checked in screenshots on both runtimes.
 The iOS 26 simulator emitted a UIKit constraint-limit warning during the stress
 run. It did not cause a test failure or persistent CPU load; its source and
 physical-device impact are not established by this pass.
+
+## Responsiveness and archive pass — 6 September 2026
+
+- Construct `HouseReadService` in a detached task before using its SwiftData actor. This applies to list, map, archive, reminder repair and duplicate-address checks; creating the context from a view did not guarantee a background executor.
+- Keep startup backup behind completed initialization, but construct and run its actor off the UI actor. Export scratch cleanup also runs detached and excludes files created during this launch.
+- Archive save notifications invalidate a revision rather than counting all houses. Hidden archive tabs defer their encounter-count and backup-label reads until activation.
+- Replace duplicate metric tiles and Swift Charts with one result breakdown. Fixed outcome rows keep the card height stable; animation is scoped to numbers and progress tracks, and disabled for those values with Reduce Motion.
+- Retain opaque iOS 18 chrome and the existing tab/inset freeze fix. This pass does not add live blur or full-card layout animation.
+- Preserve incremental reminder scheduling, but compare trigger/content as well as identifier so changed requests get repaired.
+
+Simulator tests and visual checks are useful regression evidence, not a physical iPhone frame-rate guarantee. A device Instruments run is still required to quantify hitch rate and time to respond under real GPS/map/network load.
+
+Validation for this pass: iOS 18.5 and iOS 26.5 each passed 146 tests, with one intentionally skipped PDF-dump test. The final cancellation-banner fix subsequently passed a simulator build and a repeated 62-switch stress run on iOS 18 with 2,000 synthetic houses. The run completed, showed no cancellation banner, and settled to 0% sampled CPU (RSS fell from approximately 415 MiB shortly after the run to 214 MiB at 70 seconds). These are simulator observations, not controlled before/after device benchmarks.
+
+The iOS 26 repeat also completed 62 switches and settled to 0% sampled CPU (~137 MiB RSS at 51 seconds). Light iOS 26 and dark iOS 18 archive screenshots were inspected. The largest accessibility size exposed a cramped summary header; its title and house count now stack vertically at accessibility sizes. This final layout-only adjustment passed a simulator build.
+
+## Area-selection follow-up
+
+Area selection now scrolls the existing archive layout to the top before committing the new territory in a non-animated transaction. This avoids changing the scroll content height and interpolating unrelated statistics during the same scroll. A superseded request, a filter change, or leaving Archive invalidates the pending switch. Switching from Tag 2 to a one-day territory resets the scope in the same transaction.
+
+The DEBUG-only `NACHBESUCH_AREA_STRESS=12` harness exercises the actual row-selection handler after scrolling to each territory card, alternating between populated and empty areas. It checks that each requested selection commits. This supplements, rather than substitutes for, physical-device animation inspection.
+
+Validation: the area-switch harness completed 12 selections on each of iOS 18.5 and iOS 26.5 with 2,000-house synthetic data. Final screenshots showed the requested area and the new Abblocker label. iOS archive-search tests passed, Android's 63 domain tests passed, and both platform builds succeeded. This wording change retains `earlyNo` as the serialized status, including compatibility with old backups; existing search aliases remain accepted.
+
+## Screenshot-driven UI corrections
+
+- Result choices reserve identical title/description line counts; decorative glyphs are capped. The house editor drops the nested grey result-group panel and uses restrained native-glass controls on iOS 26, with solid accessibility/iOS 18 fallbacks.
+- Map search now uses an inline top text field, a stable opaque sheet background, and one large detent. Keyboard focus waits until after initial presentation. This removes the system searchable toolbar relocation and simultaneous medium-to-large detent change.
+- Native glass is wired into the actual collapsed street-row backgrounds (the prior SectionSurface component was unused by the current native List). Expanded address rows retain their inexpensive standard backgrounds. iOS 18 stays opaque.
+- The visible list filters are All/Open, plus Later when populated or selected. Remaining filters and the legend are in the view menu; an active secondary filter remains visible in the bar.
+
+Validation: simulator build succeeded; iOS 26 dark-mode screenshots of actual house, search, and collapsed list views were inspected. Search field placement was verified, but first-use system keyboard onboarding prevented complete keyboard-interaction validation in this run. No physical-device frame-rate claim is made.
+
+### Unified corners and glass (7 September 2026)
+
+- Audited custom SwiftUI surface, clipping, radius and outline call sites across map, list, archive, house details, appearance, tutorial and notices. Native glass now owns its luminous edge; removed redundant fixed rims from map chrome, content cards and street surfaces.
+- Result controls use one press animation instead of combining label scaling with interactive glass deformation. Selection rings share an inset continuous shape, including apartment status chips. Search-field glass stays geometrically stable while editing.
+- Inset the result grid inside the transparent Form row: UIKit still clips transparent grouped rows, so the previous smaller tile corners were being cut by the outer Form corners. Archive status icons now use the shared continuous small radius.
+- iOS 18 retains opaque surfaces. No added blur, glass containers or per-row shadows. Simulator build: `/tmp/nachbesuch-unified-corners-final.log`. Static visual verification is not a real-device frame-time measurement.
+- Inspected simulator screenshots: iOS 26 dark list and house-result sheet, iOS 26 light archive, and iOS 18 dark house-result sheet. Result tiles retain matching upper corners and inset selection rings. Full real-device interaction/animation testing remains outstanding.
+
+### Wave 4 reserves (September 2026)
+
+- Static backdrop only (flat gradients, `drawingGroup`): no full-screen blur behind scrolling content. Pin artwork is prewarmed off the critical path (`PinArtCache.prewarm`, utility QoS) and stays bounded (LRU 260, `clear(keeping:)` trim on memory pressure).
+- `DidSaveRefreshGate` folds save bursts (bulk import) into one refresh; `HouseReadService` export/ID reads abort past 10,000 entries (`HouseReadError.tooManyResults`) instead of building unbounded arrays for the main actor.
+- Reminder batching stays capped at 49 pending requests with the overflow visible in-app; past times cancel rather than schedule. List query tokens are capped at 10 builder-side as defense in depth.

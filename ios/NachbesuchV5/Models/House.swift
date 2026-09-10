@@ -8,6 +8,13 @@ import SwiftData
 /// **Stored shape is frozen.** Every property below matches what shipped, byte for
 /// byte, because the app has no schema migration history and a mismatched store
 /// means an unopenable database. Fixes live in behaviour, not in storage.
+///
+/// Bewusst KEIN `#Index` auf `gebietID`/`dayID`/`updatedAt` (SchemaV3-Entscheid):
+/// 5 000 Zeilen per Enumerate zu filtern kostet Millisekunden — marginal. Ein
+/// Index dagegen ändert das Schema, erzwingt eine Migration ohne
+/// Migrationspfad und macht bestehende Stores unöffnbar — katastrophal. Darum
+/// bleibt der Lese-Pfad bei Watermark-Predicates + Enumerate (siehe
+/// `HouseReadService`), nicht bei Indexen.
 @Model
 final class House {
     @Attribute(.unique) var id: UUID

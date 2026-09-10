@@ -19,7 +19,7 @@ nonisolated enum ArchiveSearchEngine {
     /// match anything.
     private static let openKeywords = Set(["offen", "niemand", "nachbesuch", "rot"].map(SearchText.fold))
     private static let joinedKeywords = Set(["dabei", "beitritt", "erfolg", "herz"].map(SearchText.fold))
-    private static let earlyNoKeywords = Set(["frühes nein", "früh", "fruh", "frühes", "abgelehnt"].map(SearchText.fold))
+    private static let earlyNoKeywords = Set(["abblocker", "frühes nein", "früh", "fruh", "frühes", "abgelehnt"].map(SearchText.fold))
     private static let lateNoKeywords = Set(["spätes nein", "spät", "spat", "spätes"].map(SearchText.fold))
     private static let doneKeywords = Set(["fertig", "abgeschlossen", "erledigt", "komplett"].map(SearchText.fold))
 

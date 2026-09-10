@@ -30,3 +30,9 @@ Android instructions and listing draft: android/PlayStore/RELEASE.md. `:app:veri
 iOS instructions: ios/AppStore/PUBLISHING.md. Refresh store screenshots after finalizing the publishing metadata: earlier captures predate the latest labels and glass treatment. Both stores still require actual seller/contact details, public privacy/support pages, signing, owner declarations and device testing. Nothing has been uploaded or submitted.
 
 Final interaction check: entered a temporary list query, opened Archive and confirmed its search field was empty, then returned to List and confirmed the original query remained. Android's final build/lint/test run including the loading-state correction succeeded. The temporary emulator used read-only storage; this did not modify the saved emulator snapshot.
+
+## Follow-up: responsiveness and archive presentation
+
+The 6 September follow-up prioritizes iOS 18 responsiveness. Database reader creation now explicitly leaves MainActor, hidden archive tabs avoid synchronous count queries after every save, and statistics use a stable result breakdown with localized value animations. Startup ordering and reminder-content reconciliation were repaired. See `ios/PERFORMANCE.md` for scope and validation limits.
+
+The earlier release archive predates this follow-up and must be rebuilt before distribution.

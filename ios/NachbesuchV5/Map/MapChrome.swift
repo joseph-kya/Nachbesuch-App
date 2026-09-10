@@ -6,9 +6,12 @@ import SwiftUI
 /// The territory header floating over the map.
 struct MapSummaryCard: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let namespace: Namespace.ID
     let title: String
     let subtitle: String
+    /// „±Xm" bei unsicherem Fix im Folgen-Modus, sonst nil — blendet weich.
+    var accuracyText: String? = nil
     let stats: MapDayStats
     let isTwoDay: Bool
     @Binding var scope: DayScope
@@ -23,13 +26,26 @@ struct MapSummaryCard: View {
                     Text(title)
                         .font(.headline)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                     Text(subtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    // Unsicherer Fix: Genauigkeit in der Kopfzeile (statt teurer
+                    // Puck-Annotation), RM-sicher nur Opazität, kein Versatz.
+                    if let accuracyText {
+                        Text(accuracyText)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.orange)
+                            .transition(.opacity)
+                            .accessibilityLabel("Standortgenauigkeit \(accuracyText)")
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .combine)
+                // VoiceOver-Reihenfolge: erst Kopf, dann Aktionen.
+                .accessibilitySortPriority(2)
 
                 HStack(spacing: 2) {
                     if canSelect {
@@ -40,6 +56,7 @@ struct MapSummaryCard: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Pins auswählen")
+                        .accessibilityHint("Markiert Häuser für Export oder Löschen")
                     }
                     Button(action: onSearch) {
                         Image(systemName: "magnifyingglass")
@@ -48,7 +65,9 @@ struct MapSummaryCard: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Ort auf der Karte suchen")
+                    .accessibilityHint("Sucht Adresse, Ort oder Gebiet")
                 }
+                .accessibilitySortPriority(1)
             }
 
             // Counts get their own row at accessibility sizes rather than being
@@ -59,6 +78,7 @@ struct MapSummaryCard: View {
                 DayScopePicker(scope: $scope)
             }
         }
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: accuracyText)
         .padding(.horizontal, AppSpacing.regular)
         .padding(.vertical, 12)
         .mapChrome()
@@ -123,7 +143,8 @@ struct StatStrip: View {
                 .monospacedDigit()
                 .fontWeight(.semibold)
                 .foregroundStyle(tint)
-                .contentTransition(.numericText(value: Double(value)))
+                // Reduzierte Bewegung: keine Zählanimation, nur harter Wechsel.
+                .contentTransition(reduceMotion ? .identity : .numericText(value: Double(value)))
             Text(unit)
                 .foregroundStyle(.secondary)
         }
@@ -226,6 +247,7 @@ struct MapActionBar<Menu: View>: View {
                 .tint(.primary)
                 .controlSize(.large)
                 .accessibilityLabel("Kartenoptionen")
+                .accessibilityHint("Zeigt Gebiet, Passant, Kartenstil und Orte")
             }
 
             Button(action: onPrimary) {
@@ -254,6 +276,7 @@ struct MapActionBar<Menu: View>: View {
             .tint(accent)
             .disabled(!canAddHouse)
             .compatGlassID("map.primary", in: namespace)
+            .accessibilityHint(placement != nil ? "Bestätigt die Fadenkreuzposition" : "Startet das Erfassen eines Hauses")
         }
         .animation(.appFeedback(reduceMotion: reduceMotion), value: placement == nil)
     }
@@ -272,6 +295,9 @@ struct LocateButton: View {
     let isBusy: Bool
     let isDenied: Bool
     let namespace: Namespace.ID
+    /// Zählt uncertain→trusted-Wechsel im Folgen-Modus — löst je einmal
+    /// einen dezenten Bounce aus (RM-sicher: System dämpft ihn weg).
+    var accuracyPulse: Int = 0
     let action: () -> Void
 
     var body: some View {
@@ -279,10 +305,13 @@ struct LocateButton: View {
             Image(systemName: symbolName)
                 .font(.system(size: 17, weight: .semibold))
                 .frame(width: 26, height: 26)
+                // Einmaliges Aufpoppen bei besserem GPS-Fix (Folgen-Modus).
+                .symbolEffect(.bounce, value: accuracyPulse)
                 // A gentle pulse only while a fix is being acquired — a repeating
                 // effect has to stop as soon as it stops meaning something.
                 .symbolEffect(.pulse, isActive: isBusy && !reduceMotion)
-                .contentTransition(.symbolEffect(.replace))
+                // Reduzierte Bewegung: weiches Ausblenden statt Symbol-Morph.
+                .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
         }
         .compatGlassButton(shape: .circle, role: .map)
         .controlSize(.large)
@@ -290,13 +319,18 @@ struct LocateButton: View {
         .tint(isFollowing ? accent : nil)
         .compatGlassID("map.locate", in: namespace)
         .accessibilityLabel(isFollowing ? "Standortverfolgung beenden" : "Zu meinem Standort")
+        .accessibilityHint(isFollowing ? "Beendet das Folgen deiner Position" : "Zentriert die Karte auf deinen Standort")
         .accessibilityAddTraits(isFollowing ? [.isSelected] : [])
+        // Einmalige Auswahl-Haptik beim Folgen-Wechsel; Drücken selbst bleibt
+        // rein visuell (Style-Skala), kein Doppel-Feedback.
+        .sensoryFeedback(.selection, trigger: isFollowing)
         .animation(.appFeedback(reduceMotion: reduceMotion), value: isFollowing)
     }
 
     private var symbolName: String {
         if isDenied { return "location.slash" }
-        return isFollowing ? "location.fill" : "location"
+        // Aktives Folgen = Nordpfeil, Ruhezustand = schlichter Punkt.
+        return isFollowing ? "location.north.fill" : "location"
     }
 }
 
@@ -326,7 +360,8 @@ struct MapSelectionBar: View {
                 Text("\(selectedCount) ausgewählt")
                     .font(.subheadline.weight(.semibold))
                     .monospacedDigit()
-                    .contentTransition(.numericText(value: Double(selectedCount)))
+                    // Reduzierte Bewegung: keine Zählanimation.
+                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(selectedCount)))
                 Text("von \(totalCount)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -384,6 +419,8 @@ struct BoundaryDrawingBar: View {
     let onAddPoint: () -> Void
     let onMoveSelected: () -> Void
     let onSave: () -> Void
+    /// Zählt ungültige Speicher-Taps für die einmalige Fehlerhaptik.
+    @State private var invalidTaps = 0
 
     var body: some View {
         VStack(spacing: AppSpacing.snug) {
@@ -395,6 +432,23 @@ struct BoundaryDrawingBar: View {
                 .padding(.vertical, 8)
                 .mapChrome(cornerRadius: AppRadius.control)
                 .compatGlassID("map.drawHint", in: namespace)
+                // Einzel-ID ohne Morph-Partner: materialisieren statt matchen,
+                // sonst fragt das Glas nach einer Geometrie, die es nicht gibt.
+                .standaloneGlassTransition(reduceMotion: reduceMotion)
+
+            // Zähl-Badge: numerischer Morph, RM-sicher hart.
+            // VoiceOver: Wert nennt Stand + Mindestzahl („3 Punkte, mindestens 3 nötig").
+            Text("\(pointCount) Punkte")
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+                .contentTransition(reduceMotion ? .identity : .numericText(value: Double(pointCount)))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .contentPanel(cornerRadius: AppRadius.small)
+                .accessibilityLabel("\(pointCount) Gebietspunkte gesetzt")
+                .accessibilityValue("\(pointCount) Punkte, mindestens 3 nötig")
 
             HStack(spacing: AppSpacing.snug) {
                 Button(action: onCancel) {
@@ -404,7 +458,10 @@ struct BoundaryDrawingBar: View {
                 .controlSize(.large)
                 .buttonBorderShape(.circle)
                 .compatGlassID("map.drawCancel", in: namespace)
+                // Einzel-ID ohne Partner — gleiche Begründung wie beim Hinweis.
+                .standaloneGlassTransition(reduceMotion: reduceMotion)
                 .accessibilityLabel("Gebiet abbrechen")
+                .accessibilityHint("Verwirft das eingezeichnete Gebiet")
 
                 Button(action: onUndo) {
                     Image(systemName: "arrow.uturn.backward").frame(width: 24, height: 24)
@@ -413,8 +470,13 @@ struct BoundaryDrawingBar: View {
                 .controlSize(.large)
                 .buttonBorderShape(.circle)
                 .disabled(pointCount == 0)
+                // Leer nur gedimmt, nie versteckt — Layout bleibt stabil.
+                .opacity(pointCount == 0 ? 0.45 : 1)
                 .compatGlassID("map.drawUndo", in: namespace)
+                // Einzel-ID ohne Partner — gleiche Begründung wie beim Hinweis.
+                .standaloneGlassTransition(reduceMotion: reduceMotion)
                 .accessibilityLabel("Letzten Punkt entfernen")
+                .accessibilityHint("Entfernt den zuletzt gesetzten Punkt")
 
                 if let selected = selectedPointNumber {
                     Button(action: onMoveSelected) {
@@ -425,6 +487,8 @@ struct BoundaryDrawingBar: View {
                     .compatGlassButton(prominent: true)
                     .controlSize(.large)
                     .tint(accent)
+                    // Geteilte ID für den echten Hinzufügen↔Versetzen-Morph — kein
+                    // Standalone, sonst bricht genau dieser Partner-Morph weg.
                     .compatGlassID("map.drawAdd", in: namespace)
                     .accessibilityLabel("Punkt \(selected) an die Fadenkreuzposition versetzen")
                 } else {
@@ -432,15 +496,22 @@ struct BoundaryDrawingBar: View {
                         Label("Punkt \(pointCount + 1)", systemImage: "plus")
                             .fontWeight(.semibold)
                             .frame(maxWidth: .infinity, minHeight: 26)
-                            .contentTransition(.numericText(value: Double(pointCount + 1)))
+                            // Reduzierte Bewegung: keine Zählanimation.
+                            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(pointCount + 1)))
                     }
                     .compatGlassButton(prominent: true)
                     .controlSize(.large)
                     .tint(accent)
+                    // Geteilte ID für den echten Hinzufügen↔Versetzen-Morph — kein
+                    // Standalone, sonst bricht genau dieser Partner-Morph weg.
                     .compatGlassID("map.drawAdd", in: namespace)
                 }
 
-                Button(action: onSave) {
+                // Speichern braucht ≥3 Punkte: kein .disabled (schluckt den Tap),
+                // sondern dimmen + Fehlerhaptik — subtil, ohne Lageversatz.
+                Button {
+                    if pointCount < 3 { invalidTaps &+= 1 } else { onSave() }
+                } label: {
                     Image(systemName: "checkmark").frame(width: 24, height: 24)
                 }
                 .compatGlassButton(prominent: true)
@@ -450,9 +521,16 @@ struct BoundaryDrawingBar: View {
                 // at the rim; the wide pills keep the automatic shape.
                 .clipShape(Circle())
                 .tint(accent)
-                .disabled(pointCount < 3)
+                .opacity(pointCount < 3 ? 0.5 : 1)
+                // Einmalige Fehlerhaptik nur im ungültigen Pfad; gültig meldet
+                // weiterhin den Erfolgsstoß aus dem Screen — kein Doppel.
+                .sensoryFeedback(.error, trigger: invalidTaps)
                 .compatGlassID("map.drawSave", in: namespace)
+                // Einzel-ID ohne Partner — materialisieren statt matchen.
+                .standaloneGlassTransition(reduceMotion: reduceMotion)
                 .accessibilityLabel("Gebiet speichern")
+                .accessibilityHint(pointCount < 3 ? "Mindestens drei Punkte nötig" : "Speichert das eingezeichnete Gebiet")
+                .accessibilityValue("\(pointCount) von mindestens 3 Punkten")
             }
             .animation(.appFeedback(reduceMotion: reduceMotion), value: pointCount)
         }
@@ -470,6 +548,9 @@ struct BoundaryDrawingBar: View {
 // MARK: - Reticle
 
 /// Crosshair for placing a house or a boundary corner.
+///
+/// Die Drag-Skalierung (1.0→1.15) legt der Caller per `scaleEffect` darüber —
+/// nur Skalierung, nie Versatz, damit sie nie gegen die Kamera kämpft.
 ///
 /// The artwork hangs off a **zero-height anchor** pinned to the map centre. The
 /// previous version offset the whole composite upward by 25 pt, so the house landed
@@ -550,16 +631,15 @@ private struct Triangle: Shape {
 
 /// Shown once, on an empty map, and never again after it is dismissed.
 ///
-/// It offers **one** action. It used to offer two — "Haus hinzufügen" and "Gebiet" —
-/// but the action bar directly beneath it already carries "Haus hinzufügen", and
-/// "Gebiet einzeichnen" is the first item of the menu next to it. A card whose job is
-/// to orient someone on their first launch should not be the third place the same two
-/// commands appear; it should say where they are. So it says that, and keeps the one
-/// button worth pressing first.
+/// Orientiert beim ersten Start: sagt, wo Haus und Gebiet liegen, und bietet
+/// beide Wege direkt an — primär Haus, sekundär Import. Eine Hauptaktion, damit
+/// der Daumen nicht zwischen zwei gleich lauten Tasten wählen muss.
 struct MapGuideCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAccent) private var accent
     let namespace: Namespace.ID
     let onAddHouse: () -> Void
+    let onImport: () -> Void
     let onDismiss: () -> Void
 
     var body: some View {
@@ -568,11 +648,14 @@ struct MapGuideCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Dein Gebiet")
                         .font(.headline)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                     Text("Karte auf deine Straße schieben und das erste Haus erfassen. Das Gebiet einzeichnen kannst du im Menü daneben.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                .accessibilitySortPriority(2)
                 Spacer(minLength: 0)
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
@@ -582,20 +665,87 @@ struct MapGuideCard: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Hinweis schließen")
+                .accessibilityHint("Blendet diese Einführung aus")
             }
 
-            Button(action: onAddHouse) {
-                Label("Haus hinzufügen", systemImage: "plus")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity, minHeight: AppTouch.minimum)
+            VStack(spacing: AppSpacing.tight) {
+                Button(action: onAddHouse) {
+                    Label("Haus hinzufügen", systemImage: "plus")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: AppTouch.minimum)
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(accent)
+                .accessibilityHint("Erfasst ein Haus an der Kartenmitte")
+
+                Button(action: onImport) {
+                    Label("Gebiet importieren", systemImage: "square.and.arrow.down")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: AppTouch.minimum)
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .accessibilityHint("Lädt Häuser aus den Kartendaten")
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
-            .tint(accent)
+            .accessibilitySortPriority(1)
         }
         .padding(AppSpacing.regular)
         .mapChrome()
         .compatGlassID("map.guide", in: namespace)
+        // Bounce-in beim ersten Erscheinen (appChrome), RM-sicher nur Fade.
+        .transition(.appChrome(reduceMotion: reduceMotion))
+    }
+}
+
+// MARK: - Genauigkeitsbanner
+
+/// Warnt bei ungefährer Position: Entfernungen und Puck sind ungenau.
+/// Glas über der Karte, Einzug per appBanner, Hilfetaste öffnet Einstellungen.
+struct MapAccuracyBanner: View {
+    @Environment(\.appAccent) private var accent
+    let onHelp: () -> Void
+
+    var body: some View {
+        HStack(spacing: AppSpacing.snug) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.headline)
+                .accessibilityHidden(true)
+            ViewThatFits(in: .horizontal) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Ungefährer Standort")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Entfernungen sind ungenau.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("Ungefährer Standort — Entfernungen ungenau")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Ungefährer Standort")
+            .accessibilityValue("Entfernungen sind ungenau")
+            .accessibilitySortPriority(2)
+            // Direktsprung in die Einstellungen (simpler Open, kein Snooze bis
+            // zum nächsten Start) — Label nennt die Wirkung, nicht „Hilfe".
+            Button("Genauigkeit verbessern", action: onHelp)
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .tint(accent)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(minHeight: AppTouch.minimum)
+                .accessibilityHint("Öffnet die Standorteinstellungen")
+                .accessibilitySortPriority(1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .mapChrome()
     }
 }
 
@@ -633,10 +783,9 @@ struct ApartmentStatusPreview: View {
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 5)
-                        .background(
-                            Color(uiColor: .secondarySystemFill).opacity(0.5),
-                            in: RoundedRectangle(cornerRadius: AppRadius.small, style: .continuous)
-                        )
+                        // Innenfläche auf Karte: kein eigenes Material, nur die
+                        // flache Tönung — das Glas trägt die Karte drumherum.
+                        .contentPanel(cornerRadius: AppRadius.small)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(unit.label)
                         .accessibilityValue(outcome.displayTitle)
@@ -651,18 +800,40 @@ struct ApartmentStatusPreview: View {
     }
 }
 
-/// Long-press preview over the map. A material samples the live tiles every
-/// frame — on an iPhone 11 the least legible and most expensive option, same
-/// finding as the floating chrome. Opaque on the legacy branch, like it.
+/// Long-press preview over the map. Glas über der Karte statt Dauer-Material:
+/// ein Material tastet die lebenden Kacheln jeden Frame ab — auf einem iPhone 11
+/// die unleserlichste und teuerste Variante, gleicher Befund wie beim
+/// schwebenden Chrom. Deckend auf dem Legacy-Zweig, wie dort.
 private struct LegacyPreviewSurface: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
     func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
         if LegacyChrome.isActive {
-            let shape = RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
             content
                 .background(Color(uiColor: .secondarySystemBackground), in: shape)
-                .overlay { shape.strokeBorder(Color(uiColor: .separator), lineWidth: 0.5) }
+                .overlay { shape.strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5) }
         } else {
-            content.background(.regularMaterial)
+            content
+                .compatGlass(interactive: false, in: shape, role: .map)
+                // Einheitliche Glanzkante: weiß 0.34→0.04, 0.75 pt — gleiche
+                // Sprache wie die übrigen Kartenflächen, kein zweites Rim.
+                .overlay {
+                    shape.strokeBorder(
+                        LinearGradient(
+                            colors: [.white.opacity(0.34), .white.opacity(0.04)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 0.75
+                    )
+                }
+                // Kartenschatten: dunkel 0.30 / hell 0.12, Radius 12, y 4.
+                .shadow(
+                    color: .black.opacity(colorScheme == .dark ? 0.30 : 0.12),
+                    radius: 12,
+                    y: 4
+                )
         }
     }
 }
@@ -744,6 +915,8 @@ struct TerritoryButton: View {
         .controlSize(.large)
         .buttonBorderShape(.circle)
         .compatGlassID("map.territory", in: namespace)
+        // 44 pt + Drückskala 0.96 via Stil, leichte Haptik einmalig im Screen
+        // (kein doppeltes sensory) — Entry/Exit besitzt der Caller.
         // Entry/exit is owned by the caller's `standaloneGlassTransition`, so the
         // glass shape and the view animate as one thing instead of a SwiftUI scale
         // fighting a glass morph.

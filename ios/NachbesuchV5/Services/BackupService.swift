@@ -192,23 +192,20 @@ enum BackupService {
 
     /// The archive's complete-store entry point. Reads must succeed before any
     /// file is written; a failed fetch is never an empty collection to back up.
+    /// Snapshots entstehen im Hintergrund-Actor per Enumerate (wie AutoBackup),
+    /// nie als Voll-Fetch auf Main — sonst friert der Export bei 5 000 Häusern.
     static func makeBackup(in modelContext: ModelContext) async throws -> URL {
-        let gebiete = try modelContext.fetch(FetchDescriptor<Gebiet>())
-        let houses = try modelContext.fetch(FetchDescriptor<House>())
-        let passanten = try modelContext.fetch(FetchDescriptor<Passant>())
-        return try await makeBackup(gebiete: gebiete, houses: houses, passanten: passanten)
-    }
-
-    private static func makeBackup(
-        gebiete: [Gebiet],
-        houses: [House],
-        passanten: [Passant]
-    ) async throws -> URL {
-        let data = try await makeBackupData(gebiete: gebiete, houses: houses, passanten: passanten)
+        let reader = await BackupSnapshotReader.background(container: modelContext.container)
+        let gebietSnapshots = try await reader.fetchGebietSnapshots()
+        let houseSnapshots = try await reader.fetchHouseSnapshots()
+        let passantSnapshots = try await reader.fetchPassantSnapshots()
+        let data = try await encodeBackup(
+            gebietSnapshots: gebietSnapshots,
+            houseSnapshots: houseSnapshots,
+            passantSnapshots: passantSnapshots
+        )
         return try await Task.detached(priority: .userInitiated) { () -> URL in
             let date = Date.now.formatted(.iso8601.year().month().day())
-            // Own directory per backup: files used to collide at day granularity, so
-            // a second backup overwrote one the share sheet might still be reading.
             let url = try ExportScratch.makeURL(fileName: "Nachbesuch-Backup-\(date).json")
             try data.write(to: url, options: .atomic)
             return url
@@ -218,10 +215,13 @@ enum BackupService {
     /// The backup as bytes, without choosing where they land. The manual export
     /// writes them to the share scratch directory; the automatic safety backup
     /// writes them into the Files-visible documents directory.
+    /// Priorität wählbar wie in `encodeBackup`: manuell `.userInitiated`,
+    /// automatisch `.background` — kein Encode läuft je auf Main.
     static func makeBackupData(
         gebiete: [Gebiet],
         houses: [House],
-        passanten: [Passant] = []
+        passanten: [Passant] = [],
+        priority: TaskPriority = .userInitiated
     ) async throws -> Data {
         let trace = PerformanceTrace.begin("Create backup")
         defer { PerformanceTrace.end("Create backup", id: trace) }
@@ -232,19 +232,22 @@ enum BackupService {
         return try await encodeBackup(
             gebietSnapshots: gebietSnapshots,
             houseSnapshots: houseSnapshots,
-            passantSnapshots: passantSnapshots
+            passantSnapshots: passantSnapshots,
+            priority: priority
         )
     }
 
     /// Encode already-detached snapshots. Internal so the automatic backup can
     /// snapshot on its own background context and share this exact encoder —
-    /// never a second serialiser.
+    /// never a second serialiser. Priorität wählbar: manuell userInitiated,
+    /// automatisch background — sonst gewinnt die Sicherung CPU gegen Pins.
     static func encodeBackup(
         gebietSnapshots: [GebietSnapshot],
         houseSnapshots: [HouseSnapshot],
-        passantSnapshots: [PassantSnapshot] = []
+        passantSnapshots: [PassantSnapshot] = [],
+        priority: TaskPriority = .userInitiated
     ) async throws -> Data {
-        try await Task.detached(priority: .userInitiated) { () -> Data in
+        try await Task.detached(priority: priority) { () -> Data in
             let decoder = AppCoders.unitsDecoder()
             let backup = AppBackup(
                 formatVersion: 3,
@@ -398,66 +401,144 @@ enum BackupService {
         _ backup: AppBackup,
         into modelContext: ModelContext
     ) async throws -> BackupImportResult {
-        // Read the current state HERE rather than accepting arrays captured in a view
-        // body, which could already be stale by the time the loop runs.
-        let existingGebiete: [Gebiet]
-        let existingHouses: [House]
-        let existingPassanten: [Passant]
+        // Komplett im Hintergrund-Actor (BulkHouseImporter-Muster): kein Voll-Fetch
+        // und keine 5 000 Inserts auf Main — sonst friert der Import ein.
+        let importer = await BackupImportActor.background(container: modelContext.container)
         do {
-            existingGebiete = try modelContext.fetch(FetchDescriptor<Gebiet>())
-            existingHouses = try modelContext.fetch(FetchDescriptor<House>())
-            existingPassanten = try modelContext.fetch(FetchDescriptor<Passant>())
+            return try await importer.performImport(backup)
         } catch {
-            throw BackupError.storeUnavailable(underlying: error)
-        }
-        do {
-            return try await performImport(backup, into: modelContext,
-                                           existingGebiete: existingGebiete,
-                                           existingHouses: existingHouses,
-                                           existingPassanten: existingPassanten)
-        } catch {
-            // Without this, a failed import stays live in the context and the next
-            // unrelated save anywhere in the app silently commits half of it.
+            // Ohne das bleibt ein halber Import im Main-Kontext und wird beim
+            // nächsten fremden Save still mitgeschrieben.
             modelContext.rollback()
-            throw error
+            if let backupError = error as? BackupError {
+                throw backupError
+            }
+            throw BackupError.storeUnavailable(underlying: error)
         }
     }
 
-    private static func performImport(
-        _ backup: AppBackup,
-        into modelContext: ModelContext,
-        existingGebiete: [Gebiet],
-        existingHouses: [House],
-        existingPassanten: [Passant]
-    ) async throws -> BackupImportResult {
+}
+
+/// Snapshots per Enumerate im Hintergrund — gleiche Technik wie AutoBackup,
+/// damit der Export nie den Main-Thread mit Voll-Fetch blockiert.
+@ModelActor
+actor BackupSnapshotReader {
+    nonisolated static func background(container: ModelContainer) async -> BackupSnapshotReader {
+        await Task.detached(priority: .background) {
+            BackupSnapshotReader(modelContainer: container)
+        }.value
+    }
+
+    func fetchGebietSnapshots() throws -> [BackupService.GebietSnapshot] {
+        var result: [BackupService.GebietSnapshot] = []
+        var visited = 0
+        try modelContext.enumerate(FetchDescriptor<Gebiet>(), batchSize: 200) { gebiet in
+            if visited.isMultiple(of: 64) { try Task.checkCancellation() }
+            visited += 1
+            result.append(BackupService.GebietSnapshot(gebiet))
+        }
+        return result
+    }
+
+    func fetchHouseSnapshots() throws -> [BackupService.HouseSnapshot] {
+        var result: [BackupService.HouseSnapshot] = []
+        var visited = 0
+        try modelContext.enumerate(FetchDescriptor<House>(), batchSize: 200) { house in
+            if visited.isMultiple(of: 64) { try Task.checkCancellation() }
+            visited += 1
+            result.append(BackupService.HouseSnapshot(house))
+        }
+        return result
+    }
+
+    func fetchPassantSnapshots() throws -> [BackupService.PassantSnapshot] {
+        var result: [BackupService.PassantSnapshot] = []
+        var visited = 0
+        try modelContext.enumerate(FetchDescriptor<Passant>(), batchSize: 200) { passant in
+            if visited.isMultiple(of: 64) { try Task.checkCancellation() }
+            visited += 1
+            result.append(BackupService.PassantSnapshot(passant))
+        }
+        return result
+    }
+}
+
+/// Import in Batches auf Hintergrund-Kontext (BulkHouseImporter-Muster):
+/// Autosave aus, 400er-Chargen, vorcodierte Tür-Blobs — sonst 5 000 Inserts
+/// auf Main und ein riesiger Einzel-Save.
+/// Nutzt den Bulk-Importer bewusst nicht direkt: Der legt identische
+/// Platzhalter-Türen für ein einziges Gebiet an, hier trägt jedes Haus eigene
+/// Türen, braucht Gebiets-Remap plus Dedupe. Das Batch-Protokoll (Autosave aus,
+/// 400er-Chargen, vorcodierte Blobs) ist dasselbe — geprüft, keine Lücke.
+@ModelActor
+actor BackupImportActor {
+    private static let batchSize = 400
+
+    nonisolated static func background(container: ModelContainer) async -> BackupImportActor {
+        await Task.detached(priority: .background) {
+            BackupImportActor(modelContainer: container)
+        }.value
+    }
+
+    func performImport(_ backup: AppBackup) throws -> BackupImportResult {
         let trace = PerformanceTrace.begin("Import backup")
         defer { PerformanceTrace.end("Import backup", id: trace) }
+        modelContext.autosaveEnabled = false
 
-        // Pre-encode all units off the main thread; the inserts themselves stay on the
-        // main-actor context where SwiftData requires them.
-        let unitsDataByHouseID = try await Task.detached(priority: .userInitiated) { () throws -> [UUID: Data] in
-            let encoder = AppCoders.unitsEncoder()
-            var encoded: [UUID: Data] = [:]
-            encoded.reserveCapacity(backup.houses.count)
-            for house in backup.houses {
-                encoded[house.id] = try encoder.encode(house.units)
-            }
-            return encoded
-        }.value
-
+        // Bestand per Enumerate im Hintergrund — keine Voll-Fetches auf Main.
         var gebieteByID: [UUID: Gebiet] = [:]
-        for gebiet in existingGebiete {
-            gebieteByID[gebiet.id] = gebieteByID[gebiet.id] ?? gebiet
+        var visited = 0
+        do {
+            try modelContext.enumerate(FetchDescriptor<Gebiet>(), batchSize: 200) { gebiet in
+                if visited.isMultiple(of: 64) { try Task.checkCancellation() }
+                visited += 1
+                gebieteByID[gebiet.id] = gebieteByID[gebiet.id] ?? gebiet
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw BackupError.storeUnavailable(underlying: error)
+        }
+        var existingHouseIDs = Set<UUID>()
+        do {
+            try modelContext.enumerate(FetchDescriptor<House>(), batchSize: 200) { house in
+                if visited.isMultiple(of: 64) { try Task.checkCancellation() }
+                visited += 1
+                existingHouseIDs.insert(house.id)
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw BackupError.storeUnavailable(underlying: error)
+        }
+        var existingPassantIDs = Set<UUID>()
+        do {
+            try modelContext.enumerate(FetchDescriptor<Passant>(), batchSize: 200) { passant in
+                if visited.isMultiple(of: 64) { try Task.checkCancellation() }
+                visited += 1
+                existingPassantIDs.insert(passant.id)
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw BackupError.storeUnavailable(underlying: error)
+        }
+
+        // Türen vorab codieren (einmalig, Hintergrund): spart pro Haus ein
+        // Platzhalter-Encode auf dem Import-Thread bei 5 000 Zeilen.
+        let encoder = AppCoders.unitsEncoder()
+        var unitsDataByHouseID: [UUID: Data] = [:]
+        unitsDataByHouseID.reserveCapacity(backup.houses.count)
+        for house in backup.houses {
+            unitsDataByHouseID[house.id] = try encoder.encode(house.units)
         }
 
         var gebietIDMap: [UUID: UUID] = [:]
         var importedGebiete = 0
-
         for backupGebiet in backup.gebiete.sorted(by: { $0.day1Date < $1.day1Date }) {
-            // Matched by identity ONLY. The old code also merged any existing
-            // territory that happened to share a calendar date, so two teams
-            // canvassing two districts on the same day were silently combined into
-            // one — while the counter reported "0 Gebiete importiert".
+            try Task.checkCancellation()
+            // Nur per Identität matchen: gleiche Kalenderdaten zweier Teams
+            // dürfen nie still zu einem Gebiet verschmelzen.
             if let existing = gebieteByID[backupGebiet.id] {
                 gebietIDMap[backupGebiet.id] = existing.id
                 if existing.boundaryData.isEmpty && !backupGebiet.boundaryData.isEmpty {
@@ -469,7 +550,6 @@ enum BackupService {
                 }
                 continue
             }
-
             let gebiet = Gebiet(
                 name: backupGebiet.name,
                 districtOrCity: backupGebiet.districtOrCity,
@@ -478,35 +558,30 @@ enum BackupService {
             )
             gebiet.id = backupGebiet.id
             gebiet.notes = backupGebiet.notes
-            // Through `assignDays`, so a two-day territory can never end up with a
-            // nil second day — assigning the field directly wrote past the invariant.
             gebiet.assignDays(day1: backupGebiet.day1Date, day2: backupGebiet.day2Date)
             gebiet.boundaryData = backupGebiet.boundaryData
             gebiet.createdAt = backupGebiet.createdAt
             gebiet.updatedAt = backupGebiet.updatedAt
-
             modelContext.insert(gebiet)
             gebieteByID[gebiet.id] = gebiet
             gebietIDMap[backupGebiet.id] = gebiet.id
             importedGebiete += 1
         }
 
-        var existingHouseIDs = Set(existingHouses.map(\.id))
         var importedHouses = 0
         var skippedHouses = 0
-
+        var batchCount = 0
         for backupHouse in backup.houses {
+            try Task.checkCancellation()
             guard !existingHouseIDs.contains(backupHouse.id) else {
                 skippedHouses += 1
                 continue
             }
-
             guard let sourceGebietID = backupHouse.gebietID ?? backupHouse.dayID,
                   let targetGebietID = gebietIDMap[sourceGebietID] else {
                 skippedHouses += 1
                 continue
             }
-
             let house = House(
                 address: backupHouse.address,
                 latitude: backupHouse.latitude,
@@ -514,9 +589,6 @@ enum BackupService {
                 gebietID: targetGebietID,
                 isApartmentBuilding: backupHouse.isApartmentBuilding,
                 unitCount: max(backupHouse.units.count, 1),
-                // Pre-encoded: passing it to the initializer skips encoding a
-                // placeholder array that would be overwritten on the next line —
-                // one wasted JSON encode per house, on the main actor, at import scale.
                 unitsData: unitsDataByHouseID[backupHouse.id]
             )
             house.id = backupHouse.id
@@ -526,26 +598,28 @@ enum BackupService {
             modelContext.insert(house)
             existingHouseIDs.insert(house.id)
             importedHouses += 1
+            batchCount += 1
+            if batchCount >= Self.batchSize {
+                try modelContext.save()
+                batchCount = 0
+            }
+        }
+        if batchCount > 0 {
+            try modelContext.save()
         }
 
-        // Street encounters, matched by identity like everything else. An
-        // encounter whose territory is missing from the file is skipped rather
-        // than orphaned — same rule as houses.
-        var existingPassantIDs = Set(existingPassanten.map(\.id))
         var importedPassanten = 0
-
         for backupPassant in backup.passanten {
+            try Task.checkCancellation()
             guard !existingPassantIDs.contains(backupPassant.id) else {
                 skippedHouses += 1
                 continue
             }
-
             guard let sourceGebietID = backupPassant.gebietID,
                   let targetGebietID = gebietIDMap[sourceGebietID] else {
                 skippedHouses += 1
                 continue
             }
-
             let passant = Passant(
                 note: backupPassant.note,
                 latitude: backupPassant.latitude,

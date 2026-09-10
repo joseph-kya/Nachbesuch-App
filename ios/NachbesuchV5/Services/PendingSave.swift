@@ -1,3 +1,4 @@
+import Foundation
 import SwiftData
 import SwiftUI
 
@@ -57,5 +58,49 @@ final class PendingSave {
         if modelContext.save(reporting: notices, context: failureContext) {
             completion?()
         }
+    }
+}
+
+/// Torwart vor `ModelContext.didSave`-Refreshes (Liste/Karte/Archiv).
+///
+/// Jeder Save — auch fremder Gebiete oder der automatischen Sicherung — feuert
+/// `didSave`, und jeder Empfänger las bisher voll neu. Das Gate faltet Bursts
+/// (Bulk-Import speichert mehrfach pro Sekunde) zu einem Refresh zusammen.
+/// Ehrliche Grenze: SwiftDatas `didSave` trägt keine geänderten IDs, eine
+/// Gebiets-Schnittmenge lässt sich aus der Notification nicht ableiten — dafür
+/// die Watermark-Varianten `mapSeeds(territoryID:updatedAfter:)` und
+/// `listSeeds(territoryID:updatedAfter:)` nutzen. Reines Angebot, kein
+/// Verhaltenswechsel: Übernahme durch die Screens ist optional.
+///
+/// Thread-Sicherheit: bewusst `NSLock` + `@unchecked Sendable` statt `@MainActor`.
+/// `didSave` kann auf beliebigem Thread feuern, der Handler ist synchron — ein
+/// MainActor-Gate zwänge jeden Aufruf in einen Hop. `lastPass` liegt nur hinter
+/// dem Lock, `quietInterval` ist unveränderlich; API (`shouldRefresh`/`reset`,
+/// Default 0.5 s) unverändert.
+/// Sendable, da nur Lock-geschützte Dates gehalten werden.
+final class DidSaveRefreshGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastPass = Date.distantPast
+    private let quietInterval: TimeInterval
+
+    /// - Parameter quietInterval: Mindestabstand zweier Refreshes in Sekunden.
+    init(quietInterval: TimeInterval = 0.5) {
+        self.quietInterval = quietInterval
+    }
+
+    /// `true` heißt jetzt neu lesen, `false` heißt Burst-Rauschen — Stand behalten.
+    func shouldRefresh(now: Date = .now) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard now.timeIntervalSince(lastPass) >= quietInterval else { return false }
+        lastPass = now
+        return true
+    }
+
+    /// Vergisst den letzten Durchlass — z. B. bei Gebietswechsel.
+    func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        lastPass = .distantPast
     }
 }

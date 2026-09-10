@@ -63,12 +63,20 @@ enum StoreLoadResult {
 }
 
 enum AppStore {
-    static let storeURL: URL = URL.applicationSupportDirectory
+    nonisolated static let storeURL: URL = URL.applicationSupportDirectory
         .appending(path: "default.store", directoryHint: .notDirectory)
+
+    /// Öffnet den Store abseits vom Main-Thread, damit Migration/WAL den ersten
+    /// Frame nicht blockieren. Die synchrone Variante bleibt für Tests erhalten.
+    nonisolated static func loadInBackground() async -> StoreLoadResult {
+        let trace = PerformanceTrace.begin("Open store")
+        defer { PerformanceTrace.end("Open store", id: trace) }
+        return await Task.detached(priority: .background) { AppStore.load() }.value
+    }
 
     /// Opens the real store, falling back to an in-memory one so a corrupt database
     /// degrades to "the app opens and explains itself" instead of "the app is dead".
-    static func load() -> StoreLoadResult {
+    nonisolated static func load() -> StoreLoadResult {
         let schema = Schema(versionedSchema: SchemaV2.self)
         do {
             let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)

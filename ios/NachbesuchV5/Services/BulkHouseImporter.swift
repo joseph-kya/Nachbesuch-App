@@ -14,6 +14,9 @@ actor BulkHouseImporter {
         defer { PerformanceTrace.end("Bulk insert houses", id: trace) }
 
         modelContext.autosaveEnabled = false
+        // One pre-encoded single-door blob shared by all 5 000 inserts: the old
+        // path ran JSONEncoder per house for an identical placeholder.
+        let singleDoorData = (try? AppCoders.unitsEncoder().encode([DoorResult(label: "Haushalt")])) ?? Data()
         var inserted = 0
 
         for chunk in addresses.chunked(into: Self.batchSize) {
@@ -25,7 +28,8 @@ actor BulkHouseImporter {
                     longitude: address.longitude,
                     gebietID: gebietID,
                     isApartmentBuilding: false,
-                    unitCount: 1
+                    unitCount: 1,
+                    unitsData: singleDoorData
                 ))
                 inserted += 1
             }

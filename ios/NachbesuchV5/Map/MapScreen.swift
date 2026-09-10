@@ -64,6 +64,11 @@ struct MapScreen: View {
     @State private var dropHouseID: UUID?
     @State private var isFollowingUser = false
     @State private var isAwayFromTerritory = false
+    /// Zählt uncertain→trusted-Wechsel für den Folgen-Button-Puls (einmalig).
+    @State private var accuracyPulse = 0
+    /// True zwischen erstem Move und Idle einer Geste — nur zwei
+    /// Invalidierungen pro Geste (an/aus), kein Per-Frame-Body.
+    @State private var isPanning = false
     /// Measured heights of the floating chrome, so the map's legal attribution can be
     /// kept clear of it at any text size. See `chromeInsets`.
     @State private var topChromeHeight: CGFloat = 132
@@ -85,6 +90,9 @@ struct MapScreen: View {
         self.gebiet = gebiet
         _scope = scope
         self.isActive = isActive
+        // Store einmalig in @State je Gebiet: Erstanlage mit Gebiets-ID für den
+        // korrekten Startframe, danach Sync via selectTerritory (onChange) —
+        // kein Neuaufbau pro RootView.body, nur einmalige Anlage.
         _camera = State(initialValue: MapCameraStore(territoryID: gebiet?.id))
     }
 
@@ -159,8 +167,14 @@ struct MapScreen: View {
                 onCameraIdle: { region in
                     camera.record(region)
                     updateTerritoryProximity(region)
+                    // Drag-Skala zurücksetzen (mit Fade, kein Sprung).
+                    if isPanning { isPanning = false }
                 },
-                onCameraMoved: { camera.updateLive($0) },
+                onCameraMoved: {
+                    camera.updateLive($0)
+                    // Nur beim Gestenstart invalidieren, danach pro Frame still.
+                    if !isPanning { isPanning = true }
+                },
                 onTrackingModeChanged: { following in
                     isFollowingUser = following
                     location.setFollowing(following)
@@ -174,15 +188,37 @@ struct MapScreen: View {
                 onTapBoundary: mode == .drawingArea
                     ? { index, coordinate in insertBoundaryPoint(at: coordinate, index: index) }
                     : nil,
+                onTapEmpty: {
+                    // Leertap löst nur die Punkt-Auswahl (Fade), nie die Kamera.
+                    if selectedDraftIndex != nil { selectedDraftIndex = nil }
+                },
                 onDropConsumed: { id in
                     if dropHouseID == id { dropHouseID = nil }
+                },
+                onPuckConfidenceChanged: { confidence in
+                    // Einmaliges Aufpoppen des Folgen-Buttons bei besserem Fix —
+                    // nur im Folgen-Modus, RM-sicher still (kein Puls unter RM).
+                    if confidence == .trusted, isFollowingUser, !reduceMotion {
+                        accuracyPulse &+= 1
+                    }
                 },
                 menuProvider: contextMenu(for:),
                 previewProvider: contextPreview(for:)
             ))
             .ignoresSafeArea()
+            // Nur Orientierung: Größenwackler ohne Drehung lösen nichts aus —
+            // kein Per-Frame-Body, isPanning-Guard bleibt.
             .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in
                 location.refreshHeadingOrientation()
+            }
+            // Pin-Bitmaps im Hintergrund vorwärmen (Utility-QoS im Cache).
+            .task {
+                PinArtCache.prewarm()
+            }
+            // Speicherwarnung: Cache auf die 20 jüngsten Bitmaps stutzen —
+            // Vorwärmen/Render füllen bei Bedarf nach, kein explizites Cancel nötig.
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                PinArtCache.shared.trim(keeping: 20)
             }
 
             if mode != .browsing {
@@ -192,9 +228,30 @@ struct MapScreen: View {
                 )
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
+                    // Nur Skalierung beim Ziehen (1.0→1.15, RM-sicher still),
+                    // nie Versatz — kämpft nicht mit der Kamera.
+                    .scaleEffect(isPanning && !reduceMotion ? 1.15 : 1.0)
+                    .animation(.appFeedback(reduceMotion: reduceMotion), value: isPanning)
             }
         }
         .sheet(item: $sheetRoute, content: sheet(for:))
+        #if DEBUG
+        .task(id: isActive) {
+            guard isActive, gebiet != nil,
+                  let preview = Self.debugMapSheetPreview else { return }
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            if preview == "search" {
+                sheetRoute = .search
+            } else if preview == "house" {
+                var descriptor = FetchDescriptor<House>(predicate: #Predicate { !$0.isApartmentBuilding })
+                descriptor.fetchLimit = 1
+                if let house = try? modelContext.fetch(descriptor).first {
+                    sheetRoute = .houseDetail(house.id)
+                }
+            }
+        }
+        #endif
         .alert(item: $confirmation, content: alert(for:))
         .alert(
             "Ungenauer Standort",
@@ -240,6 +297,13 @@ struct MapScreen: View {
         .onChange(of: location.location) { _, newLocation in
             performInitialLocateIfNeeded(newLocation)
         }
+        // GPS verweigert während Folgen: Follow-Modus aus — Locate-Tap zeigt
+        // bereits notices.show statt System-Alert (toggleFollow).
+        .onChange(of: location.isDenied) { _, denied in
+            if denied, isFollowingUser {
+                cameraCommand = .follow(false)
+            }
+        }
         .onChange(of: gebiet?.id) { _, _ in
             resetForNewTerritory()
         }
@@ -270,10 +334,15 @@ struct MapScreen: View {
     private struct TopChromeLayout: Equatable {
         let isSelecting: Bool
         let showsGuide: Bool
+        let showsAccuracyBanner: Bool
     }
 
     private var topChromeLayout: TopChromeLayout {
-        TopChromeLayout(isSelecting: isSelecting, showsGuide: showsGuide)
+        TopChromeLayout(
+            isSelecting: isSelecting,
+            showsGuide: showsGuide,
+            showsAccuracyBanner: location.isReducedAccuracy
+        )
     }
 
     /// The same for the bottom chrome — and this is where the bug actually bit:
@@ -303,6 +372,16 @@ struct MapScreen: View {
 
     private var showsTerritoryButton: Bool {
         mode == .browsing && !isSelecting && isAwayFromTerritory
+    }
+
+    /// „±Xm" nur im Folgen-Modus bei unsicherem Fix (>25 m, wie der Puck) —
+    /// sonst nil, damit die Kopfzeile weich ausblendet. Keine Puck-Annotation
+    /// (MapKit-Kosten), nur Header-Text.
+    private var followAccuracyText: String? {
+        guard isFollowingUser,
+              let accuracy = location.location?.horizontalAccuracy,
+              accuracy > 25, accuracy < 500 else { return nil }
+        return "±\(Int(accuracy)) m"
     }
 
     /// Insets handed to MapKit so its legal attribution, scale and compass are never
@@ -347,19 +426,37 @@ struct MapScreen: View {
                         namespace: glass,
                         title: gebiet?.displayName ?? "Kein Gebiet",
                         subtitle: gebiet?.formattedDateRange ?? "Lege im Archiv ein Gebiet an",
+                        accuracyText: followAccuracyText,
                         stats: prepared.stats,
                         isTwoDay: gebiet?.isTwoDay == true,
                         scope: $scope,
-                        onSearch: { sheetRoute = .search },
+                        onSearch: {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            sheetRoute = .search
+                        },
                         onSelect: enterSelection,
                         canSelect: !prepared.pinsByID.isEmpty
                     )
                 }
 
+                // Ungenauer Standort: Warnbanner mit appBanner-Enter, Hilfetaste.
+                // Kein Glas-Morph (eigene ID ohne Partner) — nur SwiftUI-Transition.
+                if location.isReducedAccuracy {
+                    MapAccuracyBanner(onHelp: { location.openLocationSettings() })
+                        .transition(.appBanner(edge: .top, reduceMotion: reduceMotion))
+                }
+
                 if showsGuide {
                     MapGuideCard(
                         namespace: glass,
-                        onAddHouse: { setMode(.placingHouse) },
+                        onAddHouse: {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            setMode(.placingHouse)
+                        },
+                        onImport: {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            sheetRoute = .importArea
+                        },
                         onDismiss: { hasSeenGuide = true }
                     )
                     // Standalone: `map.guide` has no partner to morph into, so the
@@ -371,12 +468,15 @@ struct MapScreen: View {
         .padding(.horizontal, AppSpacing.regular)
         .padding(.top, AppSpacing.tight)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-            topChromeHeight = height
+            // Guarded: unguarded writes invalidate MapScreen.body → rebuild
+            // MapHost (+ passant array) → updateUIView, for sub-point wobbles
+            // that change nothing on screen.
+            if abs(height - topChromeHeight) > 0.5 { topChromeHeight = height }
         }
         // The summary bar and the selection bar share a glass id, so switching modes
         // reshapes one panel rather than dissolving two unrelated ones.
         .compatGlassTransition(.matchedGeometry, reduceMotion: reduceMotion)
-        .animation(.smooth(duration: 0.32, extraBounce: 0).speed(reduceMotion ? 1.8 : 1), value: topChromeLayout)
+        .animation(.appSettle(reduceMotion: reduceMotion), value: topChromeLayout)
     }
 
     @ViewBuilder
@@ -394,6 +494,7 @@ struct MapScreen: View {
                         isBusy: isLocating,
                         isDenied: location.isDenied,
                         namespace: glass,
+                        accuracyPulse: accuracyPulse,
                         action: toggleFollow
                     )
                     .standaloneGlassTransition(reduceMotion: reduceMotion)
@@ -429,10 +530,10 @@ struct MapScreen: View {
         .padding(.horizontal, AppSpacing.regular)
         .padding(.bottom, AppSpacing.snug)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-            bottomChromeHeight = height
+            if abs(height - bottomChromeHeight) > 0.5 { bottomChromeHeight = height }
         }
         .compatGlassTransition(.matchedGeometry, reduceMotion: reduceMotion)
-        .animation(.smooth(duration: 0.32, extraBounce: 0).speed(reduceMotion ? 1.8 : 1), value: bottomChromeLayout)
+        .animation(.appSettle(reduceMotion: reduceMotion), value: bottomChromeLayout)
     }
 
     /// Deliberately short.
@@ -513,6 +614,7 @@ struct MapScreen: View {
         guard let region = territoryRegion else { return }
         camera.record(region)
         cameraCommand = .region(region, animated: !reduceMotion)
+        // Einmaliges leichtes Feedback (Button hat kein sensory — kein Doppel).
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
@@ -561,6 +663,13 @@ struct MapScreen: View {
 
     // MARK: - Pin pipeline
 
+    #if DEBUG
+    /// Einmalig cachen: Environment-Dict pro Task-Start wäre sonst Dauer-Overhead.
+    private static let debugMapSheetPreview: String? = {
+        ProcessInfo.processInfo.environment["NACHBESUCH_MAP_SHEET"]
+    }()
+    #endif
+
     /// What the pins are built from, expressed so that deciding whether to rebuild
     /// costs nothing.
     ///
@@ -600,11 +709,21 @@ struct MapScreen: View {
             return
         }
 
-        // Street encounters travel with every refresh, full or incremental:
-        // dozens of small rows, fetched plainly on the main actor.
-        passanten = fetchPassanten()
+        let reader = await HouseReadService.background(container: modelContext.container)
 
-        let reader = HouseReadService(modelContainer: modelContext.container)
+        // Passanten gebündelt im Hintergrund (IDs/Seeds), live nur per ID auf Main:
+        // kein Vollscan auf Main pro Refresh — sonst kostet jeder Tür-Tap Dua.
+        do {
+            let seeds = try await reader.passantSeeds(territoryID: territoryID)
+            guard !Task.isCancelled else { return }
+            passanten = fetchPassanten(byIDs: seeds.map(\.id))
+        } catch is CancellationError {
+            return
+        } catch {
+            notices.report(error, context: "Passanten konnten nicht gelesen werden")
+            return
+        }
+        guard !Task.isCancelled else { return }
 
         // Content-only change (a status was tapped): patch just the houses touched
         // since the last build instead of decoding every blob in the territory.
@@ -721,6 +840,8 @@ struct MapScreen: View {
         // The map screen keeps Core Location streaming, so in normal use there is
         // already a perfectly usable fix. Move on the same tap/frame instead of
         // putting the UI behind the stricter fresh-fix request and its timeout.
+        // Haptik kommt einmalig vom LocateButton-sensory (Folgen-Wechsel),
+        // hier kein Doppel-Feedback.
         if let fix = location.location,
            fix.horizontalAccuracy >= 0,
            fix.horizontalAccuracy < 200,
@@ -730,7 +851,6 @@ struct MapScreen: View {
             cameraCommand = .region(target, animated: !reduceMotion)
             isLocating = false
             location.startStreaming()
-            UISelectionFeedbackGenerator().selectionChanged()
             return
         }
 
@@ -748,7 +868,6 @@ struct MapScreen: View {
                 span: MapCameraStore.recenterSpan,
                 animated: !reduceMotion
             )
-            UISelectionFeedbackGenerator().selectionChanged()
         }
     }
 
@@ -759,6 +878,8 @@ struct MapScreen: View {
     }
 
     private func primaryAction() {
+        // Einmalige Auswahlhaptik für Moduswechsel (Buttons tragen kein sensory).
+        UISelectionFeedbackGenerator().selectionChanged()
         switch mode {
         case .placingHouse:
             guard let gebiet else { return }
@@ -787,6 +908,8 @@ struct MapScreen: View {
         mode = .browsing
         draftBoundary = []
         selectedDraftIndex = nil
+        // Abbrechen bestätigt leise (einmalig, kein sensory am Button).
+        UISelectionFeedbackGenerator().selectionChanged()
     }
 
     private func addBoundaryPoint() {
@@ -809,6 +932,8 @@ struct MapScreen: View {
         let removed = draftBoundary.count - 1
         draftBoundary.removeLast()
         if selectedDraftIndex == removed { selectedDraftIndex = nil }
+        // Leichte Bestätigung (einmalig, kein sensory am Button).
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
     /// Moves the selected vertex to the reticle and releases the selection —
@@ -894,10 +1019,23 @@ struct MapScreen: View {
     }
 
     /// Street encounters of one territory. Dozens, so a plain main-thread fetch —
-    /// no background pipeline like houses.
+    /// no background pipeline like houses. Bleibt für Erstbefüllung/Tests.
     private func fetchPassanten() -> [Passant] {
         guard let territoryID = gebiet?.id else { return [] }
         let descriptor = FetchDescriptor<Passant>(predicate: #Predicate { $0.gebietID == territoryID })
+        do {
+            return try modelContext.fetch(descriptor)
+        } catch {
+            notices.report(error, context: "Passanten konnten nicht gelesen werden")
+            return []
+        }
+    }
+
+    /// Live-Modelle nur per ID auf Main (indexiert, wenige Zeilen) — der Vollscan
+    /// lief zuvor pro Refresh auf Main, jetzt als Seeds im Hintergrund.
+    private func fetchPassanten(byIDs ids: [UUID]) -> [Passant] {
+        guard !ids.isEmpty else { return [] }
+        let descriptor = FetchDescriptor<Passant>(predicate: #Predicate { ids.contains($0.id) })
         do {
             return try modelContext.fetch(descriptor)
         } catch {
@@ -1067,6 +1205,9 @@ struct MapScreen: View {
     }
 
     private func contextPreview(for pin: MapPinSnapshot) -> UIViewController? {
+        // Schnellpfad ohne Store-Zugriff: Ein-Tür-Pins haben nie eine Vorschau —
+        // erst danach einzeilig fetchen und nur für Mehrparteienhäuser aufbauen.
+        guard pin.unitCount > 1 else { return nil }
         guard let house = fetchHouse(pin.id), house.isApartmentBuilding else { return nil }
         return UIHostingController(
             rootView: ApartmentStatusPreview(address: house.address, units: house.units, scope: scope)
@@ -1094,6 +1235,8 @@ struct MapScreen: View {
             ) { date in
                 setRevisitTime(date, for: id)
             }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
 
         case .addHouse(let coordinate, let gebietID):
             AddHouseSheet(
@@ -1128,7 +1271,7 @@ struct MapScreen: View {
             MapSearchSheet(region: camera.region) { coordinate in
                 flyToSearchResult(coordinate)
             }
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.large])
             .presentationDragIndicator(.visible)
 
         case .importArea:
@@ -1249,6 +1392,30 @@ struct MapScreen: View {
                 secondaryButton: .destructive(Text("Löschen")) { deleteBoundary() }
             )
         }
+    }
+}
+
+// MARK: - Passanten im Hintergrund (neben mapSeeds, gebündelt)
+
+/// Passanten-Seeds für die Karte: Dutzende, nie Tausende — aber der Vollscan
+/// lief pro Refresh auf Main. IDs bzw. Pins im Hintergrund lesen, live nur
+/// noch per ID auf Main nachziehen (indexiert, wenige Zeilen).
+extension HouseReadService {
+    func passantSeeds(territoryID: UUID) throws -> [PassantPin] {
+        let descriptor = FetchDescriptor<Passant>(predicate: #Predicate { $0.gebietID == territoryID })
+        var result: [PassantPin] = []
+        var visited = 0
+        try modelContext.enumerate(descriptor, batchSize: 200) { passant in
+            if visited.isMultiple(of: 64) { try Task.checkCancellation() }
+            visited += 1
+            result.append(PassantPin(
+                id: passant.id,
+                coordinate: passant.coordinate,
+                outcome: passant.outcome,
+                note: passant.note
+            ))
+        }
+        return result
     }
 }
 

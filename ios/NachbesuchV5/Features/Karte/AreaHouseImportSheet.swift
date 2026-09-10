@@ -1,6 +1,7 @@
 import CoreLocation
 import SwiftData
 import SwiftUI
+import UIKit
 
 /// Bulk-creates every addressed building inside the drawn boundary, from
 /// OpenStreetMap.
@@ -8,6 +9,7 @@ struct AreaHouseImportSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(AppNoticeCenter.self) private var notices
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let boundary: [CLLocationCoordinate2D]
     let gebietID: UUID
@@ -17,6 +19,8 @@ struct AreaHouseImportSheet: View {
     @State private var skippedDuplicates = 0
     @State private var phase: Phase = .loading
     @State private var loadTask: Task<Void, Never>?
+    /// Abgewählte Treffer — alles andere wird angelegt. Leer heißt: alle.
+    @State private var deselectedIDs: Set<String> = []
 
     private enum Phase: Equatable {
         case loading
@@ -25,18 +29,40 @@ struct AreaHouseImportSheet: View {
         case failed(String)
     }
 
+    /// Angelegt wird nur, was noch ausgewählt ist.
+    private var selectedAddresses: [ImportedAreaAddress] {
+        addresses.filter { !deselectedIDs.contains($0.id) }
+    }
+
     var body: some View {
         NavigationStack {
             Group {
                 switch phase {
                 case .loading:
-                    VStack(spacing: AppSpacing.snug) {
-                        ProgressView().controlSize(.large)
-                        Text("Häuser werden gesucht …")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                    // Spinner plus drei Skelett-Zeilen: Das Sheet fühlt sich
+                    // sofort an, nicht erst bei der Antwort.
+                    List {
+                        Section {
+                            HStack(spacing: AppSpacing.snug) {
+                                ProgressView().controlSize(.small)
+                                Text("Häuser werden gesucht …")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Section {
+                            ForEach(0..<3, id: \.self) { _ in
+                                Text("Musterstraße 00")
+                                    .font(.subheadline)
+                                    .redacted(reason: .placeholder)
+                            }
+                        } header: {
+                            Text("Vorschau")
+                        } footer: {
+                            Text("Alle neuen Einträge entstehen als Einzelhäuser. Quelle: © OpenStreetMap-Mitwirkende.")
+                        }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .listStyle(.insetGrouped)
 
                 case .failed(let message):
                     ContentUnavailableView {
@@ -44,34 +70,83 @@ struct AreaHouseImportSheet: View {
                     } description: {
                         Text(message)
                     } actions: {
-                        Button("Erneut versuchen") { startLoading() }
-                            .buttonStyle(.borderedProminent)
+                        Button("Erneut versuchen") {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            startLoading()
+                        }
+                        .compatGlassButton(prominent: true)
                     }
 
                 case .ready, .saving:
-                    List {
-                        Section {
-                            LabeledContent("Gefunden", value: "\(addresses.count)")
-                            if skippedDuplicates > 0 {
-                                LabeledContent("Bereits vorhanden", value: "\(skippedDuplicates)")
+                    // Leeres Gebiet ist ein eigener Zustand mit Wiederholen —
+                    // kein leeres Listen-Skelett ohne Ausweg.
+                    if addresses.isEmpty, phase == .ready {
+                        ContentUnavailableView {
+                            Label("Keine Adressen im Gebiet", systemImage: "mappin.slash")
+                        } description: {
+                            Text(skippedDuplicates > 0
+                                 ? "Alle \(skippedDuplicates) Adressen sind bereits erfasst."
+                                 : "In dieser Fläche kennt OpenStreetMap keine Hausnummern.")
+                        } actions: {
+                            Button("Erneut versuchen") {
+                                UISelectionFeedbackGenerator().selectionChanged()
+                                startLoading()
                             }
-                        } footer: {
-                            Text("Alle neuen Einträge entstehen als Einzelhäuser. Quelle: © OpenStreetMap-Mitwirkende.")
+                            .compatGlassButton(prominent: true)
                         }
+                    } else {
+                        List {
+                            Section {
+                                LabeledContent("Gefunden", value: "\(addresses.count)")
+                                // Zähler mit Zahlen-Morph statt hartem Sprung.
+                                LabeledContent("Ausgewählt", value: "\(selectedAddresses.count)")
+                                    .monospacedDigit()
+                                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(selectedAddresses.count)))
+                                    .animation(.appFeedback(reduceMotion: reduceMotion), value: selectedAddresses.count)
+                                if skippedDuplicates > 0 {
+                                    LabeledContent("Bereits vorhanden", value: "\(skippedDuplicates)")
+                                }
+                            } footer: {
+                                Text("Alle neuen Einträge entstehen als Einzelhäuser. Quelle: © OpenStreetMap-Mitwirkende.")
+                            }
 
-                        Section("Vorschau") {
-                            ForEach(addresses.prefix(60)) { address in
-                                Text(address.address)
-                                    .font(.subheadline)
-                            }
-                            if addresses.count > 60 {
-                                Text("… und \(addresses.count - 60) weitere")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            Section {
+                                ForEach(addresses.prefix(60)) { address in
+                                    let isSelected = !deselectedIDs.contains(address.id)
+                                    Button {
+                                        toggleSelection(address.id)
+                                    } label: {
+                                        HStack(spacing: AppSpacing.snug) {
+                                            Text(address.address)
+                                                .font(.subheadline)
+                                                .foregroundStyle(.primary)
+                                            Spacer(minLength: AppSpacing.tight)
+                                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                                .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                                        }
+                                        .frame(minHeight: AppTouch.minimum)
+                                    }
+                                    .accessibilityLabel(address.address)
+                                    .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+                                }
+                                if addresses.count > 60 {
+                                    Text("… und \(addresses.count - 60) weitere")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } header: {
+                                HStack {
+                                    Text("Vorschau")
+                                    Spacer()
+                                    Button("Alle") { setAllSelected(true) }
+                                        .font(.footnote)
+                                    Button("Keine") { setAllSelected(false) }
+                                        .font(.footnote)
+                                }
                             }
                         }
+                        .listStyle(.insetGrouped)
                     }
-                    .listStyle(.insetGrouped)
                 }
             }
             .navigationTitle("Häuser im Gebiet")
@@ -84,11 +159,33 @@ struct AreaHouseImportSheet: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("\(addresses.count) anlegen") {
+                    Button("\(selectedAddresses.count) anlegen") {
                         Task { await save() }
                     }
                     .fontWeight(.semibold)
-                    .disabled(addresses.isEmpty || phase != .ready)
+                    .monospacedDigit()
+                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(selectedAddresses.count)))
+                    .animation(.appFeedback(reduceMotion: reduceMotion), value: selectedAddresses.count)
+                    .disabled(selectedAddresses.isEmpty || phase != .ready)
+                }
+            }
+            // Klebrige Fußzeile in der nativen Liste (kein Glas): Daumen-Ziel mit
+            // Live-Zähler, 44pt, prominent im Form-Stil.
+            .safeAreaInset(edge: .bottom) {
+                if phase == .ready, !addresses.isEmpty {
+                    Button("\(selectedAddresses.count) anlegen") {
+                        Task { await save() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(selectedAddresses.count)))
+                    .animation(.appFeedback(reduceMotion: reduceMotion), value: selectedAddresses.count)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color(uiColor: .systemGroupedBackground))
+                    .disabled(selectedAddresses.isEmpty)
                 }
             }
             .overlay {
@@ -106,6 +203,7 @@ struct AreaHouseImportSheet: View {
         // and race on the results.
         loadTask?.cancel()
         phase = .loading
+        deselectedIDs = []
         // The fingerprints come from the background reader inside the task, not
         // from a main-thread fetch up front: materialising the whole territory
         // before the network request even started is what stalled this sheet on
@@ -115,7 +213,7 @@ struct AreaHouseImportSheet: View {
         let container = modelContext.container
         let region = boundary
         loadTask = Task {
-            let reader = HouseReadService(modelContainer: container)
+            let reader = await HouseReadService.background(container: container)
             let fingerprints: [ExistingHouseFingerprint]
             do {
                 fingerprints = try await reader.addressFingerprints(territoryID: target)
@@ -144,11 +242,28 @@ struct AreaHouseImportSheet: View {
         }
     }
 
+    /// Einzelne Zeile an-/abwählen — leichtes Tippen, sofort sichtbar.
+    private func toggleSelection(_ id: String) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        if deselectedIDs.contains(id) {
+            deselectedIDs.remove(id)
+        } else {
+            deselectedIDs.insert(id)
+        }
+    }
+
+    /// Alle/keine mit leichtem Tippen — Masse bleibt leise bis zum Sichern.
+    /// „Keine" braucht keine Bestätigung: Abwählen ist reversibel.
+    private func setAllSelected(_ all: Bool) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        deselectedIDs = all ? [] : Set(addresses.map(\.id))
+    }
+
     private func save() async {
-        guard phase == .ready, !addresses.isEmpty else { return }
+        let payload = selectedAddresses
+        guard phase == .ready, !payload.isEmpty else { return }
         phase = .saving
         let container = modelContext.container
-        let payload = addresses
         let target = gebietID
         do {
             let importer = BulkHouseImporter(modelContainer: container)
@@ -157,7 +272,13 @@ struct AreaHouseImportSheet: View {
             // @Query can still be showing the pre-import state when the sheet closes,
             // which read as "340 Häuser importiert" followed by an empty map.
             modelContext.processPendingChanges()
-            notices.show("\(count) Häuser angelegt.")
+            // Erfolg erst beim Schreiben: Masse bleibt leise bis hier.
+            // Ergebnisquittung mit Übersprungenen als Prüfspur.
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            let skipped = skippedDuplicates
+            notices.show(skipped > 0
+                ? "\(count) Häuser angelegt, \(skipped) übersprungen."
+                : "\(count) Häuser angelegt.")
             onFinished()
             dismiss()
         } catch {

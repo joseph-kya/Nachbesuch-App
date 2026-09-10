@@ -1,5 +1,6 @@
 import MapKit
 import SwiftUI
+import UIKit
 
 /// Address and place search for the map.
 ///
@@ -12,6 +13,8 @@ struct MapSearchSheet: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model: SearchModel
     @FocusState private var isFocused: Bool
+    /// Letzte 5 Suchanfragen (UserDefaults) — Tap füllt das Feld erneut.
+    @State private var recent: [String] = RecentSearches.load()
 
     let onSelect: (CLLocationCoordinate2D) -> Void
 
@@ -22,48 +25,125 @@ struct MapSearchSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                if model.suggestions.isEmpty, !model.query.isEmpty, !model.isResolving {
-                    ContentUnavailableView.search(text: model.query)
-                        .listRowSeparator(.hidden)
-                } else {
-                    ForEach(model.suggestions) { suggestion in
-                        Button {
-                            resolve(suggestion)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(suggestion.title)
-                                    .font(.body)
-                                    .foregroundStyle(.primary)
-                                if !suggestion.subtitle.isEmpty {
-                                    Text(suggestion.subtitle)
+            VStack(spacing: 0) {
+                HStack(spacing: AppSpacing.snug) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Adresse, Ort oder Gebiet", text: $model.query)
+                        .focused($isFocused)
+                        .autocorrectionDisabled()
+                        .submitLabel(.search)
+                        .accessibilityLabel("Adresse, Ort oder Gebiet")
+                    if !model.query.isEmpty {
+                        Button { model.query = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .accessibilityLabel("Suche löschen")
+                    }
+                }
+                .padding(AppSpacing.regular)
+                .navigationGlass(cornerRadius: AppRadius.control)
+                .padding(.horizontal)
+                .padding(.vertical, AppSpacing.snug)
+                List {
+                    if model.query.isEmpty {
+                        // Verlauf zuerst (max. 5, ein Tap = wiederverwenden).
+                        if !recent.isEmpty {
+                            Section("Zuletzt gesucht") {
+                                ForEach(recent, id: \.self) { item in
+                                    Button {
+                                        UISelectionFeedbackGenerator().selectionChanged()
+                                        model.query = item
+                                    } label: {
+                                        Label(item, systemImage: "clock.arrow.circlepath")
+                                            .lineLimit(1)
+                                    }
+                                    .accessibilityHint("Sucht erneut nach \(item)")
+                                }
+                                // Verlauf löschen: einmalige Auswahlhaptik, kein System-Alert.
+                                Button(role: .destructive) {
+                                    UISelectionFeedbackGenerator().selectionChanged()
+                                    RecentSearches.clear()
+                                    recent = []
+                                } label: {
+                                    Label("Zuletzt gesucht löschen", systemImage: "trash")
+                                }
+                                .accessibilityHint("Löscht die gespeicherten Suchanfragen")
+                            }
+                        }
+                        ContentUnavailableView("Adresse suchen", systemImage: "mappin.and.ellipse",
+                            description: Text("Suche nach einer Straße, einem Ort oder einem Gebiet."))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    } else if model.isResolving, model.suggestions.isEmpty {
+                        // Skelettzeilen während der Auflösung: redacted + pulsierende
+                        // Opazität, RM-sicher statisch. Spinner-Transition bleibt.
+                        ForEach(0..<3, id: \.self) { _ in
+                            HStack(spacing: AppSpacing.snug) {
+                                Image(systemName: "mappin.circle.fill")
+                                    .foregroundStyle(.tertiary)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Musterstraße 12")
+                                        .font(.body)
+                                    Text("1234 Musterort")
                                         .font(.caption)
-                                        .foregroundStyle(.secondary)
                                 }
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .redacted(reason: .placeholder)
+                            .phaseAnimator([0.45, 0.75], trigger: model.isResolving) { content, phase in
+                                content.opacity(reduceMotion ? 0.6 : phase)
+                            } animation: { _ in
+                                reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.8)
+                            }
+                            .accessibilityHidden(true)
+                            .listRowSeparator(.hidden)
                         }
-                        .disabled(model.isResolving)
-                        .accessibilityElement(children: .combine)
-                        .accessibilityHint("Öffnet diesen Ort auf der Karte")
+                    } else if model.suggestions.isEmpty, !model.isResolving {
+                        ContentUnavailableView.search(text: model.query)
+                            .listRowSeparator(.hidden)
+                    } else {
+                        ForEach(model.suggestions) { suggestion in
+                            Button {
+                                // Einmalige Auswahlhaptik (visuell: natives List-Highlight).
+                                UISelectionFeedbackGenerator().selectionChanged()
+                                resolve(suggestion)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(suggestion.title)
+                                        .font(.body)
+                                        .foregroundStyle(.primary)
+                                    if !suggestion.subtitle.isEmpty {
+                                        Text(suggestion.subtitle)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                // 44 pt Zeilenhöhe für zuverlässige Treffer.
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .disabled(model.isResolving)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityHint("Öffnet diesen Ort auf der Karte")
+                        }
                     }
                 }
-            }
-            .listStyle(.insetGrouped)
-            .searchable(text: $model.query, prompt: "Adresse, Ort oder Gebiet")
-            .searchFocused($isFocused)
-            .overlay {
-                ZStack {
-                    if model.isResolving {
-                        ProgressView().controlSize(.large)
-                            .transition(.opacity)
+                .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
+                .scrollDismissesKeyboard(.interactively)
+                .overlay {
+                    ZStack {
+                        if model.isResolving {
+                            ProgressView().controlSize(.large)
+                                .transition(.opacity)
+                        }
                     }
+                    // Scoped to the spinner alone: an animation on the list would
+                    // also animate every suggestion row on each keystroke.
+                    .animation(.appFeedback(reduceMotion: reduceMotion), value: model.isResolving)
                 }
-                // Scoped to the spinner alone: an animation on the list would
-                // also animate every suggestion row on each keystroke.
-                .animation(.appFeedback(reduceMotion: reduceMotion), value: model.isResolving)
             }
+            .background { AppBackdrop() }
             .navigationTitle("Suchen")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -77,10 +157,22 @@ struct MapSearchSheet: View {
                 Text("Zu dieser Auswahl konnte kein Kartenpunkt geladen werden.")
             }
         }
-        .task { isFocused = true }
+        .task {
+            // Let the sheet settle before presenting the keyboard. The search
+            // field itself stays in place through both transitions.
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            isFocused = true
+        }
     }
 
     private func resolve(_ suggestion: SearchModel.Suggestion) {
+        // Anfrage merken (max. 5) — Sheet öffnet weiter an der aktuellen
+        // Kamera (Region vom Caller), nicht an der Welt.
+        if !model.query.isEmpty {
+            RecentSearches.save(model.query)
+            recent = RecentSearches.load()
+        }
         Task {
             guard let coordinate = await model.coordinate(for: suggestion) else { return }
             dismiss()
@@ -166,4 +258,16 @@ final class SearchModel: NSObject, @preconcurrency MKLocalSearchCompleterDelegat
         if #available(iOS 26, *) { return item.location.coordinate }
         return item.placemark.coordinate
     }
+}
+
+/// Letzte 5 Suchanfragen in UserDefaults (Tap = wiederverwenden).
+private enum RecentSearches {
+    static let key = "map.recentSearches"
+    static func load() -> [String] { UserDefaults.standard.stringArray(forKey: key) ?? [] }
+    static func save(_ q: String) {
+        var list = load().filter { $0 != q }; list.insert(q, at: 0)
+        UserDefaults.standard.set(Array(list.prefix(5)), forKey: key)
+    }
+    /// Löscht den Verlauf (Lösch-Button im Sheet).
+    static func clear() { UserDefaults.standard.removeObject(forKey: key) }
 }

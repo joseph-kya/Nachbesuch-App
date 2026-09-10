@@ -34,6 +34,8 @@ final class UserLocationPuckView: MKAnnotationView {
     /// The map's own rotation, subtracted so the cone points at the real-world bearing.
     private var mapHeadingDegrees: Double = 0
     private var renderedRotation: CGFloat = .greatestFiniteMagnitude
+    private var renderedHalfAngle: CGFloat = -1
+    private var lastHaloRadius: CGFloat = -1
     private var isPulsing = false
 
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
@@ -128,36 +130,51 @@ final class UserLocationPuckView: MKAnnotationView {
     /// Accuracy halo in screen points, derived from the horizontal accuracy and the
     /// map's current scale by the caller.
     func apply(accuracyRadiusInPoints radius: CGFloat) {
-        updateHaloRadius(max(radius, Self.coreDiameter / 2 + 6))
+        // Quantized to 0.5 pt: mapViewDidChangeVisibleRegion fires per frame of a
+        // gesture, and rebuilding the halo path for sub-pixel deltas is pure GPU
+        // churn with zero visible change.
+        let quantized = ((max(radius, Self.coreDiameter / 2 + 6)) * 2).rounded() / 2
+        guard quantized != lastHaloRadius else { return }
+        lastHaloRadius = quantized
+        updateHaloRadius(quantized)
     }
 
     /// Trusted is today's look (solid blue core, white ring). Uncertain hollows
-    /// the core to a blue ring, dims the whole puck and strengthens the halo
+    /// the core to a ring, dims the whole puck and strengthens the halo
     /// stroke — legible at a glance, with no warning icon and no red.
+    /// Vertrauenswürdig = Akzent-Blau, unsicher = Orange; Opazitäts-Crossfade
+    /// (appFeedback-nah, RM-sicher), kein harter Sprung.
     func apply(confidence: PuckConfidence) {
         guard confidence != self.confidence else { return }
         self.confidence = confidence
+        // easeOut-Crossfade wie der Puls, RM-sicher hart.
+        let duration = UIAccessibility.isReduceMotionEnabled ? 0 : 0.24
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(duration)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
         switch confidence {
         case .trusted:
             coreLayer.fillColor = UIColor.systemBlue.cgColor
             coreLayer.strokeColor = nil
             coreLayer.lineWidth = 0
             haloLayer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.28).cgColor
-            alpha = 1
-            accessibilityLabel = "Dein Standort"
         case .uncertain:
             coreLayer.fillColor = UIColor.clear.cgColor
-            coreLayer.strokeColor = UIColor.systemBlue.cgColor
+            coreLayer.strokeColor = UIColor.systemOrange.cgColor
             coreLayer.lineWidth = 2.5
-            haloLayer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.5).cgColor
-            alpha = 0.55
-            accessibilityLabel = "Dein Standort, ungenau"
+            haloLayer.strokeColor = UIColor.systemOrange.withAlphaComponent(0.5).cgColor
         }
+        CATransaction.commit()
+        UIView.animate(withDuration: duration) {
+            self.alpha = confidence == .trusted ? 1 : 0.55
+        }
+        accessibilityLabel = confidence == .trusted ? "Dein Standort" : "Dein Standort, ungenau"
     }
 
     func setPulsing(_ pulsing: Bool) {
         guard pulsing != isPulsing else { return }
         isPulsing = pulsing
+        // CAAnimationGroup mit easeOut, stoppt bei Wiederverwendung (kein Leak).
         if pulsing, !UIAccessibility.isReduceMotionEnabled {
             let center = CGPoint(x: bounds.midX, y: bounds.midY)
             pulseLayer.path = UIBezierPath(
@@ -205,20 +222,26 @@ final class UserLocationPuckView: MKAnnotationView {
 
         let center = CGPoint(x: bounds.midX, y: bounds.midY)
         // Rebuild the wedge only when its width actually changed.
-        let wedge = UIBezierPath()
-        wedge.move(to: center)
-        wedge.addArc(
-            withCenter: center,
-            radius: Self.coneRadius,
-            startAngle: -.pi / 2 - headingHalfAngle,
-            endAngle: -.pi / 2 + headingHalfAngle,
-            clockwise: true
-        )
-        wedge.close()
-        coneMask.path = wedge.cgPath
+        if headingHalfAngle != renderedHalfAngle {
+            renderedHalfAngle = headingHalfAngle
+            let wedge = UIBezierPath()
+            wedge.move(to: center)
+            wedge.addArc(
+                withCenter: center,
+                radius: Self.coneRadius,
+                startAngle: -.pi / 2 - headingHalfAngle,
+                endAngle: -.pi / 2 + headingHalfAngle,
+                clockwise: true
+            )
+            wedge.close()
+            coneMask.path = wedge.cgPath
+        }
 
         let target = CGFloat((headingDegrees - mapHeadingDegrees) * .pi / 180)
-        guard target != renderedRotation else { return }
+        // Epsilon, not exact equality: per-frame region callbacks would otherwise
+        // open a 0.18 s CATransaction for sub-degree jitter nobody can see.
+        if renderedRotation != .greatestFiniteMagnitude,
+           abs(target - renderedRotation) < 0.0087 { return }
 
         // Shortest-arc: never rotate more than 180° for a single reading.
         var delta = target - (renderedRotation == .greatestFiniteMagnitude ? target : renderedRotation)
@@ -228,8 +251,9 @@ final class UserLocationPuckView: MKAnnotationView {
         renderedRotation = previous + delta
 
         CATransaction.begin()
-        // Compass noise arrives many times a second; a short implicit animation
-        // smooths it without lagging behind the real bearing.
+        // Kompassrauschen kommt mehrmals pro Sekunde; kurze implizite Animation
+        // glättet ohne nachzuhinken (UIKit-Äquivalent zu appSettle, bewusst
+        // kürzer als 0.34, sonst hinkt der Kegel; RM-sicher hart).
         CATransaction.setAnimationDuration(UIAccessibility.isReduceMotionEnabled ? 0 : 0.18)
         CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
         coneLayer.setAffineTransform(CGAffineTransform(rotationAngle: renderedRotation))
@@ -240,6 +264,8 @@ final class UserLocationPuckView: MKAnnotationView {
         super.prepareForReuse()
         headingDegrees = nil
         renderedRotation = .greatestFiniteMagnitude
+        renderedHalfAngle = -1
+        lastHaloRadius = -1
         coneLayer.isHidden = true
         setPulsing(false)
         apply(confidence: .trusted)

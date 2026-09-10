@@ -93,6 +93,13 @@ final class LocationService: NSObject {
     /// Only true while a view that draws the direction cone is visible.
     private var wantsHeading = false
     private var precisionRequests = 0
+    /// Throttles compass-driven SwiftUI invalidation: the sensor still smooths
+    /// at full rate, but the published value only moves when it matters.
+    private var lastPublishedHeading: Double?
+    private var lastPublishedHeadingAt: Date = .distantPast
+    // Filter vor dem Main-Hop: Glätten + Band + Drossel laufen nonisolated bei
+    // 20–50 Hz, nur echte Änderungen (≥3°/Band/0,25 s) hüpfen auf Main.
+    private let headingFilter = HeadingFilter()
     /// The two independent precision conditions, resolved through
     /// `AccuracyProfile` so neither caller stamps on the other.
     private var mapVisible = false
@@ -165,17 +172,25 @@ final class LocationService: NSObject {
         guard isStreaming else { return }
         isStreaming = false
         wantsHeading = false
+        lastPublishedHeading = nil
+        lastPublishedHeadingAt = .distantPast
+        headingFilter.reset()
         manager.stopUpdatingLocation()
         manager.stopUpdatingHeading()
-        resolveFreshFixWaiters(with: location)
+        // Resolve with nil: the waiter’s screen is gone (tab left), and firing
+        // a stale fix into a sheet/search/fly-to on the wrong screen is worse
+        // than reporting “no fix”.
+        resolveFreshFixWaiters(with: nil)
     }
 
     private func beginUpdates() {
         guard users > 0, !isStreaming else { return }
         isStreaming = true
         manager.startUpdatingLocation()
-        // Heading needs a magnetometer, which the Simulator does not have.
-        if CLLocationManager.headingAvailable() {
+        // Heading needs a magnetometer, which the Simulator does not have —
+        // and only the map draws the cone. The list’s distance sort must not
+        // power the magnetometer with no visible cone.
+        if mapVisible, CLLocationManager.headingAvailable() {
             wantsHeading = true
             manager.startUpdatingHeading()
         }
@@ -216,6 +231,18 @@ final class LocationService: NSObject {
     func setMapVisible(_ visible: Bool) {
         mapVisible = visible
         applyAccuracyProfile()
+        // Gate the magnetometer on the cone being visible. Starting/stopping
+        // heading here keeps the list’s held-open GPS stream from powering a
+        // sensor nobody is looking at.
+        if visible {
+            if isStreaming, !wantsHeading, CLLocationManager.headingAvailable() {
+                wantsHeading = true
+                manager.startUpdatingHeading()
+            }
+        } else if wantsHeading {
+            wantsHeading = false
+            manager.stopUpdatingHeading()
+        }
     }
 
     private func applyAccuracyProfile() {
@@ -377,8 +404,14 @@ extension LocationService: CLLocationManagerDelegate {
         // they are; it falls back to magnetic north otherwise.
         let raw = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
         let accuracy = newHeading.headingAccuracy
+        // Nonisolated filtern: Nur bei ≥3°/Bandwechsel/0,25 s auf Main hüpfen,
+        // sonst baut jedes Sample HeadingAwareMapHost + updateUIView neu.
+        let now = Date()
+        guard let smoothedValue = headingFilter.shouldPublish(raw: raw, accuracy: accuracy, now: now) else { return }
         Task { @MainActor in
-            self.headingDegrees = self.smoothed(raw, accuracy: accuracy)
+            self.lastPublishedHeading = smoothedValue
+            self.lastPublishedHeadingAt = now
+            self.headingDegrees = smoothedValue
             self.headingAccuracy = accuracy
         }
     }
@@ -399,6 +432,15 @@ extension LocationService: CLLocationManagerDelegate {
         return next < 0 ? next + 360 : next
     }
 
+    /// Accuracy band the cone width is derived from — mirrors the thresholds in
+    /// `UserLocationPuckView.apply(headingDegrees:accuracy:mapHeadingDegrees:)`
+    /// closely enough to detect a visible width change without importing UIKit.
+    private nonisolated static func headingBand(_ accuracy: Double) -> Int {
+        if accuracy < 15 { return 0 }
+        if accuracy < 30 { return 1 }
+        return 2
+    }
+
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: any Error) {
         // `kCLErrorLocationUnknown` is transient — CoreLocation keeps trying, so the
         // stream must stay open. Anything else ends the wait so the UI can move on.
@@ -412,5 +454,63 @@ extension LocationService: CLLocationManagerDelegate {
     /// it is only ever offered while a heading indicator is actually on screen.
     nonisolated func locationManagerShouldDisplayHeadingCalibration(_ manager: CLLocationManager) -> Bool {
         MainActor.assumeIsolated { isStreaming && wantsHeading }
+    }
+}
+
+// MARK: - Kompass-Filter (nonisolated, vor dem Main-Hop)
+
+/// Glättet und drosselt Kompass-Samples abseits vom Main-Thread (20–50 Hz).
+/// Nur bei ≥3° Änderung, Bandwechsel oder 0,25 s vergeht ein Wert — sonst würde
+/// jedes Sample SwiftUI + MapKit neu aufbauen, ohne sichtbar etwas zu ändern.
+private nonisolated final class HeadingFilter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var previous: Double?
+    private var lastPublished: Double?
+    private var lastAccuracy: Double?
+    private var lastAt: Date = .distantPast
+
+    nonisolated func shouldPublish(raw: Double, accuracy: Double, now: Date) -> Double? {
+        lock.lock()
+        defer { lock.unlock() }
+        // Kreisförmiger Tiefpass: 359° und 1° liegen 1° auseinander.
+        let smoothed: Double
+        if let prev = previous {
+            var delta = raw - prev
+            while delta > 180 { delta -= 360 }
+            while delta < -180 { delta += 360 }
+            let alpha = accuracy < 15 ? 0.35 : (accuracy < 30 ? 0.18 : 0.08)
+            var next = (prev + alpha * delta).truncatingRemainder(dividingBy: 360)
+            if next < 0 { next += 360 }
+            smoothed = next
+        } else {
+            smoothed = raw
+        }
+        previous = smoothed
+        if let last = lastPublished {
+            var delta = abs(smoothed - last)
+            if delta > 180 { delta = 360 - delta }
+            let bandChanged = Self.band(accuracy) != Self.band(lastAccuracy ?? accuracy)
+            let elapsed = now.timeIntervalSince(lastAt)
+            guard delta >= 3 || bandChanged || elapsed >= 0.25 else { return nil }
+        }
+        lastPublished = smoothed
+        lastAccuracy = accuracy
+        lastAt = now
+        return smoothed
+    }
+
+    nonisolated func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        previous = nil
+        lastPublished = nil
+        lastAccuracy = nil
+        lastAt = .distantPast
+    }
+
+    private nonisolated static func band(_ accuracy: Double) -> Int {
+        if accuracy < 15 { return 0 }
+        if accuracy < 30 { return 1 }
+        return 2
     }
 }

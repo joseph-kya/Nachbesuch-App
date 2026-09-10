@@ -1,17 +1,18 @@
-import Charts
 import SwiftUI
 
-/// The active territory's balance, embedded at the top of the archive.
+/// A stable summary: animate values, never the surrounding scroll layout.
 struct BalanceSection: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAccent) private var accent
 
     let gebiet: Gebiet
     let entry: ArchiveEntry?
     @Binding var scope: DayScope
-    /// Street encounters recorded in this territory. Shown as its own row when
-    /// non-zero — like every figure here, only results that occurred.
     var passantCount: Int = 0
+    /// WAVE2: success fires only on false→true. A plain `trigger: isComplete`
+    /// would also buzz on true→false (StreetHeader documents the same trap).
+    @State private var celebrateToken = 0
 
     private var tally: OutcomeTally {
         guard let entry else { return .empty }
@@ -22,190 +23,210 @@ struct BalanceSection: View {
         }
     }
 
+    /// WAVE2: true only at 100 %. Drives celebration (once per transition),
+    /// never routine count motion which stays appFeedback.
+    private var isComplete: Bool {
+        tally.unitCount > 0 && tally.completionFraction >= 1.0
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.snug) {
+        VStack(alignment: .leading, spacing: AppSpacing.loose) {
+            let headerLayout = dynamicTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: AppSpacing.tight))
+                : AnyLayout(HStackLayout())
+            headerLayout {
+                Label("Bilanz", systemImage: "chart.bar.xaxis")
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !dynamicTypeSize.isAccessibilitySize { Spacer() }
+                if let entry {
+                    Text("\(entry.houseCount) Häuser")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
             if gebiet.isTwoDay {
                 DayScopePicker(scope: $scope)
-                    .transition(.blockSwap(reduceMotion: reduceMotion))
             }
-
-            if entry?.houseCount ?? 0 == 0 {
-                ContentUnavailableView {
-                    Label("Noch nichts erfasst", systemImage: "chart.bar")
-                } description: {
-                    Text("Sobald du Häuser anlegst und Status einträgst, erscheint hier die Bilanz.")
-                }
-                .frame(maxWidth: .infinity)
-            } else {
-                if let damaged = entry?.damagedHouseCount, damaged > 0 {
-                    Label("\(damaged) Häuser mit beschädigten Daten — Wiederherstellung nötig",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.orange)
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentPanel(cornerRadius: AppRadius.control)
-                        .transition(.blockSwap(reduceMotion: reduceMotion))
-                }
-                progressCard
-                metrics
-                chart
-
-                if gebiet.isTwoDay, let entry {
-                    revisitSummary(entry: entry)
-                        .transition(.blockSwap(reduceMotion: reduceMotion))
-                }
-
-                if passantCount > 0 {
-                    HStack(spacing: AppSpacing.snug) {
-                        Image(systemName: "person.fill")
-                            .foregroundStyle(.secondary)
-                        Text("\(passantCount) \(passantCount == 1 ? "Passant" : "Passanten") erfasst")
-                            .font(.subheadline.weight(.medium))
-                        Spacer(minLength: 0)
+            if let entry {
+                if entry.houseCount == 0 {
+                    ContentUnavailableView {
+                        Label("Noch keine Häuser", systemImage: "house")
+                    } description: {
+                        Text("Sobald du Häuser anlegst, erscheint hier deine Bilanz.")
                     }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentPanel(cornerRadius: AppRadius.control)
-                    .transition(.blockSwap(reduceMotion: reduceMotion))
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(passantCount) \(passantCount == 1 ? "Passant" : "Passanten") erfasst")
+                } else {
+                    if entry.damagedHouseCount > 0 {
+                        Label("\(entry.damagedHouseCount) Häuser mit beschädigten Daten — Wiederherstellung nötig",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.subheadline)
+                            .foregroundStyle(.orange)
+                    }
+                    progressHeader
+                    Divider()
+                    VStack(spacing: AppSpacing.regular) {
+                        // Fixed rows prevent the card jumping when Später becomes zero.
+                        ForEach(VisitOutcome.allCases) { outcome in
+                            outcomeRow(outcome)
+                        }
+                    }
+                    if gebiet.isTwoDay {
+                        Divider()
+                        revisitSummary(entry)
+                    }
+                }
+                if passantCount > 0 {
+                    Label("\(passantCount) \(passantCount == 1 ? "Passant" : "Passanten") erfasst",
+                          systemImage: "person.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                HStack(spacing: AppSpacing.snug) {
+                    ProgressView()
+                    Text("Bilanz wird geladen …")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 100)
+            }
+        }
+        .padding(AppSpacing.loose)
+        .contentCard(cornerRadius: AppRadius.card)
+    }
+
+    private var progressHeader: some View {
+        VStack(alignment: .leading, spacing: AppSpacing.regular) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: AppSpacing.regular) {
+                    headline
+                    Spacer(minLength: AppSpacing.tight)
+                    recordedCount
+                }
+                VStack(alignment: .leading, spacing: AppSpacing.tight) {
+                    headline
+                    recordedCount
                 }
             }
-        }
-        .padding(14)
-        // One card around the whole balance. The blocks inside are plain fills:
-        // stacking glass inside glass just muddies both.
-        .contentCard(cornerRadius: AppRadius.card)
-        // Height and content are driven by one key: the card resizes while numbers
-        // roll. Keep it seamless — one smooth transaction for card + scroll, no
-        // separate scale wash. Disable implicit scale, fade only.
-        .animation(.smooth(duration: 0.38, extraBounce: 0).speed(reduceMotion ? 1.8 : 1), value: key)
-    }
-
-    /// Everything that changes the shape or the numbers of this card: which territory
-    /// it is showing, whether that territory has the campaign-day picker and the
-    /// revisit summary at all, and the tally every figure is derived from.
-    private struct BalanceKey: Equatable {
-        let gebietID: UUID
-        let isTwoDay: Bool
-        let houseCount: Int
-        let damagedHouseCount: Int
-        let passantCount: Int
-        let tally: OutcomeTally
-    }
-
-    private var key: BalanceKey {
-        BalanceKey(
-            gebietID: gebiet.id,
-            isTwoDay: gebiet.isTwoDay,
-            houseCount: entry?.houseCount ?? 0,
-            damagedHouseCount: entry?.damagedHouseCount ?? 0,
-            passantCount: passantCount,
-            tally: tally
-        )
-    }
-
-    /// Held as its own value so the headline digits and the `numericText` transition
-    /// are driven by exactly the same number — rounding it twice let the two disagree
-    /// by one for the length of the animation.
-    private var percentComplete: Int {
-        Int((tally.completionFraction * 100).rounded())
-    }
-
-    private var progressCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("\(percentComplete)")
-                    .font(.largeTitle.bold())
-                    .fontDesign(.rounded)
-                    .monospacedDigit()
-                    .contentTransition(.numericText(value: Double(percentComplete)))
-                Text("% erfasst")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                Text("\(tally.completed)/\(tally.unitCount)")
-                    .font(.subheadline.weight(.medium))
-                    .monospacedDigit()
-                    .contentTransition(.numericText(value: Double(tally.completed)))
-                    .foregroundStyle(.secondary)
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule(style: .continuous)
+                        .fill(.quaternary)
+                    if tally.completionFraction > 0 {
+                        Capsule(style: .continuous)
+                            // WAVE3: voll = grün statt Akzent — ruhige
+                            // Bestätigung ohne Konfetti, Helligkeit bleibt.
+                            .fill(isComplete ? .green : accent)
+                            .frame(width: max(5, proxy.size.width * min(tally.completionFraction, 1)))
+                    }
+                }
             }
-            ProgressView(value: tally.completionFraction)
-                .tint(tally.open == 0 ? .green : .red)
+            .frame(height: 5)
+            .animation(.appSettle(reduceMotion: reduceMotion), value: tally.completionFraction)
+            // WAVE2: completion swaps the open-count line for a checkmark badge.
+            // blockSwap kept for the swap; appCelebrate ONLY on the isComplete flip.
+            Group {
+                if isComplete {
+                    Label("Vollständig erfasst", systemImage: "checkmark.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.doneTone)
+                        .symbolEffect(
+                            .bounce,
+                            options: reduceMotion ? .nonRepeating : .default,
+                            value: isComplete
+                        )
+                        .symbolEffectsRemoved(reduceMotion)
+                        .transition(.blockSwap(reduceMotion: reduceMotion))
+                } else {
+                    Text("\(tally.open) Türen offen")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .contentTransition(reduceMotion ? .identity : .numericText(value: Double(tally.open)))
+                        .transition(.blockSwap(reduceMotion: reduceMotion))
+                }
+            }
+            // Reserved for genuine completion — ListScreen documents the same rule.
+            .animation(.appCelebrate(reduceMotion: reduceMotion), value: isComplete)
         }
-        .padding(12)
-        .contentPanel(cornerRadius: AppRadius.control)
+        // Success nur bei false→true: Token steigt nur beim Fertigwerden, nie
+        // beim Wiederöffnen (StreetHeader-Pattern).
+        .sensoryFeedback(.success, trigger: celebrateToken)
+        .onChange(of: isComplete) { _, done in
+            guard done else { return }
+            celebrateToken &+= 1
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Fortschritt")
-        .accessibilityValue("\(tally.completed) von \(tally.unitCount) Türen erfasst")
-    }
-
-    private var metrics: some View {
-        // Reflows to two columns at accessibility sizes instead of truncating.
-        let columns = dynamicTypeSize.isAccessibilitySize
-            ? [GridItem(.flexible()), GridItem(.flexible())]
-            : [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
-
-        return LazyVGrid(columns: columns, spacing: AppSpacing.tight) {
-            metricTile(outcome: .notHome, value: tally.notHome)
-            metricTile(outcome: .joined, value: tally.joined)
-            metricTile(outcome: .earlyNo, value: tally.earlyNo)
-            metricTile(outcome: .lateNo, value: tally.lateNo)
-            // Only when it happened: an always-visible "0 Später" would push the
-            // four results the report is about onto a second row for nothing.
-            if tally.later > 0 {
-                metricTile(outcome: .later, value: tally.later)
-                    .transition(.blockSwap(reduceMotion: reduceMotion))
-            }
-        }
-    }
-
-    private func metricTile(outcome: VisitOutcome, value: Int) -> some View {
-        VStack(spacing: 3) {
-            Image(systemName: outcome.symbolName)
-                .foregroundStyle(outcome.tint)
-            Text("\(value)")
-                .font(.title3.weight(.bold))
-                .monospacedDigit()
-                .contentTransition(.numericText(value: Double(value)))
-            Text(outcome.title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .contentPanel(cornerRadius: AppRadius.small)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(outcome.title)
-        .accessibilityValue("\(value)")
-    }
-
-    private var chart: some View {
-        Chart(chartOutcomes) { outcome in
-            BarMark(
-                x: .value("Anzahl", count(for: outcome)),
-                y: .value("Ergebnis", outcome.title)
-            )
-            .foregroundStyle(outcome.tint)
-            .cornerRadius(4)
-        }
-        .chartXAxis { AxisMarks(position: .bottom) }
-        .frame(height: 130)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Ergebnisverteilung")
         .accessibilityValue(
-            chartOutcomes
-                .map { "\($0.title): \(count(for: $0))" }
-                .joined(separator: ", ")
+            isComplete
+                ? "\(tally.completed) von \(tally.unitCount) Türen erfasst, vollständig"
+                : "\(tally.completed) von \(tally.unitCount) Türen erfasst, \(tally.open) Türen offen"
         )
     }
 
-    /// The four results, plus "Später" when the territory actually used it.
-    private var chartOutcomes: [VisitOutcome] {
-        tally.later > 0 ? VisitOutcome.allCases : VisitOutcome.primary
+    private var headline: some View {
+        HStack(alignment: .firstTextBaseline, spacing: AppSpacing.tight) {
+            Text(tally.completionFraction, format: .percent.precision(.fractionLength(0)))
+                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                .monospacedDigit()
+            Text("erfasst")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var recordedCount: some View {
+        Text("\(tally.completed) / \(tally.unitCount) Türen")
+            .font(.subheadline)
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            // WAVE2: numeric morph (RM-gated) + badge pop on change.
+            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(tally.completed)))
+            .scaleEffect(isComplete && !reduceMotion ? 1.06 : 1.0)
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: tally.completed)
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: isComplete)
+    }
+
+    private func outcomeRow(_ outcome: VisitOutcome) -> some View {
+        let value = count(for: outcome)
+        let fraction = tally.unitCount > 0 ? Double(value) / Double(tally.unitCount) : 0
+        return HStack(alignment: .top, spacing: AppSpacing.snug) {
+            Image(systemName: outcome.symbolName)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(outcome.tint)
+                .frame(width: 32, height: 32)
+                .background(StatusChipFill(outcome.tint), in: RoundedRectangle(cornerRadius: AppRadius.small, style: .continuous))
+                .accessibilityHidden(true)
+            VStack(spacing: AppSpacing.tight) {
+                HStack(alignment: .firstTextBaseline, spacing: AppSpacing.snug) {
+                    Text(outcome.title)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Text("\(value)")
+                        .font(.system(.body, design: .rounded, weight: .semibold))
+                        .monospacedDigit()
+                        .contentTransition(reduceMotion ? .identity : .numericText(value: Double(value)))
+                        .animation(.appFeedback(reduceMotion: reduceMotion), value: value)
+                }
+                // A plain progress track avoids chart axes and chart layout work.
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule(style: .continuous)
+                            .fill(.quaternary)
+                        if fraction > 0 {
+                            Capsule(style: .continuous)
+                                .fill(outcome.tint)
+                                .frame(width: max(5, proxy.size.width * min(fraction, 1)))
+                        }
+                    }
+                }
+                .frame(height: 5)
+                .animation(.appSettle(reduceMotion: reduceMotion), value: fraction)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(outcome.title)
+        .accessibilityValue("\(value) von \(tally.unitCount) Türen")
     }
 
     private func count(for outcome: VisitOutcome) -> Int {
@@ -218,28 +239,21 @@ struct BalanceSection: View {
         }
     }
 
-    /// What the second day actually achieved — measured only against the doors that
-    /// were eligible for a revisit, not against every door in the territory.
-    private func revisitSummary(entry: ArchiveEntry) -> some View {
-        let target = entry.revisitTargets
-        let done = entry.day2.completed
-        return VStack(alignment: .leading, spacing: 4) {
-            Text("Nachbesuche")
+    private func revisitSummary(_ entry: ArchiveEntry) -> some View {
+        VStack(alignment: .leading, spacing: AppSpacing.tight) {
+            Label("Nachbesuche", systemImage: "arrow.clockwise")
                 .font(.subheadline.weight(.semibold))
-            Text("\(done) von \(target) am Tag 1 offenen Türen wurden am Tag 2 erreicht.")
-                .font(.caption)
+            // A recorded result can be Niemand da; it does not mean someone was reached.
+            Text("\(entry.day2.completed) von \(entry.revisitTargets) Türen für Tag 2 erfasst")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             if entry.pendingRevisits > 0 {
-                Label("\(entry.pendingRevisits) Türen warten noch auf den zweiten Besuch",
-                      systemImage: VisitOutcome.notHome.symbolName)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.red)
+                Text("\(entry.pendingRevisits) Türen warten auf den zweiten Besuch")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .contentPanel(cornerRadius: AppRadius.control)
+        .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
     }
 }

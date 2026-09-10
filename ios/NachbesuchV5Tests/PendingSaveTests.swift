@@ -72,3 +72,30 @@ struct PendingSaveTests {
         #expect(try context.fetchCount(FetchDescriptor<House>()) == 0)
     }
 }
+
+/// Das Tor vor `didSave`-Refreshes (Liste/Karte/Archiv): Bulk-Import speichert
+/// mehrfach pro Sekunde, das Gate faltet den Schwall zu einem Refresh.
+@Suite("DidSave-Refresh-Gate")
+struct DidSaveRefreshGateTests {
+
+    @Test("Drei schnelle Signale ergeben einen Refresh")
+    func burstFoldsToOneRefresh() {
+        let gate = DidSaveRefreshGate()
+        let now = Date()
+
+        #expect(gate.shouldRefresh(now: now))
+        #expect(!gate.shouldRefresh(now: now), "Zweites Signal im selben Burst ist Rauschen")
+        #expect(!gate.shouldRefresh(now: now.addingTimeInterval(0.1)))
+        #expect(gate.shouldRefresh(now: now.addingTimeInterval(0.6)), "Nach dem Ruheabstand darf wieder gelesen werden")
+    }
+
+    @Test("Reset vergisst den letzten Durchlass")
+    func resetForgetsLastPass() {
+        let gate = DidSaveRefreshGate()
+
+        #expect(gate.shouldRefresh())
+        #expect(!gate.shouldRefresh())
+        gate.reset()
+        #expect(gate.shouldRefresh(), "Z. B. bei Gebietswechsel sofort wieder lesen")
+    }
+}

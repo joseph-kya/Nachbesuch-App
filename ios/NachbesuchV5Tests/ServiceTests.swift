@@ -131,6 +131,7 @@ struct ArchiveSearchTests {
         addresses: String = "Hauptstraße 1",
         open: Int = 0,
         joined: Int = 0,
+        earlyNo: Int = 0,
         date: Date = .now
     ) -> (ArchiveIndex, UUID) {
         let id = UUID()
@@ -139,6 +140,7 @@ struct ArchiveSearchTests {
         overall.completed = 4 - open
         overall.open = open
         overall.joined = joined
+        overall.earlyNo = earlyNo
         let entry = ArchiveEntry(
             gebietID: id,
             houseCount: 1,
@@ -192,6 +194,14 @@ struct ArchiveSearchTests {
         let (doneIndex, doneID) = makeIndex(open: 0, joined: 1)
         #expect(ArchiveSearchEngine.search(query: "offen", index: doneIndex, order: [doneID]).isEmpty)
         #expect(ArchiveSearchEngine.search(query: "dabei", index: doneIndex, order: [doneID]).count == 1)
+    }
+
+    @Test("Abblocker findet gespeicherte frühe Ablehnungen")
+    func abblockerKeyword() {
+        let (index, id) = makeIndex(earlyNo: 1)
+        #expect(ArchiveSearchEngine.search(query: "Abblocker", index: index, order: [id]).count == 1)
+        let (empty, other) = makeIndex()
+        #expect(ArchiveSearchEngine.search(query: "Abblocker", index: empty, order: [other]).isEmpty)
     }
 
     @Test("Namenstreffer ranken vor Adresstreffern")

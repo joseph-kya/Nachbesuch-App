@@ -45,7 +45,7 @@ struct HouseReadServiceTests {
         let territory = UUID()
         try await seed(container, territory: territory, count: 5)
 
-        let reader = HouseReadService(modelContainer: container)
+        let reader = await HouseReadService.background(container: container)
         let all = try await reader.mapSeeds(territoryID: territory, updatedAfter: nil)
         #expect(all.count == 5)
         #expect(all.allSatisfy { $0.updatedAt != nil }, "Die Wasserlinie braucht den Zeitstempel")
@@ -59,7 +59,7 @@ struct HouseReadServiceTests {
         try await seed(container, territory: mine, count: 3)
         try await seed(container, territory: theirs, count: 4)
 
-        let reader = HouseReadService(modelContainer: container)
+        let reader = await HouseReadService.background(container: container)
         #expect(try await reader.mapSeeds(territoryID: mine, updatedAfter: nil).count == 3)
     }
 
@@ -69,7 +69,7 @@ struct HouseReadServiceTests {
         let territory = UUID()
         try await seed(container, territory: territory, count: 4)
 
-        let reader = HouseReadService(modelContainer: container)
+        let reader = await HouseReadService.background(container: container)
         let all = try await reader.mapSeeds(territoryID: territory, updatedAfter: nil)
         let watermark = try #require(all.compactMap(\.updatedAt).max())
 
@@ -86,7 +86,7 @@ struct HouseReadServiceTests {
         let territory = UUID()
         try await seed(container, territory: territory, count: 6)
 
-        let reader = HouseReadService(modelContainer: container)
+        let reader = await HouseReadService.background(container: container)
         let all = try await reader.mapSeeds(territoryID: territory, updatedAfter: nil)
         let watermark = try #require(all.compactMap(\.updatedAt).max())
 

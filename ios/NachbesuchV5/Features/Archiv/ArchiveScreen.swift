@@ -1,4 +1,3 @@
-import Charts
 import SwiftData
 import SwiftUI
 import UIKit
@@ -29,8 +28,12 @@ struct ArchiveScreen: View {
     @State private var route: ArchiveRoute?
     @State private var confirmation: ArchiveConfirmation?
     @State private var backupURL: URL?
+    /// Untertitel für den Backup-Teilen-Bogen („Enthält N Häuser") — reiner
+    /// Index-Stand, kein Fetch (WAVE4).
+    @State private var shareSubtitle: String?
     @State private var showsImporter = false
     @State private var isWorking = false
+    @State private var areaSwitchRequest: UUID?
     #if DEBUG
     @State private var showsDiagnostics = false
     #endif
@@ -51,20 +54,9 @@ struct ArchiveScreen: View {
     /// once the objects are in memory and expensive when they are not.
     @State private var dataVersion = 0
 
-    /// How many houses exist, without any of them being resident.
-    ///
-    /// The comment above the query this replaces claimed it fetched "only the columns
-    /// the index needs"; it was a bare `@Query private var houses: [House]`, which is
-    /// every house in the database — every territory, not just the open one — as live
-    /// objects held for as long as the tab is mounted, and all three tabs stay mounted
-    /// on purpose. Together with the identical set in `RootView` and the territory's
-    /// own set in `ListScreen`, opening this tab is what pushed an iPhone 11 over its
-    /// jetsam limit. The count is all the invalidation key ever wanted; the rows
-    /// themselves are read in batches by `rebuildIndex`, off this context, and dropped.
-    @State private var houseCount = 0
     @State private var builtIndexKey: IndexKey?
     /// Street encounters per territory. Territories, not houses, so one cheap
-    /// indexed count each — the same reason `houseCount` exists as a number.
+    /// indexed count each; refreshed only when the archive needs it.
     @State private var passantCounts: [UUID: Int] = [:]
 
 
@@ -111,14 +103,12 @@ struct ArchiveScreen: View {
 
     private struct IndexKey: Hashable {
         let gebietCount: Int
-        let houseCount: Int
         let version: Int
     }
 
     private var indexKey: IndexKey {
         IndexKey(
             gebietCount: gebiete.count,
-            houseCount: houseCount,
             version: dataVersion
         )
     }
@@ -155,8 +145,29 @@ struct ArchiveScreen: View {
                 .sheet(item: $route, content: sheet(for:))
                 #if DEBUG
                 .sheet(isPresented: $showsDiagnostics) { DiagnosticsSheet() }
+                .onReceive(NotificationCenter.default.publisher(for: .openDiagnostics)) { _ in
+                    showsDiagnostics = true
+                }
                 #endif
-                .alert(item: $confirmation, content: alert(for:))
+                // WAVE4: Löschen als Bestätigungsdialog mit Sicherungs-Option
+                // (doppelt: Menü-Tipp + Dialog), Wiederherstellen bleibt Alert.
+                .confirmationDialog(
+                    Text(deleteTitle),
+                    isPresented: isDeletePresented,
+                    titleVisibility: .visible,
+                    presenting: deleteTarget
+                ) { target in
+                    // Sichere Option zuerst (Standard), destruktive danach — beide
+                    // mit klarer Folge, Abbrechen bricht ab.
+                    Button("Sichern & löschen") { Task { await backupThenDelete(target.id) } }
+                    Button("Nur löschen", role: .destructive) { Task { await delete(target.id) } }
+                    Button("Abbrechen", role: .cancel) {}
+                } message: { target in
+                    // Sicherungs-Anstoß + Folge mit Zahl (A11y: klare Konsequenz).
+                    let count = houseCount(for: target.id)
+                    Text("Erst sichern? \(count == 1 ? "1 Haus" : "\(count) Häuser") und alle Ergebnisse werden vom Gerät gelöscht.")
+                }
+                .alert(item: restoreBinding, content: restoreAlert)
                 .fileImporter(
                     isPresented: $showsImporter,
                     allowedContentTypes: [.json],
@@ -165,7 +176,6 @@ struct ArchiveScreen: View {
                 )
         }
         .task {
-            refreshHouseCount()
             refreshPassantCounts()
             refreshAutoBackup()
         }
@@ -181,11 +191,22 @@ struct ArchiveScreen: View {
             debouncedQuery = searchText
         }
         .onChange(of: debouncedQuery) { _, _ in recomputeResults() }
+        .onChange(of: selectedGebietID) { _, _ in
+            if isActive { refreshActivePassantCount() }
+        }
+        .onChange(of: isActive) { _, active in
+            if !active { areaSwitchRequest = nil }
+            if active {
+                refreshActivePassantCount()
+                refreshAutoBackup()
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
             dataVersion &+= 1
-            refreshHouseCount()
-            refreshPassantCounts()
-            refreshAutoBackup()
+            if isActive {
+                refreshActivePassantCount()
+                refreshAutoBackup()
+            }
         }
     }
 
@@ -196,7 +217,7 @@ struct ArchiveScreen: View {
     private var archiveScroll: some View {
         ScrollViewReader { proxy in
             ScrollView {
-            CompatGlassContainer(spacing: 2) {
+            CompatGlassContainer(spacing: AppSpacing.tight) {
                 LazyVStack(alignment: .leading, spacing: AppSpacing.regular) {
                     ArchiveSearchField(text: $searchText)
                         .padding(.horizontal, AppSpacing.regular)
@@ -210,6 +231,11 @@ struct ArchiveScreen: View {
                             applyFilter(value, proxy: proxy)
                         }
                     )
+
+                    // WAVE4: Sicherungsalter als reine Lese-Zeile — `autoBackup`
+                    // kommt aus dem Dateisystem-Stand (kein Fetch, kein Zähler).
+                    backupAgeRow
+                        .padding(.horizontal, AppSpacing.regular)
 
                     if let activeGebiet, debouncedQuery.isEmpty, filter == .all {
                         ArchiveSectionLabel(
@@ -256,6 +282,35 @@ struct ArchiveScreen: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .compatSoftScrollEdges()
+            #if DEBUG
+            .task(id: isActive) {
+                guard isActive,
+                      let raw = ProcessInfo.processInfo.environment["NACHBESUCH_AREA_STRESS"],
+                      let count = Int(raw), count > 0 else { return }
+                // Exercise the same handler as a territory-row tap, from below
+                // the variable-height balance, including empty/populated areas.
+                for _ in 0..<100 {
+                    if builtIndexKey != nil, gebiete.count > 1 { break }
+                    try? await Task.sleep(for: .milliseconds(100))
+                    guard !Task.isCancelled else { return }
+                }
+                guard gebiete.count > 1 else { return }
+                for _ in 0..<count {
+                    guard let target = gebiete.first(where: { $0.id != selectedGebietID })?.id else { return }
+                    proxy.scrollTo(target, anchor: .center)
+                    try? await Task.sleep(for: .milliseconds(150))
+                    guard !Task.isCancelled else { return }
+                    selectGebiet(target, proxy: proxy)
+                    try? await Task.sleep(for: .milliseconds(700))
+                    guard !Task.isCancelled else { return }
+                    guard selectedGebietID == target else {
+                        FileHandle.standardOutput.write(Data("[AreaStress] FAILED selection\n".utf8))
+                        return
+                    }
+                }
+                FileHandle.standardOutput.write(Data("[AreaStress] completed \(count) switches\n".utf8))
+            }
+            #endif
         }
     }
 
@@ -419,7 +474,7 @@ struct ArchiveScreen: View {
                     // Reserve the top-right hit area for the visible action menu —
                     // now 44 pt plus its margin, so the text cannot run under it.
                     .padding(.trailing, 52)
-                    .padding(.leading, 16)
+                    .padding(.leading, AppSpacing.regular)
                     .padding(.vertical, 13)
                     .contentCard(cornerRadius: AppRadius.card)
                     // Always present, only its opacity moves. Inserting and removing
@@ -444,7 +499,11 @@ struct ArchiveScreen: View {
                             .allowsHitTesting(false)
                     }
                 }
-                .buttonStyle(PressableRowStyle())
+                // WAVE2: press highlight only, scale 1.0 — a scaled card tears away
+                // from the glass wash and the menu button above it. Selection haptic
+                // comes from the `.sensoryFeedback(trigger: selectedGebietID)` on the
+                // NavigationStack (once, not per row).
+                .buttonStyle(GebietCardStyle())
 
                 Menu {
                     Button {
@@ -481,6 +540,7 @@ struct ArchiveScreen: View {
                 .padding(4)
                 .accessibilityLabel("Aktionen für \(gebiet.displayName)")
             }
+            .id(gebiet.id)
             // VoiceOver equivalents: the swipe actions were previously reachable
             // only by swiping.
             .accessibilityAction(named: "Bearbeiten") { route = .edit(gebiet.id) }
@@ -496,13 +556,28 @@ struct ArchiveScreen: View {
         if !debouncedQuery.isEmpty {
             ContentUnavailableView.search(text: debouncedQuery)
         } else {
+            // WAVE2: icon bounce on appear (RM-gated), prominent glass CTA +
+            // secondary Tutorial link. ContentUnavailableView keeps dark/light
+            // legibility via semantic styles.
             ContentUnavailableView {
                 Label("Noch keine Gebiete", systemImage: "archivebox")
+                    .symbolEffect(
+                        .bounce,
+                        options: reduceMotion ? .nonRepeating : .default,
+                        value: gebiete.isEmpty
+                    )
+                    .symbolEffectsRemoved(reduceMotion)
             } description: {
                 Text("Lege ein Gebiet an, um mit dem Erfassen zu beginnen.")
             } actions: {
                 Button("Neues Gebiet") { route = .create }
-                    .buttonStyle(.borderedProminent)
+                    .compatGlassButton(prominent: true)
+                    .buttonBorderShape(.capsule)
+                    .accessibilityLabel("Neues Gebiet anlegen")
+                Button("Tutorial ansehen") { route = .tutorial }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Anleitung ansehen")
             }
         }
     }
@@ -524,8 +599,10 @@ struct ArchiveScreen: View {
         }
         let houseSeeds: [ArchiveIndexBuilder.HouseSeed]
         do {
-            let reader = HouseReadService(modelContainer: modelContext.container)
+            let reader = await HouseReadService.background(container: modelContext.container)
             houseSeeds = try await reader.archiveSeeds()
+        } catch is CancellationError {
+            return
         } catch {
             notices.report(error, context: "Archiv konnte nicht gelesen werden")
             return
@@ -544,11 +621,6 @@ struct ArchiveScreen: View {
         builtIndexKey = key
     }
 
-    /// Keeps `indexKey` honest without keeping the rows.
-    private func refreshHouseCount() {
-        houseCount = (try? modelContext.fetchCount(FetchDescriptor<House>())) ?? houseCount
-    }
-
     /// Street encounters per territory for the balance row. One indexed count
     /// per territory; territories are few, houses are many.
     private func refreshPassantCounts() {
@@ -563,9 +635,55 @@ struct ArchiveScreen: View {
         passantCounts = counts
     }
 
+    /// After a save only the open territory's count can have changed — but every
+    /// door tap saves. Counting all territories on every tap is N indexed
+    /// fetches on Main per tap for counts nobody is looking at; the rest refresh
+    /// on appear/territory switch.
+    private func refreshActivePassantCount() {
+        guard let id = selectedGebietID ?? gebiete.first?.id else { return }
+        let count = (try? modelContext.fetchCount(
+            FetchDescriptor<Passant>(predicate: #Predicate { $0.gebietID == id })
+        )) ?? passantCounts[id] ?? 0
+        if passantCounts[id] != count {
+            passantCounts[id] = count
+        }
+    }
+
     /// Picks up a launch backup that finished after this screen appeared.
     private func refreshAutoBackup() {
         autoBackup = AutoBackupService.latest()
+    }
+
+    /// WAVE4: „Letzte Sicherung: vor X" — liest nur den gemerkten Stand aus
+    /// `autoBackup` (Dateisystem, kein Store-Fetch). Orange Warnung erst nach
+    /// mehr als 7 Tagen ohne Sicherung.
+    private var backupAgeRow: some View {
+        let (text, isStale) = backupAge()
+        return Label(text, systemImage: "clock.arrow.circlepath")
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(isStale ? .orange : .secondary)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(text)
+    }
+
+    private func backupAge(now: Date = .now) -> (String, Bool) {
+        guard let date = autoBackup?.date else {
+            return ("Letzte Sicherung: noch keine", true)
+        }
+        let calendar = Calendar.current
+        let days = calendar.dateComponents(
+            [.day],
+            from: calendar.startOfDay(for: date),
+            to: calendar.startOfDay(for: now)
+        ).day ?? 0
+        let relativ: String
+        switch days {
+        case ...0: relativ = "heute"
+        case 1: relativ = "gestern"
+        default: relativ = "vor \(days) Tagen"
+        }
+        let stale = days > 7
+        return ("Letzte Sicherung: \(relativ)\(stale ? " — bitte sichern" : "")", stale)
     }
 
     /// The houses of one territory, fetched for the moment they are needed.
@@ -628,6 +746,7 @@ struct ArchiveScreen: View {
     /// an offset that no longer refers to anything they were looking at.
     private func applyFilter(_ value: ArchiveFilter, proxy: ScrollViewProxy) {
         guard filter != value else { return }
+        areaSwitchRequest = nil
         let nextResults = searchResults(filter: value)
         var transaction = Transaction()
         transaction.disablesAnimations = true
@@ -637,24 +756,41 @@ struct ArchiveScreen: View {
         }
         // Scroll is the only animated part here — the card swap itself is frozen
         // to avoid a glass snapshot. Keep the scroll silky, not snappy.
-        withAnimation(.smooth(duration: 0.38, extraBounce: 0).speed(reduceMotion ? 1.8 : 1)) {
+        withAnimation(.appSettle(reduceMotion: reduceMotion)) {
             returnToBalance(proxy)
         }
     }
 
-    /// Replacing the active territory swaps the complete balance subtree: chart,
-    /// counters, progress and (for two-day territories) the campaign-day picker.
-    ///
-    /// The card around that subtree survives the swap, so — unlike the filter above —
-    /// there is no glass shape being inserted or removed here and nothing to leave a
-    /// snapshot behind. What is left is one card resizing while its contents cross-fade
-    /// and its numbers roll. One smooth transaction for both — card and scroll
-    /// settle together, no glass wash, no stutter.
+    /// Scroll the existing layout first. Changing the territory inside that
+    /// animation also changes the balance height and makes the scroll target move.
+    /// Once at the top, replace unrelated statistics without numeric/layout morphs.
+    /// WAVE2: tapping the already-selected card recenters it with appSettle
+    /// (no data swap, so no freeze needed). Selection haptic stays on the
+    /// `.sensoryFeedback(trigger: selectedGebietID)` above — once, not per row.
     private func selectGebiet(_ id: UUID, proxy: ScrollViewProxy) {
-        guard selectedGebietID != id else { return }
-        withAnimation(.smooth(duration: 0.42, extraBounce: 0).speed(reduceMotion ? 1.8 : 1)) {
-            selectedGebietID = id
+        guard selectedGebietID != id else {
+            areaSwitchRequest = nil
+            withAnimation(.appSettle(reduceMotion: reduceMotion)) {
+                proxy.scrollTo(id, anchor: .center)
+            }
+            return
+        }
+        let request = UUID()
+        areaSwitchRequest = request
+        withAnimation(.appSettle(reduceMotion: reduceMotion), completionCriteria: .removed) {
             returnToBalance(proxy)
+        } completion: {
+            guard areaSwitchRequest == request,
+                  gebiete.contains(where: { $0.id == id }) else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                if scope == .day2, gebiete.first(where: { $0.id == id })?.isTwoDay != true {
+                    scope = .combined
+                }
+                selectedGebietID = id
+                areaSwitchRequest = nil
+            }
         }
     }
 
@@ -690,8 +826,9 @@ struct ArchiveScreen: View {
             }
 
         case .share(let url):
-            ShareSheet(url: url)
+            ShareSheet(url: url, subtitle: shareSubtitle)
                 .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
 
         case .settings:
             AppearanceSettingsSheet()
@@ -705,25 +842,55 @@ struct ArchiveScreen: View {
         }
     }
 
-    private func alert(for confirmation: ArchiveConfirmation) -> Alert {
-        switch confirmation {
-        case .delete(let id, let name):
-            return Alert(
-                title: Text("„\(name)“ löschen?"),
-                message: Text("Alle Häuser und Ergebnisse dieses Gebiets werden entfernt."),
-                primaryButton: .destructive(Text("Löschen")) { Task { await delete(id) } },
-                secondaryButton: .cancel(Text("Abbrechen"))
-            )
-        case .restore(let backup):
-            return Alert(
-                title: Text("Backup importieren?"),
-                message: Text("\(backup.gebiete.count) Gebiete und \(backup.houses.count) Häuser werden mit deinem Bestand zusammengeführt."),
-                primaryButton: .default(Text("Importieren")) {
-                    Task { await restore(backup) }
-                },
-                secondaryButton: .cancel(Text("Abbrechen"))
-            )
+    // MARK: Bestätigungen (WAVE4)
+
+    /// Das Löschziel aus der Bestätigung — steuert Titel und Inhalt des Dialogs.
+    private var deleteTarget: (id: UUID, name: String)? {
+        if case .delete(let id, let name) = confirmation { return (id, name) }
+        return nil
+    }
+
+    private var deleteTitle: String {
+        if case .delete(_, let name) = confirmation { return "„\(name)“ löschen?" }
+        return "Gebiet löschen?"
+    }
+
+    /// Nur der Löschen-Fall hebt den Dialog; Schließen räumt die Bestätigung weg.
+    private var isDeletePresented: Binding<Bool> {
+        Binding(
+            get: { deleteTarget != nil },
+            set: { open in if !open { confirmation = nil } }
+        )
+    }
+
+    /// Nur der Wiederherstellen-Fall steuert den Alert.
+    private var restoreBinding: Binding<ArchiveConfirmation?> {
+        Binding(
+            get: {
+                if case .restore = confirmation { return confirmation }
+                return nil
+            },
+            set: { confirmation = $0 }
+        )
+    }
+
+    /// Hauszahl ohne Fetch: reiner Index-Stand für die Folgenbeschreibung.
+    private func houseCount(for id: UUID) -> Int {
+        index.entry(for: id)?.houseCount ?? 0
+    }
+
+    private func restoreAlert(_ confirmation: ArchiveConfirmation) -> Alert {
+        guard case .restore(let backup) = confirmation else {
+            return Alert(title: Text("Hinweis"))
         }
+        return Alert(
+            title: Text("Backup importieren?"),
+            message: Text("\(backup.gebiete.count) Gebiete und \(backup.houses.count) Häuser werden mit deinem Bestand zusammengeführt."),
+            primaryButton: .default(Text("Importieren")) {
+                Task { await restore(backup) }
+            },
+            secondaryButton: .cancel(Text("Abbrechen"))
+        )
     }
 
     // MARK: Actions
@@ -731,6 +898,12 @@ struct ArchiveScreen: View {
     private func delete(_ id: UUID) async {
         guard gebiete.contains(where: { $0.id == id }) else { return }
         guard await GebietDeletion.delete(id, in: modelContext, notices: notices) else { return }
+        dismissStaleReferences(to: id)
+    }
+
+    /// Räumt Blätter weg, die noch auf das gelöschte Gebiet zeigen, und wählt
+    /// das nächste — sonst zeigt „Gebiet bearbeiten/löschen" auf eine tote ID.
+    private func dismissStaleReferences(to id: UUID) {
         // Dismiss any stale sheet/confirmation that still points at the deleted Gebiet.
         if case .edit(let editID) = route, editID == id { route = nil }
         if case .export(let expID) = route, expID == id { route = nil }
@@ -754,10 +927,38 @@ struct ArchiveScreen: View {
         defer { isWorking = false }
         do {
             let url = try await BackupService.makeBackup(in: modelContext)
+            // Untertitel aus dem Index-Stand (kein Fetch): was der Teilen-Bogen
+            // gerade sichert. ExportSheet zeigt dasselbe für den Export.
+            shareSubtitle = backupSubtitle()
             route = .share(url)
         } catch {
             notices.report(error, context: "Backup konnte nicht erstellt werden")
         }
+    }
+
+    /// „Sichern & löschen": Erst das Backup — scheitert es, wird nichts
+    /// gelöscht (die Meldung erklärt bereits). Danach löschen und den Beleg
+    /// zum Teilen anbieten.
+    private func backupThenDelete(_ id: UUID) async {
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            let url = try await BackupService.makeBackup(in: modelContext)
+            guard await GebietDeletion.delete(id, in: modelContext, notices: notices) else { return }
+            dismissStaleReferences(to: id)
+            shareSubtitle = backupSubtitle()
+            route = .share(url)
+        } catch {
+            notices.report(error, context: "Backup konnte nicht erstellt werden. Nichts wurde gelöscht")
+        }
+    }
+
+    /// Zähler aus @Query + Index, nie ein Fetch im Dialog-Weg.
+    private func backupSubtitle() -> String {
+        let houses = gebiete.reduce(into: 0) { $0 += index.entry(for: $1.id)?.houseCount ?? 0 }
+        let gebietWort = gebiete.count == 1 ? "Gebiet" : "Gebiete"
+        let hausWort = houses == 1 ? "Haus" : "Häuser"
+        return "Enthält \(houses) \(hausWort) in \(gebiete.count) \(gebietWort)"
     }
 
     /// Health report without donor data (B11): counts only, never addresses,
@@ -780,7 +981,7 @@ struct ArchiveScreen: View {
         let text = DiagnosticsExport.makeText(
             counts: .init(
                 territories: gebiete.count,
-                houses: houseCount,
+                houses: (try? modelContext.fetchCount(FetchDescriptor<House>())) ?? 0,
                 doors: doors,
                 recordedDoors: recorded
             ),
@@ -840,16 +1041,21 @@ struct ArchiveScreen: View {
 /// depends on scroll velocity, overscroll or large-title state.
 private struct ArchiveSearchField: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAccent) private var accent
     @Binding var text: String
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         HStack(spacing: AppSpacing.snug) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             TextField("Gebiet, Adresse, Datum", text: $text)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
+                .focused($isFocused)
+                .accessibilityLabel("Archiv durchsuchen")
 
             if !text.isEmpty {
                 Button {
@@ -864,9 +1070,12 @@ private struct ArchiveSearchField: View {
             }
         }
         .animation(.appFeedback(reduceMotion: reduceMotion), value: text.isEmpty)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, AppSpacing.regular)
         .frame(minHeight: AppTouch.minimum)
-        .navigationGlass(cornerRadius: AppRadius.control, interactive: true)
+        .navigationGlass(cornerRadius: AppRadius.control)
+        // WAVE2: focused ring, accent 1.5pt via the shared helper. Filter chips
+        // keep their matched-glass morph inside FilterBar (glassEffectID).
+        .selectionRing(isFocused, tint: accent, cornerRadius: AppRadius.control)
         .accessibilityElement(children: .contain)
     }
 }
@@ -932,7 +1141,7 @@ struct GebietRow: View, Equatable {
             // The rail grows out of the row's centre rather than blinking on. Two
             // rows change at once when the selection moves, so this reads as the
             // marker travelling from the old territory to the new one.
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
+            Capsule(style: .continuous)
                 .fill(accent)
                 .frame(width: 4)
                 .scaleEffect(y: model.isActive ? 1 : 0, anchor: .center)
@@ -949,6 +1158,13 @@ struct GebietRow: View, Equatable {
                             .foregroundStyle(Color.doneTone)
                             .labelStyle(.titleAndIcon)
                             .fixedSize()
+                            // WAVE2: pop on change, blockSwap kept. Bounce is RM-gated.
+                            .symbolEffect(
+                                .bounce,
+                                options: reduceMotion ? .nonRepeating : .default,
+                                value: model.isActive
+                            )
+                            .symbolEffectsRemoved(reduceMotion)
                             .transition(.blockSwap(reduceMotion: reduceMotion))
                     }
                     if model.isTwoDay {
@@ -967,12 +1183,23 @@ struct GebietRow: View, Equatable {
                     .lineLimit(1)
 
                 HStack(spacing: AppSpacing.snug) {
-                    ProgressView(value: model.progress)
-                        .tint(model.open == 0 ? .green : .red)
+                    GeometryReader { proxy in
+                        ZStack(alignment: .leading) {
+                            Capsule(style: .continuous)
+                                .fill(.quaternary)
+                            if model.progress > 0 {
+                                Capsule(style: .continuous)
+                                    .fill(model.open == 0 ? .green : .red)
+                                    .frame(width: max(5, proxy.size.width * min(model.progress, 1)))
+                            }
+                        }
+                    }
+                    .frame(height: 5)
+                    .animation(.appSettle(reduceMotion: reduceMotion), value: model.progress)
                     Text("\(model.completed)/\(model.total)")
                         .font(.caption.weight(.medium))
                         .monospacedDigit()
-                        .contentTransition(.numericText(value: Double(model.completed)))
+                        .contentTransition(reduceMotion ? .identity : .numericText(value: Double(model.completed)))
                         .foregroundStyle(.secondary)
                 }
 
@@ -983,6 +1210,17 @@ struct GebietRow: View, Equatable {
                 }
                 .font(.caption2)
             }
+
+            // WAVE2: chevron rotates with selection, appFeedback. RM-safe: rotation
+            // is positional, so RM still gets the state change without motion via
+            // the row's opacity/scale-free highlight.
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.tertiary)
+                .rotationEffect(.degrees(model.isActive ? 90 : 0))
+                .opacity(model.isActive ? 1 : 0.6)
+                .animation(.appFeedback(reduceMotion: reduceMotion), value: model.isActive)
+                .accessibilityHidden(true)
         }
         .padding(.vertical, 6)
         // Only the selection is animated here. Keying the whole model would make a
@@ -1005,17 +1243,40 @@ struct GebietRow: View, Equatable {
             Image(systemName: systemImage).foregroundStyle(tint)
             Text("\(value)")
                 .monospacedDigit()
-                .contentTransition(.numericText(value: Double(value)))
+                .contentTransition(reduceMotion ? .identity : .numericText(value: Double(value)))
         }
     }
 }
 
 // MARK: - Share sheet
 
+/// WAVE2: card press is highlight-only at scale 1.0. The card already carries
+/// `contentCard` + accent wash; scaling it tore the wash away from the glass
+/// edge and from the sibling menu button. `.primary.opacity(0.08)` matches the
+/// grouped-row highlight elsewhere.
+private struct GebietCardStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .overlay {
+                RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
+                    .fill(Color.primary.opacity(configuration.isPressed ? 0.08 : 0))
+                    .allowsHitTesting(false)
+            }
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: configuration.isPressed)
+    }
+}
+
 struct ShareSheet: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
     @ScaledMetric(relativeTo: .largeTitle) private var checkSize: CGFloat = 46
+    @State private var appeared = false
     let url: URL
+    /// WAVE4: „Enthält N Häuser" — Dateigröße/Seiten wären je Exportlauf neu zu
+    /// messen, der Zähler dagegen steht bereits (kein Fetch).
+    var subtitle: String?
 
     var body: some View {
         NavigationStack {
@@ -1023,19 +1284,40 @@ struct ShareSheet: View {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: checkSize))
                     .foregroundStyle(Color.doneTone)
+                    // WAVE2: icon bounce on appear, RM-gated.
+                    .symbolEffect(
+                        .bounce,
+                        options: reduceMotion ? .nonRepeating : .default,
+                        value: appeared
+                    )
+                    .symbolEffectsRemoved(reduceMotion)
+                    .accessibilityHidden(true)
                 Text("Backup erstellt")
                     .font(.headline)
                 Text(url.lastPathComponent)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                // Der Untertitel nennt den Inhalt, nicht die Bytes.
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(subtitle)
+                }
                 ShareLink(item: url) {
                     Label("Teilen oder sichern", systemImage: "square.and.arrow.up")
                         .frame(minHeight: AppTouch.minimum)
                 }
-                .buttonStyle(.borderedProminent)
+                .compatGlassButton(prominent: true)
                 .buttonBorderShape(.capsule)
             }
             .padding()
+            // WAVE2: success haptic once, on presentation (a `trigger: url`
+            // sensory never fires — there is no change, only an appear).
+            .onAppear {
+                appeared = true
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Fertig") { dismiss() }.fontWeight(.semibold)

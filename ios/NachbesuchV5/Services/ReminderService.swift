@@ -67,6 +67,15 @@ nonisolated enum ReminderService {
     nonisolated static let pendingRequestLimit = 64
     nonisolated static let revisitBudget = 49
 
+    #if DEBUG
+    /// Einmalig pro Prozess gelesen: `ProcessInfo.environment` baut bei jedem
+    /// Zugriff ein neues Dictionary — pro Berechtigungsprüfung wäre das Dauer-
+    /// Overhead im heißen Pfad (gleiche Konvention wie Map-/DesignSystem-Agenten).
+    /// Der Harness setzt die Variable beim Start, also ist Cachen korrekt.
+    private static let debugNotificationsDisabled: Bool =
+        ProcessInfo.processInfo.environment["NACHBESUCH_NO_NOTIFICATIONS"] != nil
+    #endif
+
     nonisolated static func plan(
         _ candidates: [RevisitReminderCandidate],
         now: Date,
@@ -117,7 +126,7 @@ nonisolated enum ReminderService {
         // The system permission alert covers the screen under test and cannot be
         // dismissed from `simctl`, so visual review runs never got past it. Same
         // opt-in DEBUG harness convention as `NACHBESUCH_LEGACY_CHROME`.
-        if ProcessInfo.processInfo.environment["NACHBESUCH_NO_NOTIFICATIONS"] != nil {
+        if debugNotificationsDisabled {
             return false
         }
         #endif
@@ -143,7 +152,7 @@ nonisolated enum ReminderService {
     /// in context (booking „Später", enabling the daily reminder).
     nonisolated static func isAuthorized() async -> Bool {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["NACHBESUCH_NO_NOTIFICATIONS"] != nil {
+        if debugNotificationsDisabled {
             return false
         }
         #endif
@@ -207,15 +216,51 @@ nonisolated enum ReminderService {
         await cancel(identifiers: identifiers)
     }
 
+    /// Reine Aufteilung für `scheduleRevisits`: Vergangenheit wird storniert,
+    /// Zukunft wird geplant — dieselben Prädikate wie `plan`, aber als Paar für
+    /// den Batch-Pfad. Ausgelagert, damit die Abbildung ohne Notification Center
+    /// testbar bleibt (reine Werte, kein `UNUserNotificationCenter`).
+    nonisolated static func splitForBatch(
+        _ candidates: [RevisitReminderCandidate],
+        now: Date
+    ) -> (past: [RevisitReminderCandidate], future: [RevisitReminderCandidate]) {
+        (candidates.filter { $0.date <= now }, candidates.filter { $0.date > now })
+    }
+
+    /// Bucht viele „Später"-Erinnerungen auf einmal — der gebäudeweite
+    /// „Später"-Dialog für Mehrparteienhäuser.
+    ///
+    /// Eine einzige Berechtigungsprüfung statt einer pro Tür, ein einziger
+    /// Hintergrund-Task (`.utility`) statt bis zu 49 sequenziellen IPCs aus dem
+    /// Tap-Handler. Auf `revisitBudget` gedeckelt wie `plan`; der Überlauf bleibt
+    /// in der In-App-Liste sichtbar. Vergangene Zeiten werden storniert statt
+    /// geplant, genau wie in `scheduleRevisit`.
+    /// Stabile API für `HouseDetailSheet`: Signatur nimmt fertige
+    /// `[RevisitReminderCandidate]` — Übernahme dort jederzeit möglich, kein
+    /// Caller-Umbau hier nötig.
+    nonisolated static func scheduleRevisits(_ candidates: [RevisitReminderCandidate]) async {
+        let now = Date.now
+        let (past, future) = splitForBatch(candidates, now: now)
+        let batch = Array(future.prefix(revisitBudget))
+        await Task.detached(priority: .utility) {
+            if !past.isEmpty {
+                await cancel(identifiers: past.map {
+                    revisitIdentifier(house: $0.houseID, door: $0.doorID, day: $0.day)
+                })
+            }
+            guard !batch.isEmpty, await ensureAuthorized() else { return }
+            let center = UNUserNotificationCenter.current()
+            for candidate in batch {
+                try? await center.add(revisitRequest(candidate))
+            }
+        }.value
+    }
+
     /// Rebuilds Notification Center from persisted visit state. Notifications are
     /// a projection; the returned counts let the UI be honest when iOS capacity or
     /// authorization prevents that projection from being complete.
     nonisolated static func reconcile(_ candidates: [RevisitReminderCandidate], now: Date = .now) async -> ReminderReconciliationResult {
         let center = UNUserNotificationCenter.current()
-        let pending = await center.pendingNotificationRequests()
-        let oldRevisits = pending.map(\.identifier).filter { $0.hasPrefix("\(revisitPrefix).") }
-        if !oldRevisits.isEmpty { center.removePendingNotificationRequests(withIdentifiers: oldRevisits) }
-
         let plan = plan(candidates, now: now)
         let selected = plan.scheduledCandidates
 
@@ -232,32 +277,36 @@ nonisolated enum ReminderService {
             )
         }
 
+        // Diff, fetch once: the old code removed all ~49 revisit requests and
+        // re-added them on every launch/foreground/save — ~50 IPCs to
+        // usernotificationsd for zero delta in steady state.
+        let pending = await center.pendingNotificationRequests()
+        let have = Set(pending.map(\.identifier).filter { $0.hasPrefix("\(revisitPrefix).") })
+        let want = Set(selected.map { revisitIdentifier(house: $0.houseID, door: $0.doorID, day: $0.day) })
+        let stale = have.subtracting(want)
+        if !stale.isEmpty { center.removePendingNotificationRequests(withIdentifiers: Array(stale)) }
+        let pendingByID = Dictionary(pending.map { ($0.identifier, $0) }, uniquingKeysWith: { first, _ in first })
+        // Identity alone cannot establish correctness after an address/time edit.
+        let changedRequests = selected.map(revisitRequest).filter { desired in
+            guard let existing = pendingByID[desired.identifier] else { return true }
+            return !sameRevisitRequest(existing, desired)
+        }
         var failed = 0
-        for candidate in selected {
-            let content = UNMutableNotificationContent()
-            content.title = "Nachbesuch fällig"
-            content.body = candidate.isApartmentBuilding
-                ? "\(candidate.address) — \(candidate.doorLabel)"
-                : candidate.address
-            content.sound = .default
-            content.userInfo = [
-                "houseID": candidate.houseID.uuidString,
-                "doorID": candidate.doorID.uuidString,
-                "day": candidate.day
-            ]
-            let components = Calendar.current.dateComponents(
-                [.year, .month, .day, .hour, .minute], from: candidate.date
-            )
-            let request = UNNotificationRequest(
-                identifier: revisitIdentifier(
-                    house: candidate.houseID, door: candidate.doorID, day: candidate.day
-                ),
-                content: content,
-                trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
-            )
+        for request in changedRequests {
             do { try await center.add(request) } catch { failed += 1 }
         }
 
+        // No second fetch in the clean case: the diff above already established
+        // the kept set, and each add either succeeded or counted as failed.
+        // Verify only when something actually failed.
+        if failed == 0 {
+            return ReminderReconciliationResult(
+                dueInApp: plan.dueInApp,
+                scheduled: selected.count,
+                unscheduled: plan.overflow,
+                failed: 0
+            )
+        }
         let verified = await center.pendingNotificationRequests()
             .map(\.identifier)
             .filter { $0.hasPrefix("\(revisitPrefix).") }
@@ -269,6 +318,36 @@ nonisolated enum ReminderService {
             unscheduled: plan.overflow + verificationMisses,
             failed: failed
         )
+    }
+
+    static func revisitRequest(_ candidate: RevisitReminderCandidate) -> UNNotificationRequest {
+        let content = UNMutableNotificationContent()
+        content.title = "Nachbesuch fällig"
+        content.body = candidate.isApartmentBuilding
+            ? "\(candidate.address) — \(candidate.doorLabel)" : candidate.address
+        content.sound = .default
+        content.userInfo = ["houseID": candidate.houseID.uuidString,
+                            "doorID": candidate.doorID.uuidString, "day": candidate.day]
+        let components = Calendar.current.dateComponents(
+            [.year, .month, .day, .hour, .minute], from: candidate.date
+        )
+        return UNNotificationRequest(
+            identifier: revisitIdentifier(house: candidate.houseID, door: candidate.doorID, day: candidate.day),
+            content: content,
+            trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+        )
+    }
+
+    static func sameRevisitRequest(_ existing: UNNotificationRequest, _ desired: UNNotificationRequest) -> Bool {
+        guard let oldTrigger = existing.trigger as? UNCalendarNotificationTrigger,
+              let newTrigger = desired.trigger as? UNCalendarNotificationTrigger else { return false }
+        return existing.identifier == desired.identifier
+            && oldTrigger.dateComponents == newTrigger.dateComponents
+            && oldTrigger.repeats == newTrigger.repeats
+            && existing.content.title == desired.content.title
+            && existing.content.body == desired.content.body
+            && NSDictionary(dictionary: existing.content.userInfo).isEqual(to: desired.content.userInfo)
+            && existing.content.sound != nil
     }
 
     // MARK: Daily list reminder
@@ -283,10 +362,27 @@ nonisolated enum ReminderService {
     /// Idempotent — it always removes every known request first, so calling it on
     /// every launch cannot accumulate duplicates.
     nonisolated static func applyDailyListReminders(enabled: Bool) async {
-        await cancel(identifiers: allDailyIdentifiers)
-        guard enabled, await ensureAuthorized() else { return }
-
         let center = UNUserNotificationCenter.current()
+        // Read-then-write: the old code cancelled + re-added all 15 requests on
+        // every launch (~17 IPCs) even when nothing changed.
+        let pending = Set(await center.pendingNotificationRequests().map(\.identifier))
+        let want = Set(dailyListHours.flatMap { hour in
+            dailyListWeekdays.map { dailyIdentifier(hour: hour, weekday: $0) }
+        })
+        // One-time cleanup of the pre-weekday `dailyList.14` form.
+        let legacy = Set(dailyListHours.map { "\(dailyPrefix).\($0)" }).intersection(pending)
+        if !enabled {
+            let toRemove = Array(pending.intersection(Set(allDailyIdentifiers)))
+            if !toRemove.isEmpty { await cancel(identifiers: toRemove) }
+            return
+        }
+        if want.isSubset(of: pending), legacy.isEmpty {
+            // Restore/new-device repair is preserved: this early-out only hits
+            // when all 15 current requests are already pending.
+            return
+        }
+        await cancel(identifiers: allDailyIdentifiers)
+        guard await ensureAuthorized() else { return }
         for hour in dailyListHours {
             for weekday in dailyListWeekdays {
                 let content = UNMutableNotificationContent()

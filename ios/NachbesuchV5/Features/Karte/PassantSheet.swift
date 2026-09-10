@@ -27,17 +27,25 @@ struct PassantSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Gespräch") {
+                Section {
                     TextField("Notiz — z. B. worum es ging", text: $note, axis: .vertical)
                         .lineLimit(1...3)
                         .focused($noteIsFocused)
                         .textInputAutocapitalization(.sentences)
+                } header: {
+                    Text("Gespräch")
+                } footer: {
+                    // Zeichenzahl als Hinweis, kein Limit — lange Notizen bleiben erlaubt.
+                    Text("\(note.count)/500")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
 
                 Section("Ergebnis (optional)") {
                     LazyVGrid(
-                        columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
-                        spacing: 10
+                        columns: [GridItem(.flexible(), spacing: AppSpacing.snug), GridItem(.flexible(), spacing: AppSpacing.snug)],
+                        spacing: AppSpacing.snug
                     ) {
                         ForEach([VisitOutcome.joined, .earlyNo]) { result in
                             OutcomeButton(outcome: result, isSelected: outcome == result) {
@@ -49,6 +57,13 @@ struct PassantSheet: View {
                     }
                     LaterButton(isSelected: outcome == .later, bookedAt: revisitAt) {
                         showsTimePicker = true
+                    }
+                    // Gebuchte Zeit mit relativem Label; tippen öffnet die
+                    // Zeitauswahl erneut — gleiche Zeile wie im Haus-Detail.
+                    if outcome == .later, let revisitAt {
+                        BookedTimeGlance(bookedAt: revisitAt) {
+                            showsTimePicker = true
+                        }
                     }
                 }
             }
@@ -76,8 +91,15 @@ struct PassantSheet: View {
                         revisitAt = nil
                     }
                 }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
             }
-            .task { noteIsFocused = true }
+            .task {
+                // Let the sheet settle before presenting the keyboard, like the map search.
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled else { return }
+                noteIsFocused = true
+            }
         }
     }
 

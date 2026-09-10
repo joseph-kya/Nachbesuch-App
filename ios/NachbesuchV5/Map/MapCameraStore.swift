@@ -56,10 +56,9 @@ final class MapCameraStore {
         if let span = Self.debugOverrideSpan() {
             // Span only: the centre still comes from whatever the seeder parked, so
             // the harness cannot strand the camera away from the generated block.
-            let environment = ProcessInfo.processInfo.environment
             let centre = CLLocationCoordinate2D(
-                latitude: environment["NACHBESUCH_LAT"].flatMap(Double.init) ?? region.center.latitude,
-                longitude: environment["NACHBESUCH_LON"].flatMap(Double.init) ?? region.center.longitude
+                latitude: Self.debugLatitude ?? region.center.latitude,
+                longitude: Self.debugLongitude ?? region.center.longitude
             )
             region = MKCoordinateRegion(
                 center: centre,
@@ -80,6 +79,16 @@ final class MapCameraStore {
         guard let span = ProcessInfo.processInfo.environment["NACHBESUCH_SPAN"]
             .flatMap(Double.init), span > 0 else { return nil }
         return span
+    }()
+
+    /// Mitte ebenfalls einmalig cachen: pro Init ein frisches Environment-Dict
+    /// für LAT/LON war der gleiche Pfad wie bei SPAN, nur kleiner.
+    private static let debugLatitude: Double? = {
+        ProcessInfo.processInfo.environment["NACHBESUCH_LAT"].flatMap(Double.init)
+    }()
+
+    private static let debugLongitude: Double? = {
+        ProcessInfo.processInfo.environment["NACHBESUCH_LON"].flatMap(Double.init)
     }()
 
     private static func debugOverrideSpan() -> Double? { overrideSpan }

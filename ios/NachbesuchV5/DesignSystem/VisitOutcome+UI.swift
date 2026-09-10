@@ -1,7 +1,14 @@
 import SwiftUI
 import UIKit
 
-/// Presentation for `VisitOutcome`.
+/// Präsentation für `VisitOutcome` — FIXE Statusfarben, NIEMALS Accent.
+///
+/// - Statusfarben sind fest: Rot offen, Grün erledigt (`doneTone`), Orange unbeantwortet,
+///   Indigo später, Pink beigetreten, Grau/Schiefer Sonderfälle (siehe unten).
+///   Sie werden NICHT mit `appAccent` (Volkshilfe Rot/Orange/Blau/Lila) getönt —
+///   sonst liest „offen" plötzlich wie das gewählte Accent-Thema.
+/// - Accent-Washes (`AppBackdrop`) nutzen umgekehrt NUR `appAccent`, nie hartes Rot.
+///   Ein Fix pro Welt: Status fest, Grundierung Accent — nie umgekehrt.
 ///
 /// Kept out of the model so the persisted enum stays free of SwiftUI — it is
 /// decoded inside detached tasks by the map, archive and export pipelines, and
@@ -64,7 +71,13 @@ extension Optional where Wrapped == VisitOutcome {
 
 // MARK: - Status chips
 
-/// The fill behind a small tinted status chip.
+/// The fill behind a small tinted status chip — KANONISCH.
+///
+/// Eine Definition: Open-Count-Badge, Revisit-Chip und Zwei-Tage-Marker nutzten
+/// früher je eigene Werte und waren bereits gedriftet. Wer einen Chip malt, nimmt
+/// `StatusChipFill(tint)` — kein eigenes Opacity-Gemisch.
+/// Die `tint` kommt IMMER aus der fixen Statusfarbe (`outcome.tint`, `.red`, `.orange`
+/// …), NIEMALS aus `appAccent` (siehe Datei-Kopf).
 ///
 /// A chip that draws its label and its fill from the same hue needs the two far
 /// enough apart to stay legible, and how far apart is not one number: over a white

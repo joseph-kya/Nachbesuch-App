@@ -97,7 +97,11 @@ struct MapHost: UIViewRepresentable {
     /// Insert position + coordinate for taps onto the boundary line. `nil`
     /// outside drawing mode, where every tap belongs to pins.
     var onTapBoundary: ((Int, CLLocationCoordinate2D) -> Void)?
+    /// Leerer Kartentap: Fade-Deselect ohne Kamerasprung.
+    var onTapEmpty: (() -> Void)?
     var onDropConsumed: (UUID) -> Void = { _ in }
+    /// Puck-Wechsel uncertain↔trusted für den Folgen-Button-Puls (MapScreen).
+    var onPuckConfidenceChanged: ((PuckConfidence) -> Void)?
     var menuProvider: ((MapPinSnapshot) -> UIMenu)?
     var previewProvider: ((MapPinSnapshot) -> UIViewController?)?
 
@@ -119,7 +123,9 @@ struct MapHost: UIViewRepresentable {
         mapView.showsUserLocation = isActive
         mapView.showsCompass = false      // custom compass placed clear of the chrome
         mapView.showsScale = true
-        mapView.showsBuildings = true
+        // Plan view never tilts (isPitchEnabled = false), so 3D extrusions only
+        // cost GPU fill on A13 without ever being visible.
+        mapView.showsBuildings = false
         mapView.isPitchEnabled = false    // a canvassing map is a plan view
         mapView.isRotateEnabled = true
 
@@ -146,7 +152,9 @@ struct MapHost: UIViewRepresentable {
         coordinator.onTapDraftPoint = onTapDraftPoint
         coordinator.onTapPassant = onTapPassant
         coordinator.onTapBoundary = onTapBoundary
+        coordinator.onTapEmpty = onTapEmpty
         coordinator.onDropConsumed = onDropConsumed
+        coordinator.onPuckConfidenceChanged = onPuckConfidenceChanged
         coordinator.menuProvider = menuProvider
         coordinator.previewProvider = previewProvider
         coordinator.reduceMotionEnabled = reduceMotion

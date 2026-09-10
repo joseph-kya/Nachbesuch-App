@@ -21,9 +21,9 @@ struct ListScreen: View {
     ///
     /// This is the single biggest change in this screen. `body` used to rebuild every
     /// row model — including a Unicode folding pass over each house's address, note
-    /// and every door label — on every body evaluation. `searchText` is `@State`, so
-    /// that ran on every character typed, every filter tap and every scroll-triggered
-    /// invalidation.
+    /// and every door label — on every body evaluation. The search field lives in
+    /// `ListSensors`, so keystrokes never reach this body; only the debounced
+    /// query rebuilds the presentation, never the corpus.
     @State private var rows: [HouseRowModel] = []
     @State private var sections: [StreetSection] = []
     @State private var counts: [ListFilter: Int] = [:]
@@ -33,7 +33,6 @@ struct ListScreen: View {
     /// territory switch re-seeds the defaults.
     @State private var collapseDefaultsTerritory: UUID?
 
-    @State private var searchText = ""
     @State private var debouncedQuery = ""
     @State private var filter: ListFilter = .all
     /// Drives the relative half of the revisit chips ("in 25 Min"). A single tick
@@ -78,6 +77,31 @@ struct ListScreen: View {
     @State private var builtCorpusKey: CorpusKey?
     @State private var rowCache = HouseListCache()
     @State private var presentationVersion = 0
+    /// While the export resolves off the main actor the button spins instead
+    /// of blocking the tap on a thousand-object fault storm.
+    @State private var isPreparingExport = false
+    /// Street names in display order, sorted once per corpus so filtering and
+    /// searching reuse it instead of re-sorting per keystroke.
+    @State private var streetOrder: [String] = []
+    /// Roh-Suchtext vor der Debounce: `searchText != debouncedQuery` heißt
+    /// Suche läuft — trägt den Punkt in der FilterBar, sonst nichts.
+    @State private var searchText = ""
+    /// Faltet didSave-Bursts: nur alle 0,5 s ein Refresh, Rest verwerfen.
+    /// Faul angelegt — das Gate ist Sendable (Lock), kein Isolations-Thema.
+    /// Modul-intern, daher immer verfügbar, kein Fallback nötig.
+    @State private var refreshGate: DidSaveRefreshGate?
+    /// Letzte Voll-Seeds je Haus: Der Delta-Pfad merget Watermark-Treffer hier
+    /// ein, der Cache dekodiert danach nur diese neu (Rest sind Hits).
+    @State private var seedStore: [UUID: HouseListBuilder.Seed] = [:]
+    /// Neuestes gesehenes `updatedAt`: Delta-Reads fragen nur danach.
+    @State private var listWatermark: Date?
+    /// Letzter Korpus-Aufbau ist fehlgeschlagen — bei leerer Liste + Gebiet +
+    /// ohne Query/Filter zeigt der Empty-State einen Retry statt
+    /// „Noch keine Häuser".
+    @State private var corpusFailed = false
+
+    /// Suche läuft noch (Debounce holt den Rohtext erst ein).
+    private var isSearching: Bool { searchText != debouncedQuery }
 
     private struct PresentationTaskKey: Hashable {
         let version: Int
@@ -162,110 +186,12 @@ struct ListScreen: View {
     }
 
     var body: some View {
+        // Filterwechsel scrollen nach oben (wie Archiv): Der Reader muss Ahn
+        // aller Filter-Call-Sites sein — darum außen um den ganzen Stack.
+        ScrollViewReader { proxy in
         NavigationStack {
-            listSurface
-            .scrollDismissesKeyboard(.interactively)
-            .compatSoftScrollEdges()
-            .background { AppBackdrop() }
-            .searchable(text: $searchText, prompt: "Adresse, Notiz oder Tür")
-            .compatMinimizedSearch()
-            .compatSafeAreaBar(edge: .top, spacing: 0) {
-                FilterBar(
-                    chips: filterChips,
-                    contextLabel: "Liste",
-                    onSelect: { id in
-                        guard let value = ListFilter(rawValue: id) else { return }
-                        applyFilter(value)
-                    },
-                    onHelp: { showsLegend = true }
-                )
-                .padding(.vertical, 6)
-            }
-            .modifier(
-                UndoInsetModifier(
-                    undo: undo,
-                    reduceMotion: reduceMotion,
-                    onUndo: performUndo
-                )
-            )
-            .sensoryFeedback(.selection, trigger: collapsedSections)
-            .navigationTitle("Nachbesuche")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if gebiet?.isTwoDay == true {
-                    ToolbarItem(placement: .principal) {
-                        DayScopePicker(scope: $scope)
-                            .frame(maxWidth: 240)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Picker("Reihenfolge", selection: $sortByDistance) {
-                            Label("Offene zuerst", systemImage: "arrow.up.arrow.down").tag(false)
-                            Label("Nächste zuerst", systemImage: "location").tag(true)
-                        }
-                        Divider()
-                        Button {
-                            setAllStreets(expanded: true)
-                        } label: {
-                            Label("Alle Straßen öffnen", systemImage: "chevron.down.2")
-                        }
-                        .disabled(collapsedSections.isEmpty)
-
-                        Button {
-                            setAllStreets(expanded: false)
-                        } label: {
-                            Label("Alle Straßen schließen", systemImage: "chevron.up.2")
-                        }
-                        .disabled(
-                            sections.isEmpty
-                                || sections.allSatisfy { collapsedSections.contains($0.id) }
-                        )
-                    } label: {
-                        Image(systemName: sortByDistance ? "location" : "arrow.up.arrow.down")
-                    }
-                    .accessibilityLabel("Reihenfolge")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        prepareExport()
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .disabled(gebiet == nil)
-                    .accessibilityLabel("Gebiet exportieren")
-                }
-            }
-            .sheet(item: $selectedHouse) { selection in
-                if let house = fetchHouse(selection.id) {
-                    HouseDetailSheet(house: house, scope: scope, writeDay: writeDay)
-                        // The row grows into the sheet, and dragging it back down
-                        // collapses it into the same row.
-                        .navigationTransition(.zoom(sourceID: selection.id, in: zoom))
-                        .presentationDetents([.medium, .large])
-                        .presentationDragIndicator(.visible)
-                }
-            }
-            .sheet(isPresented: $showsExport, onDismiss: { exportHouses = []; exportPassanten = [] }) {
-                if let gebiet {
-                    ExportSheet(gebiet: gebiet, houses: exportHouses, passanten: exportPassanten, scope: scope)
-                        .presentationDetents([.medium, .large])
-                        .presentationDragIndicator(.visible)
-                }
-            }
-            .sheet(isPresented: $showsLegend) {
-                StatusLegendSheet()
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
-            }
-            .sheet(item: $revisitTarget) { row in
-                RevisitTimeSheet(
-                    subject: row.address,
-                    existing: row.nextRevisitAt
-                ) { date in
-                    applyQuickStatus(.later, to: row, revisitAt: date)
-                }
-            }
+            listContent(proxy: proxy)
+        }
         }
         .task {
             #if DEBUG
@@ -300,11 +226,6 @@ struct ListScreen: View {
             guard !Task.isCancelled, isActive else { return }
             await rebuildCorpus()
         }
-        .task(id: searchText) {
-            try? await Task.sleep(for: .milliseconds(200))
-            guard !Task.isCancelled else { return }
-            debouncedQuery = searchText
-        }
         .onChange(of: debouncedQuery) { _, _ in recomputeSections() }
         .onChange(of: sortByDistance) { _, _ in recomputeSections() }
         .task(id: PresentationTaskKey(version: presentationVersion, isActive: isActive)) {
@@ -312,11 +233,11 @@ struct ListScreen: View {
             await rebuildSections()
         }
         // The signal the scan was standing in for, delivered instead of hunted for.
+        // Burst-Faltung per DidSaveRefreshGate: Bulk-Import speichert mehrfach
+        // pro Sekunde — nur alle 0,5 s ein Refresh, Rest verwerfen.
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+            guard shouldRefreshList() else { return }
             dataVersion &+= 1
-        }
-        .onChange(of: location.location) { _, fix in
-            updateSortOrigin(fix?.coordinate)
         }
         .onChange(of: location.isReducedAccuracy) { _, reduced in
             // "Ungefährer Standort" is kilometres off: kilometre-grade
@@ -358,40 +279,108 @@ struct ListScreen: View {
         }
     }
 
-    /// Native row reuse keeps even a territory-wide nearest/time ranking lazy.
-    /// Each house is a List row; an expanded street no longer builds all of its
-    /// buttons before the first visible address can be drawn.
-    private var listSurface: some View {
+    /// Body in zwei Hälften: Basis (Suche/Bars/Titel) + Chrome (Toolbar/Sheets).
+    /// Eine einzige Kette vom Surface bis zum letzten Sheet war zu komplex
+    /// für den Type-Checker.
+    private func listContent(proxy: ScrollViewProxy) -> some View {
+        listBase(proxy: proxy)
+            .toolbar {
+                listToolbar(proxy: proxy)
+            }
+            .sheet(item: $selectedHouse) { selection in
+                HouseSheetHost(id: selection.id, scope: scope, writeDay: writeDay, zoom: zoom)
+            }
+            .sheet(isPresented: $showsExport, onDismiss: { exportHouses = []; exportPassanten = [] }) {
+                exportSheetContent
+            }
+            .sheet(isPresented: $showsLegend) {
+                StatusLegendSheet()
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $revisitTarget) { row in
+                revisitSheetContent(row: row)
+            }
+    }
+
+    private func listBase(proxy: ScrollViewProxy) -> some View {
+        listSurface(proxy: proxy)
+            .scrollDismissesKeyboard(.interactively)
+            .compatSoftScrollEdges()
+            .background { AppBackdrop() }
+            .background {
+                // 0-pt sensors: GPS fixes and keystrokes re-evaluate this view
+                // only — never the NavigationStack above it.
+                ListSensors(onFix: updateSortOrigin, onQuery: { debouncedQuery = $0 }, onText: { searchText = $0 })
+            }
+            .compatSafeAreaBar(edge: .top, spacing: 0) {
+                FilterBar(
+                    chips: filterChips,
+                    contextLabel: "Liste",
+                    onSelect: { id in
+                        guard let value = ListFilter(rawValue: id) else { return }
+                        applyFilter(value, proxy: proxy)
+                    },
+                    isSearching: isSearching
+                )
+                .padding(.vertical, 6)
+            }
+            .modifier(
+                UndoInsetModifier(
+                    undo: undo,
+                    reduceMotion: reduceMotion,
+                    onUndo: performUndo
+                )
+            )
+            .sensoryFeedback(.selection, trigger: collapsedSections)
+            .navigationTitle("Nachbesuche")
+            .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// One List row per street. The old version made the header row 0 and each
+    /// address rows 1…n of the same Section, so every expand/collapse changed the
+    /// number of UIKit rows *and* flipped the header background from rounded-all
+    /// to rounded-top. Animating those two things independently is the
+    /// Kantenkatastrophe: a transient pill, a clipped bottom edge, a seam across
+    /// the middle while rows recycle. Now the List structure never changes —
+    /// one row per street, always rounded on all four corners, always the same
+    /// glossy material — and only the height of that row's inner VStack animates.
+    /// Der Reader kommt vom Body: Filterwechsel scrollen darüber nach oben.
+    private func listSurface(proxy: ScrollViewProxy) -> some View {
         List {
+            // Ohne Fix gibt es keine Distanzen — Straßen-Gruppierung bleibt,
+            // Hinweiszeile erklärt, warum keine Meter dabeistehen.
+            if sortByDistance, sortOrigin == nil {
+                Text("Standort wird gesucht…")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .transition(.opacity)
+                    .animation(.appFeedback(reduceMotion: reduceMotion), value: sortByDistance && sortOrigin == nil)
+                    .accessibilityLabel("Standort wird gesucht")
+            }
             if sections.isEmpty {
-                emptyState
+                emptyState(proxy: proxy)
                     .frame(maxWidth: .infinity, minHeight: 200)
             } else {
                 ForEach(sections) { section in
+                    let isExpanded = !collapsedSections.contains(section.id)
                     Section {
-                        Button { toggleSection(section.id) } label: {
-                            StreetHeader(section: section, isExpanded: !collapsedSections.contains(section.id))
-                                .padding(.vertical, 4)
-                                .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Straße \(section.title)")
-                        .accessibilityValue("\(section.houseCount) Adressen, \(section.openCount) Türen offen")
-                        .accessibilityHint(collapsedSections.contains(section.id)
-                            ? "Blendet die Adressen ein" : "Blendet die Adressen aus")
-
-                        if !collapsedSections.contains(section.id) {
-                            ForEach(section.rows) { row in
-                                Button { openHouse(row.id) } label: {
-                                    HouseRow(row: row, now: clock)
-                                        .equatable()
-                                        .frame(minHeight: AppTouch.minimum)
-                                        .contentShape(.rect)
-                                }
-                                .buttonStyle(.plain)
-                                .matchedTransitionSource(id: row.id, in: zoom)
-                            }
-                        }
+                        StreetCard(
+                            section: section,
+                            isExpanded: isExpanded,
+                            now: clock,
+                            zoom: zoom,
+                            onToggle: { toggleSection(section.id) },
+                            onOpen: { openHouse($0) },
+                            onJumpTop: { proxy.scrollTo(section.id, anchor: .top) }
+                        )
+                        .listRowBackground(
+                            SectionSurface(isFirst: true, isLast: true)
+                        )
+                        .listRowSeparator(.hidden)
                     }
                     .listRowInsets(EdgeInsets(top: 11, leading: AppLayout.rowInset,
                                               bottom: 11, trailing: AppLayout.rowInset))
@@ -401,9 +390,21 @@ struct ListScreen: View {
         .listStyle(.insetGrouped)
         .listSectionSpacing(AppSpacing.regular)
         .scrollContentBackground(.hidden)
+        // iPad/landscape: insetGrouped liefe sonst über die volle Breite —
+        // Doppel-Frame engt auf 700 pt ein und zentriert (außen infinity).
+        // Harmlos am iPhone (schmaler als 700), Hintergrund bleibt AppBackdrop.
+        .frame(maxWidth: 700)
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: Corpus
+
+    /// Faltet didSave-Bursts zu einem Refresh (0,5-s-Gate, siehe PendingSave).
+    /// Faul angelegt, synchron aufrufbar — das Gate ist Lock-geschützt.
+    private func shouldRefreshList(now: Date = .now) -> Bool {
+        if refreshGate == nil { refreshGate = DidSaveRefreshGate() }
+        return refreshGate?.shouldRefresh(now: now) ?? true
+    }
 
     private func rebuildCorpus() async {
         let key = corpusKey
@@ -411,13 +412,85 @@ struct ListScreen: View {
             rows = []
             sections = []
             counts = [:]
+            streetOrder = []
             collapseDefaultsTerritory = nil
+            seedStore = [:]
+            listWatermark = nil
+            corpusFailed = false
             rowCache = HouseListCache()
             recomputeSections()
             builtCorpusKey = key
             return
         }
-        let reader = HouseReadService(modelContainer: modelContext.container)
+        let reader = await HouseReadService.background(container: modelContext.container)
+        // Delta-Pfad: gleiches Gebiet + Scope wie der letzte Aufbau und ein
+        // Watermark vorhanden → nur geänderte Häuser lesen und in den
+        // Seed-Store patchen. Der Cache dekodiert danach nur diese neu, der
+        // Rest sind Hits — kein Voll-Refetch pro Tür-Tap. Ehrliche Grenze:
+        // Löschungen trägt kein Watermark — ein gelöschtes Haus fällt erst
+        // beim nächsten Vollaufbau (Gebiets-/Scopewechsel) raus.
+        if let since = listWatermark,
+           let built = builtCorpusKey,
+           built.territoryID == key.territoryID,
+           built.scope == key.scope {
+            let deltas: [HouseListDelta]
+            do {
+                deltas = try await reader.listSeeds(territoryID: territoryID, updatedAfter: since)
+            } catch is CancellationError {
+                return
+            } catch {
+                notices.report(error, context: "Liste konnte nicht gelesen werden")
+                corpusFailed = true
+                return
+            }
+            guard !Task.isCancelled else { return }
+            guard !deltas.isEmpty else {
+                // Nichts geändert: Schlüssel übernehmen, Ansicht unangetastet.
+                builtCorpusKey = key
+                return
+            }
+            let currentScope = scope
+            let previousCache = rowCache
+            var store = seedStore
+            for delta in deltas { store[delta.seed.id] = delta.seed }
+            let watermark = deltas.map(\.updatedAt).max() ?? since
+            // Als Let für die sendable Build-Closure (fängt keine Var).
+            let merged = store
+            let buildTask = Task.detached(priority: .userInitiated) {
+                var cache = previousCache
+                let builtRows = try cache.update(Array(merged.values), scope: currentScope)
+                let newCounts = HouseListBuilder.counts(for: builtRows)
+                let order = HouseListBuilder.sortedStreetOrder(Array(Set(builtRows.map(\.street))))
+                return (cache, builtRows, newCounts, order)
+            }
+            do {
+                let (cache, builtRows, newCounts, order) = try await withTaskCancellationHandler {
+                    try await buildTask.value
+                } onCancel: {
+                    buildTask.cancel()
+                }
+                guard !Task.isCancelled, key == corpusKey else { return }
+                seedStore = merged
+                listWatermark = watermark
+                rowCache = cache
+                rows = builtRows
+                counts = newCounts
+                streetOrder = order
+                corpusFailed = false
+                recomputeSections()
+            } catch is CancellationError {
+                return
+            } catch {
+                notices.report(error, context: "Liste konnte nicht aufgebaut werden")
+                corpusFailed = true
+                return
+            }
+            builtCorpusKey = key
+            return
+        }
+        // Vollpfad (erster Aufbau, Gebiets- oder Scopewechsel): Das Watermark
+        // ist der Lesestart — was danach schreibt, fängt das nächste Delta.
+        let started = Date.now
         let seeds: [HouseListBuilder.Seed]
         do {
             seeds = try await reader.listSeeds(territoryID: territoryID)
@@ -425,6 +498,7 @@ struct ListScreen: View {
             return
         } catch {
             notices.report(error, context: "Liste konnte nicht gelesen werden")
+            corpusFailed = true
             return
         }
         guard !Task.isCancelled else { return }
@@ -437,18 +511,23 @@ struct ListScreen: View {
             let counts = HouseListBuilder.counts(for: built)
             let collapsed = needsCollapseDefaults
                 ? HouseListBuilder.initiallyCollapsedSectionIDs(rows: built) : nil
-            return (cache, built, counts, collapsed)
+            let order = HouseListBuilder.sortedStreetOrder(Array(Set(built.map(\.street))))
+            return (cache, built, counts, collapsed, order)
         }
         do {
-            let (cache, built, newCounts, collapsed) = try await withTaskCancellationHandler {
+            let (cache, built, newCounts, collapsed, order) = try await withTaskCancellationHandler {
                 try await buildTask.value
             } onCancel: {
                 buildTask.cancel()
             }
             guard !Task.isCancelled, key == corpusKey else { return }
+            seedStore = Dictionary(uniqueKeysWithValues: seeds.map { ($0.id, $0) })
+            listWatermark = started
             rowCache = cache
             rows = built
             counts = newCounts
+            streetOrder = order
+            corpusFailed = false
             if let collapsed {
                 collapsedSections = collapsed
                 collapseDefaultsTerritory = territoryID
@@ -458,6 +537,7 @@ struct ListScreen: View {
             return
         } catch {
             notices.report(error, context: "Liste konnte nicht aufgebaut werden")
+            corpusFailed = true
             return
         }
         builtCorpusKey = key
@@ -475,22 +555,54 @@ struct ListScreen: View {
     }
 
     private func openHouse(_ id: UUID) {
+        // Genau eine Selection-Haptik beim Öffnen, nicht via Trigger: Ein
+        // `.sensoryFeedback`-Trigger auf der Selection würde auch beim Schließen
+        // (→ nil) erneut feuern. Generator = nur auf, nie zu.
+        UISelectionFeedbackGenerator().selectionChanged()
         selectedHouse = HouseSelection(id: id)
     }
 
+    /// Export prep leaves the tap transaction immediately. IDs resolve off the
+    /// main actor, the button spins meanwhile, and the live models the sheet
+    /// needs fault in inside the Task — never synchronously on the tap.
     private func prepareExport() {
-        guard let territoryID = gebiet?.id else { return }
-        let descriptor = FetchDescriptor<House>(predicate: #Predicate {
-            $0.gebietID == territoryID || $0.dayID == territoryID
-        })
-        do {
-            exportHouses = try modelContext.fetch(descriptor)
-            exportPassanten = try modelContext.fetch(
-                FetchDescriptor<Passant>(predicate: #Predicate { $0.gebietID == territoryID })
-            )
-            showsExport = true
-        } catch {
-            notices.report(error, context: "Export konnte nicht vorbereitet werden")
+        guard let territoryID = gebiet?.id, !isPreparingExport else { return }
+        isPreparingExport = true
+        Task {
+            let reader = await HouseReadService.background(container: modelContext.container)
+            let ids: (houses: [UUID], passanten: [UUID])
+            do {
+                ids = try await reader.exportIDs(territoryID: territoryID)
+            } catch is CancellationError {
+                isPreparingExport = false
+                return
+            } catch {
+                notices.report(error, context: "Export konnte nicht vorbereitet werden")
+                isPreparingExport = false
+                return
+            }
+            guard !Task.isCancelled else {
+                isPreparingExport = false
+                return
+            }
+            do {
+                // Live models must come from this view's context — the background
+                // read only decided *which* ones, so the tap never waits on the
+                // fault storm itself.
+                let houseIDs = ids.houses
+                let passantIDs = ids.passanten
+                exportHouses = houseIDs.isEmpty ? [] : try modelContext.fetch(
+                    FetchDescriptor<House>(predicate: #Predicate { houseIDs.contains($0.id) })
+                )
+                exportPassanten = passantIDs.isEmpty ? [] : try modelContext.fetch(
+                    FetchDescriptor<Passant>(predicate: #Predicate { passantIDs.contains($0.id) })
+                )
+                isPreparingExport = false
+                showsExport = true
+            } catch {
+                notices.report(error, context: "Export konnte nicht vorbereitet werden")
+                isPreparingExport = false
+            }
         }
     }
 
@@ -504,9 +616,10 @@ struct ListScreen: View {
         let currentFilter = filter
         let query = debouncedQuery
         let origin = sortByDistance ? sortOrigin : nil
+        let order = streetOrder
         let built = await offMainActor {
             HouseListBuilder.presentedSections(rows: currentRows, filter: currentFilter,
-                                               query: query, origin: origin)
+                                               query: query, origin: origin, streetOrder: order)
         }
         guard !Task.isCancelled, version == presentationVersion else { return }
         var transaction = Transaction()
@@ -531,28 +644,174 @@ struct ListScreen: View {
     }
 
     private func toggleSection(_ id: String) {
-        withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) {
+        // Auf/zu = eine Selection-Haptik via `collapsedSections`-Trigger am Screen.
+        // Absichtlich kein zusätzlicher Impact für auf vs. zu: zwei Feedbacks auf
+        // demselben Trigger wären ein Doppel-Brumm pro Tap.
+        withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
             if collapsedSections.contains(id) { collapsedSections.remove(id) }
             else { collapsedSections.insert(id) }
         }
     }
 
-    private func applyFilter(_ value: ListFilter) {
+    /// Filterwechsel: Datentausch ohne Animation, danach Scroll nach oben mit
+    /// appSettle — wie Archiv.applyFilter: nur der Scroll läuft sichtbar.
+    private func applyFilter(_ value: ListFilter, proxy: ScrollViewProxy) {
+        // Haptik besitzt die FilterBar (`selection` auf selectedID) — hier kein
+        // zweiter Trigger, sonst brummt jeder Chipwechsel doppelt.
         guard filter != value else { return }
-        filter = value
-        recomputeSections()
-    }
-
-    private func setAllStreets(expanded: Bool) {
-        if expanded {
-            collapsedSections.removeAll()
-        } else {
-            collapsedSections.formUnion(sections.map(\.id))
+        let topID = sections.first?.id
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            filter = value
+            recomputeSections()
+        }
+        // Der Scroll ist die einzige Animation — Ziel ist die alte erste
+        // Straße (liegt oben), der Neuaufbau läuft danach still ein.
+        if let topID {
+            withAnimation(.appSettle(reduceMotion: reduceMotion)) {
+                proxy.scrollTo(topID, anchor: .top)
+            }
         }
     }
 
+    private func setAllStreets(expanded: Bool) {
+        // Gleicher Trigger wie toggleSection: eine Selection pro Massen-Tap.
+        withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
+            if expanded {
+                collapsedSections.removeAll()
+            } else {
+                collapsedSections.formUnion(sections.map(\.id))
+            }
+        }
+    }
+
+    /// Toolbar-Menü zerlegt: Der einzeilige Menu-Block mit Section+ForEach+
+    /// Picker+Divider+Disabled-Logik war zu komplex für den Type-Checker.
+    private func listMenu(proxy: ScrollViewProxy) -> some View {
+        Menu {
+            listFilterMenuSection(proxy: proxy)
+            Button("Statuslegende", systemImage: "questionmark.circle") { showsLegend = true }
+            listOrderMenuSection
+            Divider()
+            listBulkMenuSection
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+        }
+    }
+
+    private func listFilterMenuSection(proxy: ScrollViewProxy) -> some View {
+        Section {
+            ForEach(ListFilter.allCases) { value in
+                Button {
+                    applyFilter(value, proxy: proxy)
+                } label: {
+                    listFilterMenuLabel(for: value)
+                }
+            }
+        } header: {
+            Text("Filter")
+        }
+    }
+
+    private func listFilterMenuLabel(for value: ListFilter) -> some View {
+        if filter == value {
+            Label(value.title, systemImage: "checkmark")
+        } else {
+            Label(value.title, systemImage: value.systemImage)
+        }
+    }
+
+    private var listOrderMenuSection: some View {
+        Picker("Reihenfolge", selection: $sortByDistance) {
+            Label("Offene zuerst", systemImage: "arrow.up.arrow.down").tag(false)
+            Label("Nächste zuerst", systemImage: "location").tag(true)
+        }
+    }
+
+    private var listBulkMenuSection: some View {
+        Group {
+            Button {
+                setAllStreets(expanded: true)
+            } label: {
+                Label("Alle Straßen öffnen", systemImage: "chevron.down.2")
+            }
+            .disabled(collapsedSections.isEmpty)
+
+            Button {
+                setAllStreets(expanded: false)
+            } label: {
+                Label("Alle Straßen schließen", systemImage: "chevron.up.2")
+            }
+            .disabled(listBulkCloseDisabled)
+        }
+    }
+
+    private var listBulkCloseDisabled: Bool {
+        sections.isEmpty || sections.allSatisfy { collapsedSections.contains($0.id) }
+    }
+
+    @ToolbarContentBuilder
+    private func listToolbar(proxy: ScrollViewProxy) -> some ToolbarContent {
+        if gebiet?.isTwoDay == true {
+            ToolbarItem(placement: .principal) {
+                DayScopePicker(scope: $scope)
+                    .frame(maxWidth: 240)
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            listMenu(proxy: proxy)
+                .accessibilityLabel("Filter und Reihenfolge")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            exportToolbarButton
+        }
+    }
+
+    private var exportToolbarButton: some View {
+        Button {
+            prepareExport()
+        } label: {
+            exportToolbarIcon
+        }
+        .disabled(gebiet == nil || isPreparingExport)
+        .accessibilityLabel("Gebiet exportieren")
+    }
+
+    @ViewBuilder
+    private var exportToolbarIcon: some View {
+        if isPreparingExport {
+            ProgressView()
+                .controlSize(.small)
+        } else {
+            Image(systemName: "square.and.arrow.up")
+        }
+    }
+
+    @ViewBuilder
+    private var exportSheetContent: some View {
+        if let gebiet {
+            ExportSheet(gebiet: gebiet, houses: exportHouses, passanten: exportPassanten, scope: scope)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+    }
+
+    private func revisitSheetContent(row: HouseRowModel) -> some View {
+        RevisitTimeSheet(
+            subject: row.address,
+            existing: row.nextRevisitAt
+        ) { date in
+            applyQuickStatus(.later, to: row, revisitAt: date)
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
     private var filterChips: [FilterChip] {
-        ListFilter.allCases.map { value in
+        let primary: [ListFilter] = [.all, .open] + ((counts[.later] ?? 0) > 0 || filter == .later ? [.later] : [])
+        let visible = primary.contains(filter) ? primary : primary + [filter]
+        return visible.map { value in
             FilterChip(
                 id: value.rawValue,
                 title: value.title,
@@ -686,18 +945,166 @@ struct ListScreen: View {
         pendingSave.flush(in: modelContext, reporting: notices)
     }
 
+    /// Präfix-Vorschlag bei Leer-Treffern: erste 3 gefaltete Zeichen gegen die
+    /// Straßenreihenfolge — fängt Umlaut-/Tippfehler-Anfänge ("modl"→"Mödling").
+    /// Nur Hinweis-Text: Tappen bräuchte das Search-Binding der Sensoren.
+    private func suggestedStreet(for query: String) -> String? {
+        let gefaltet = SearchText.fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard gefaltet.count >= 2 else { return nil }
+        let prefix = String(gefaltet.prefix(3))
+        return streetOrder.first { SearchText.fold($0).hasPrefix(prefix) }
+    }
+
     @ViewBuilder
-    private var emptyState: some View {
+    private func emptyState(proxy: ScrollViewProxy) -> some View {
+        // Ladefehler zuerst: leere Liste trotz Gebiet, ohne Query und Filter —
+        // dann erklärt kein Filter die Leere, nur ein Retry hilft.
+        if corpusFailed, rows.isEmpty, gebiet != nil, debouncedQuery.isEmpty, filter == .all {
+            ContentUnavailableView {
+                Label("Konnte nicht laden", systemImage: "arrow.clockwise")
+            } description: {
+                Text("Die Liste konnte nicht gelesen werden.")
+            } actions: {
+                Button("Erneut versuchen") {
+                    corpusFailed = false
+                    // Gate zurücksetzen, sonst schluckt es den Folge-Refresh
+                    // nach Retry als Burst-Rauschen.
+                    refreshGate?.reset()
+                    dataVersion &+= 1
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityLabel("Erneut versuchen")
+                .accessibilityHint("Lädt die Liste neu")
+            }
+            .accessibilityLabel("Konnte nicht laden. Erneut versuchen.")
         // Driven by the debounced query, so the message and the list can never
-        // disagree about what was searched for.
-        if !debouncedQuery.isEmpty {
-            ContentUnavailableView.search(text: debouncedQuery)
+        // disagree about what was searched for. Natives `.searchable` besitzt den
+        // eigenen Löschknopf — kein Custom-Clear wie im Archiv nötig; Tastatur
+        // schließt per `scrollDismissesKeyboard(.interactively)` am List-Surface.
+        } else if !debouncedQuery.isEmpty {
+            VStack(spacing: AppSpacing.snug) {
+                ContentUnavailableView.search(text: debouncedQuery)
+                // Präfix-Rettung bei Tippfehlern/Umlauten ("modl"→"Mödling").
+                if let vorschlag = suggestedStreet(for: debouncedQuery) {
+                    Text("Meintest du „\(vorschlag)“?")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Meintest du \(vorschlag)?")
+                }
+                // Nur wenn ein Filter die Suche zusätzlich einengt: Vorschlag, ihn
+                // zu lösen, statt leer dazustehen.
+                if filter != .all {
+                    Button("Filter zurücksetzen") { applyFilter(.all, proxy: proxy) }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel("Filter zurücksetzen")
+                        .accessibilityHint("Zeigt wieder alle Adressen")
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Keine Treffer für \(debouncedQuery)")
         } else {
             ContentUnavailableView {
+                // Hüpft einmal beim Erscheinen (Filterwechsel), ohne Reduce Motion.
+                // Label trägt den Effekt — wirkt aufs Symbol, nicht auf den Text.
                 Label(filter.emptyTitle, systemImage: filter.systemImage)
+                    .symbolEffect(
+                        .bounce,
+                        options: reduceMotion ? .nonRepeating : .default,
+                        value: reduceMotion ? "" : filter.id
+                    )
+                    .symbolEffectsRemoved(reduceMotion)
             } description: {
                 Text(filter.emptyMessage)
+            } actions: {
+                if filter != .all {
+                    Button("Filter zurücksetzen") { applyFilter(.all, proxy: proxy) }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityLabel("Filter zurücksetzen")
+                        .accessibilityHint("Zeigt wieder alle Adressen")
+                }
             }
+            .accessibilityLabel("\(filter.emptyTitle). \(filter.emptyMessage)")
+        }
+    }
+}
+
+// MARK: - Sensors & sheet host
+
+/// 0-pt views living inside the NavigationStack so the screen itself never
+/// subscribes to high-frequency signals.
+///
+/// Reading `location.location` or the search field in `ListScreen.body` would
+/// re-evaluate the whole NavigationStack per GPS fix and per keystroke. Here
+/// only this empty view re-evaluates; the screen sees the debounced query and
+/// a 25 m-gated origin through callbacks.
+private struct ListSensors: View {
+    @Environment(LocationService.self) private var location
+    let onFix: (CLLocationCoordinate2D?) -> Void
+    let onQuery: (String) -> Void
+    /// Meldet jeden Rohtext sofort — der Screen vergleicht gegen die Debounce
+    /// und zeigt solange den Such-Punkt in der FilterBar.
+    let onText: (String) -> Void
+    @State private var searchText = ""
+
+    var body: some View {
+        Color.clear
+            .frame(height: 0)
+            .searchable(text: $searchText, prompt: "Adresse, Notiz oder Tür")
+            .compatMinimizedSearch()
+            .allowsHitTesting(false)
+            .onChange(of: location.location) { _, fix in onFix(fix?.coordinate) }
+            .onChange(of: searchText) { _, new in onText(new) }
+            .task(id: searchText) {
+                try? await Task.sleep(for: .milliseconds(200))
+                guard !Task.isCancelled else { return }
+                onQuery(searchText)
+            }
+    }
+}
+
+/// Resolves the tapped address after presentation, never inside its
+/// transaction: the sheet appears instantly with a spinner, the live model
+/// faults in behind it.
+private struct HouseSheetHost: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(AppNoticeCenter.self) private var notices
+    let id: UUID
+    let scope: DayScope
+    let writeDay: Int
+    let zoom: Namespace.ID
+    @State private var house: House?
+    @State private var didResolve = false
+
+    var body: some View {
+        Group {
+            if let house {
+                HouseDetailSheet(house: house, scope: scope, writeDay: writeDay)
+                    // The row grows into the sheet, and dragging it back down
+                    // collapses it into the same row.
+                    .navigationTransition(.zoom(sourceID: id, in: zoom))
+            } else if didResolve {
+                ContentUnavailableView {
+                    Label("Adresse nicht gefunden", systemImage: "questionmark.circle")
+                } description: {
+                    Text("Sie wurde möglicherweise gelöscht.")
+                }
+            } else {
+                ProgressView("Adresse wird geöffnet …")
+                    .frame(maxWidth: .infinity, minHeight: 200)
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .task(id: id) {
+            let houseID = id
+            var descriptor = FetchDescriptor<House>(predicate: #Predicate { $0.id == houseID })
+            descriptor.fetchLimit = 1
+            do {
+                house = try modelContext.fetch(descriptor).first
+            } catch {
+                notices.report(error, context: "Haus konnte nicht geöffnet werden")
+            }
+            didResolve = true
         }
     }
 }
@@ -705,6 +1112,7 @@ struct ListScreen: View {
 // MARK: - Row
 
 private struct HouseRow: View, Equatable {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let row: HouseRowModel
     /// Only ever read through `glance`. Compared by its *effect*, never directly —
     /// see `==`.
@@ -773,13 +1181,7 @@ private struct HouseRow: View, Equatable {
             // does not already say. It made every row of a fresh territory carry an
             // identical red badge, which is a decoration, not a signal.
             if !row.isSingleDoor, row.openCount > 0 {
-                Text("\(row.openCount)")
-                    .font(.caption.weight(.bold))
-                    .monospacedDigit()
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(StatusChipFill(.red), in: Capsule())
+                OpenCountBadge(count: row.openCount)
             }
 
             Image(systemName: "chevron.forward")
@@ -789,6 +1191,8 @@ private struct HouseRow: View, Equatable {
         // The row draws the number; VoiceOver still gets the whole address, because
         // "6" on its own is not an address to someone who cannot see the street
         // header above it.
+        // Kein "Später buchen"-Action an der Zeile: Row ist reiner Wert ohne
+        // House-Modell — Buchung braucht Fetch+Sheet am Screen. Öffnet-Hint bleibt.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.address)
         .accessibilityValue(
@@ -809,9 +1213,20 @@ private struct HouseRow: View, Equatable {
     /// that can be late.
     private func revisitChip(_ glance: RevisitGlance) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: glance.systemImage)
+            // Puls nur bei überfällig — und nur einmal beim Erscheinen: Dauerpuls
+            // auf 200 Zeilen wäre Flackern, kein Signal. Ohne Reduce Motion.
+            Group {
+                if glance.urgency == .overdue {
+                    Image(systemName: glance.systemImage)
+                        .symbolEffect(.pulse, options: .nonRepeating)
+                        .symbolEffectsRemoved(reduceMotion)
+                } else {
+                    Image(systemName: glance.systemImage)
+                }
+            }
             Text(glance.label)
                 .monospacedDigit()
+                .contentTransition(reduceMotion ? .identity : .numericText())
             if glance.extraDoors > 0 {
                 Text("+\(glance.extraDoors)")
                     .monospacedDigit()
@@ -836,6 +1251,218 @@ private struct HouseRow: View, Equatable {
     }
 }
 
+/// Rote Offen-Badge mit Pop bei Änderung.
+///
+/// Eigene View, damit `HouseRow.==` (row + glance) wirksam bleibt: Das
+/// Pop-State lebt hier drin, nicht im Row-Modell. Ohne Reduce Motion 0.8→1.
+private struct OpenCountBadge: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let count: Int
+    @State private var pop: CGFloat = 1
+
+    var body: some View {
+        Text("\(count)")
+            .font(.caption.weight(.bold))
+            .monospacedDigit()
+            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(count)))
+            .foregroundStyle(.red)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(StatusChipFill(.red), in: Capsule())
+            .scaleEffect(pop)
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: count)
+            .onChange(of: count) { _, _ in
+                guard !reduceMotion else { return }
+                pop = 0.8
+                withAnimation(.appFeedback(reduceMotion: false)) { pop = 1 }
+            }
+            .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Street card (one List row per street)
+
+/// Tast-Feedback ohne Geometrie-Bruch: nur Highlight, kein Scale.
+///
+/// `PressableRowStyle` skaliert auf 0.98 — richtig für frei schwebende Karten,
+/// falsch in dieser durchgehenden Glaskarte: Die Zeile reißt sichtbar von den
+/// Nachbarn ab. Darum hier wie `GroupedRowStyle` nur `.primary.opacity(0.08)`
+/// als Overlay in Kartenform, Scale bleibt 1.0. Overlay statt Background, damit
+/// das Highlight auch über `contentPanel`-Füllungen liegt.
+private struct StreetHeaderPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var isLast: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .overlay {
+                sectionShape(isFirst: true, isLast: isLast)
+                    .fill(.primary.opacity(configuration.isPressed ? 0.08 : 0))
+                    .allowsHitTesting(false)
+            }
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: configuration.isPressed)
+    }
+}
+
+/// Gleiches Highlight für Adresszeilen und Paging-Fuß: kleine Radien, kein Tear.
+private struct StreetRowPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .overlay {
+                RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
+                    .fill(.primary.opacity(configuration.isPressed ? 0.08 : 0))
+                    .allowsHitTesting(false)
+            }
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: configuration.isPressed)
+    }
+}
+
+/// Header + Adressen in einer Listenzelle hinter einer glänzenden Fläche.
+/// Höhe animiert, Ecken nicht: Hintergrund bleibt rounded-all, nur das innere
+/// VStack wächst — kein Frame zeigt je eine eckige Kante mid-motion.
+private struct StreetCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Windowing page size. A street with 100+ addresses must not build 100+
+    /// HouseRows eagerly on first layout — the scroll pays for all of them.
+    private static let pageSize = 30
+    let section: StreetSection
+    let isExpanded: Bool
+    let now: Date
+    let zoom: Namespace.ID
+    let onToggle: () -> Void
+    let onOpen: (UUID) -> Void
+    /// Scroll zum Sektionskopf — Closure vom Außen-Reader aus listSurface,
+    /// kein eigener ScrollViewReader (der säße unter der List und fände nichts).
+    let onJumpTop: () -> Void
+    @State private var visibleCount = Self.pageSize
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // VoiceOver: Button trägt Label+Value ("erweitert/reduziert")+Hint —
+            // das IST die Aktion, kein Rotor nötig. Verifiziert: traits .isHeader.
+            Button(action: onToggle) {
+                StreetHeader(section: section, isExpanded: isExpanded)
+                    // 44 pt Trefferfläche ohne Optik-Bruch: minHeight statt fix.
+                    .frame(minHeight: AppTouch.minimum)
+                    .padding(.vertical, 4)
+                    .contentShape(.rect)
+            }
+            // Kein `.plain`: ohne Stil kein Press-Feedback. Header-Highlight wie
+            // GroupedRowStyle (primary 0.08), Scale 1.0 — kein Tear an den Ecken.
+            // Form folgt dem Kartenrand: zu = rundum, offen = nur oben rund.
+            .buttonStyle(StreetHeaderPressStyle(isLast: !isExpanded))
+            .accessibilityLabel("Straße \(section.title)")
+            // SwiftUI kennt kein .isExpanded-Trait — der Zustand wandert darum
+            // ins Value: „erweitert"/„reduziert" wird mit angesagt.
+            .accessibilityValue("\(section.houseCount) Adressen, \(section.openCount) Türen offen, \(isExpanded ? "erweitert" : "reduziert")")
+            .accessibilityHint(isExpanded ? "Blendet die Adressen aus" : "Blendet die Adressen ein")
+            .accessibilityAddTraits(.isHeader)
+
+            if isExpanded, !section.rows.isEmpty {
+                // One page over the cap, never a full enumerated copy: the rest
+                // pages in on tap.
+                let visible = Array(section.rows.prefix(visibleCount))
+                let lastID = visible.last?.id
+                VStack(spacing: 0) {
+                    // Hairline between header and first address, inset to the text
+                    // column like a native grouped separator — not a second
+                    // container edge, so no seam can appear mid-card.
+                    Rectangle()
+                        .fill(.separator)
+                        .frame(height: 0.5)
+                        .padding(.leading, AppLayout.glyphColumn + AppLayout.glyphGap)
+                        .padding(.top, 7)
+                    ForEach(visible) { row in
+                        Button { onOpen(row.id) } label: {
+                            // The clock only reaches rows with a booked time:
+                            // timeless rows keep a fixed date, so the 30 s tick
+                            // never rebuilds them.
+                            HouseRow(row: row, now: row.nextRevisitAt == nil ? .distantPast : now)
+                                .equatable()
+                                .frame(maxWidth: .infinity, minHeight: AppTouch.minimum, alignment: .leading)
+                                .contentShape(.rect)
+                        }
+                        // Gleiches Highlight wie Header, nie Scale: Zeilen teilen
+                        // sich eine Fläche, Scale würde die Kante aufreißen.
+                        .buttonStyle(StreetRowPressStyle())
+                        .matchedTransitionSource(id: row.id, in: zoom)
+                        .padding(.top, 11)
+                        .padding(.bottom, row.id == lastID ? 4 : 11)
+                        .overlay(alignment: .bottom) {
+                            if row.id != lastID {
+                                Rectangle()
+                                    .fill(.separator)
+                                    .frame(height: 0.5)
+                                    .padding(.leading, AppLayout.glyphColumn + AppLayout.glyphGap)
+                            }
+                        }
+                    }
+                    if section.rows.count > visible.count {
+                        Button {
+                            withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
+                                visibleCount += Self.pageSize
+                            }
+                        } label: {
+                            // Volle Breite, 44 pt, Pillen-Panel mit Chevron: fühlt
+                            // sich an wie Inhalt, nicht wie System-Kleingedrucktes.
+                            HStack(spacing: 6) {
+                                Text("Weitere \(section.rows.count - visible.count) anzeigen")
+                                Image(systemName: "chevron.down")
+                                    .font(.caption2.weight(.bold))
+                            }
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: AppTouch.minimum)
+                            .contentPanel()
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(StreetRowPressStyle())
+                        .accessibilityLabel("Weitere \(section.rows.count - visible.count) Adressen anzeigen")
+                        .accessibilityHint("Zeigt mehr Adressen dieser Straße")
+                    }
+                    // Nach 2× Paging (>60): faltet das Windowing ein und springt
+                    // per Außen-Proxy zum Kopf — sonst scrollt man ewig zurück.
+                    if visibleCount > Self.pageSize * 2 {
+                        Button {
+                            withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
+                                visibleCount = Self.pageSize
+                            }
+                            withAnimation(.appSettle(reduceMotion: reduceMotion)) {
+                                onJumpTop()
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text("Nach oben")
+                                Image(systemName: "arrow.up")
+                                    .font(.caption2.weight(.bold))
+                            }
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: AppTouch.minimum)
+                            .contentPanel()
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(StreetRowPressStyle())
+                        .accessibilityLabel("Nach oben springen")
+                        .accessibilityHint("Zeigt wieder die ersten Adressen dieser Straße")
+                    }
+                }
+                // Opacity only: a slide/move here would drag text over the rounded
+                // corners mid-height-animation — the next Kantenkatastrophe.
+                // Clipped so fading rows never poke outside the glossy shape.
+                .transition(.opacity)
+                .clipped()
+            }
+        }
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: isExpanded)
+        // Ein Paging-Tap = eine Selection-Haptik. Kein zweiter Trigger auf
+        // demselben Wert: withAnimation oben trägt keine Haptik.
+        .sensoryFeedback(.selection, trigger: visibleCount)
+    }
+}
+
 // MARK: - Street header
 
 private struct StreetHeader: View {
@@ -843,6 +1470,9 @@ private struct StreetHeader: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let section: StreetSection
     let isExpanded: Bool
+    /// Feuert die Success-Haptik genau einmal pro Fertigstellung: `sensoryFeedback`
+    /// auf `isDone` würde auch beim Wiederöffnen (true→false) brummen.
+    @State private var celebrateToken = 0
 
     /// A street is finished only when every door is recorded *and* nothing is left
     /// open. The old card could show a green-worthy "9/9" next to a red bar, because
@@ -863,16 +1493,31 @@ private struct StreetHeader: View {
     private var barWidth: CGFloat { dynamicTypeSize.isAccessibilitySize ? 44 : 56 }
 
     var body: some View {
-        // Both candidates used to be `HStack`s. When neither fits, `ViewThatFits`
-        // takes the last one and lets it overflow — at accessibility sizes the
-        // progress column was clipped off the right edge mid-digit. The stacked
-        // variant is a layout that always fits, so there is a real last resort.
-        ViewThatFits(in: .horizontal) {
-            headerLayout(compact: true)
-            headerLayout(compact: false)
-            stackedLayout
+        // Accessibility sizes always take the stacked layout: laying out all
+        // candidates per header (ViewThatFits) costs 3x on this screen.
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                stackedLayout
+                    .contentShape(.rect)
+            } else {
+                // Both candidates used to be `HStack`s. When neither fits, `ViewThatFits`
+                // takes the last one and lets it overflow — at accessibility sizes the
+                // progress column was clipped off the right edge mid-digit. The stacked
+                // variant is a layout that always fits, so there is a real last resort.
+                ViewThatFits(in: .horizontal) {
+                    headerLayout(compact: true)
+                    headerLayout(compact: false)
+                }
+                .contentShape(.rect)
+            }
         }
-        .contentShape(.rect)
+        // Success nur bei false→true: Token steigt nur beim Fertigwerden, nie
+        // beim Wiederöffnen. Balken selbst bleibt stumm (appSettle ohne Haptik).
+        .sensoryFeedback(.success, trigger: celebrateToken)
+        .onChange(of: isDone) { _, done in
+            guard done else { return }
+            celebrateToken &+= 1
+        }
     }
 
     // MARK: Pieces
@@ -919,7 +1564,7 @@ private struct StreetHeader: View {
                     .symbolEffect(
                         .bounce,
                         options: reduceMotion ? .nonRepeating : .default,
-                        value: isDone
+                        value: reduceMotion ? false : isDone
                     )
                     .symbolEffectsRemoved(reduceMotion)
                     .transition(.blockSwap(reduceMotion: reduceMotion))
@@ -928,8 +1573,11 @@ private struct StreetHeader: View {
                     .font(.caption.weight(.semibold))
                     .monospacedDigit()
                     .foregroundStyle(stateTint)
-                    .contentTransition(.numericText(value: Double(section.openCount)))
+                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(section.openCount)))
                     .lineLimit(1)
+                    // AX5 schrumpft statt zu clippen; ohne ScaleFactor frisst die
+                    // einzeilige Zahl den Balken daneben.
+                    .minimumScaleFactor(0.7)
                     .transition(.blockSwap(reduceMotion: reduceMotion))
             }
         }
@@ -939,6 +1587,16 @@ private struct StreetHeader: View {
         // street per campaign, and it is the thing the user is walking around to
         // achieve. Every other count change on this screen is `appFeedback`.
         .animation(.appCelebrate(reduceMotion: reduceMotion), value: isDone)
+        // Zählerwechsel (5→4) lebt vom Morph: ohne Animation am Count springt
+        // der numericText-Wechsel hart statt zu laufen.
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: section.openCount)
+    }
+
+    /// One key for bar and tint: progress and completion move together, never
+    /// as two competing animations.
+    private struct ProgressKey: Hashable {
+        let progress: Double
+        let isDone: Bool
     }
 
     /// A hand-drawn capsule rather than `ProgressView`: the system bar draws its
@@ -956,8 +1614,7 @@ private struct StreetHeader: View {
             }
         }
         .frame(width: width, height: 5)
-        .animation(.appSettle(reduceMotion: reduceMotion), value: section.progress)
-        .animation(.appSettle(reduceMotion: reduceMotion), value: isDone)
+        .animation(.appSettle(reduceMotion: reduceMotion), value: ProgressKey(progress: section.progress, isDone: isDone))
     }
 
     private var chevron: some View {
@@ -965,7 +1622,11 @@ private struct StreetHeader: View {
             .font(.caption2.weight(.bold))
             .foregroundStyle(.tertiary)
             .rotationEffect(.degrees(isExpanded ? 0 : -90))
-            .animation(reduceMotion ? nil : .appFeedback(reduceMotion: false), value: isExpanded)
+            // Winziges Aufpoppen beim Umschalten (0.9→1), eckensicher: 12-pt
+            // Glyph, kein Container-Geometriebruch. Läuft in derselben
+            // appFeedback-Transaktion wie die Rotation — ein Trigger, ein Takt.
+            .scaleEffect(isExpanded || reduceMotion ? 1 : 0.9)
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: isExpanded)
             .frame(width: 12)
             .accessibilityHidden(true)
     }
@@ -983,9 +1644,14 @@ private struct StreetHeader: View {
 
             // Count over bar, right-aligned: the two read as one measurement
             // instead of two competing trailing elements.
+            // Synthetik ("Nächste zuerst"/"Nach Uhrzeit") mischt Straßen und
+            // Filter — Balken täuschte Straßen-Fortschritt vor, darum nur Zahl.
+            // Untertitel mit Adresszahl bleibt immer (irreführungsfrei).
             VStack(alignment: .trailing, spacing: 5) {
                 counter
-                progressBar(width: barWidth)
+                if !section.isSynthetic {
+                    progressBar(width: barWidth)
+                }
             }
 
             chevron
@@ -1004,11 +1670,13 @@ private struct StreetHeader: View {
             }
             HStack(spacing: AppSpacing.snug) {
                 counter
-                GeometryReader { proxy in
-                    progressBar(width: proxy.size.width)
-                        .frame(height: proxy.size.height, alignment: .center)
+                // Fixed width, no GeometryReader: one layout pass per street
+                // instead of a measuring pass each.
+                // Wie oben: kein Balken in Synthetik-Sektionen.
+                if !section.isSynthetic {
+                    progressBar(width: barWidth)
                 }
-                .frame(height: 5)
+                Spacer(minLength: 0)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1024,38 +1692,67 @@ private struct UndoBanner: View {
     @Environment(\.appAccent) private var accent
     let label: String
     let action: () -> Void
+    /// Restzeit 1→0: läuft linear 5 s wie der Dismiss-Task des Parents.
+    @State private var remaining: CGFloat = 1
 
     var body: some View {
         // Two sibling glass shapes in one container. Nesting the button inside a
         // glass panel prevents Liquid Glass from sampling the content correctly.
         CompatGlassContainer(spacing: AppSpacing.tight) {
-            HStack(spacing: AppSpacing.tight) {
-                HStack(spacing: AppSpacing.snug) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(Color.doneTone)
-                        .symbolEffect(
-                            .bounce,
-                            options: reduceMotion ? .nonRepeating : .default,
-                            value: reduceMotion ? "" : label
-                        )
-                    Text(label)
-                        .font(.footnote)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .navigationGlass(cornerRadius: AppRadius.card)
+            VStack(spacing: 0) {
+                HStack(spacing: AppSpacing.tight) {
+                    HStack(spacing: AppSpacing.snug) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(Color.doneTone)
+                            .symbolEffect(
+                                .bounce,
+                                options: reduceMotion ? .nonRepeating : .default,
+                                value: reduceMotion ? "" : label
+                            )
+                        Text(label)
+                            .font(.footnote)
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .navigationGlass(cornerRadius: AppRadius.card)
 
-                Button("Rückgängig", action: action)
-                    .font(.footnote.weight(.semibold))
-                    .compatGlassButton(prominent: true)
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.small)
-                    .tint(accent)
+                    Button("Rückgängig", action: action)
+                        .font(.footnote.weight(.semibold))
+                        .compatGlassButton(prominent: true)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.small)
+                        .tint(accent)
+                }
+                // Countdown-Balken: linear 5 s auf 0. Ohne Reduce Motion schrumpft
+                // die Breite, mit nur die Deckkraft — reine Optik, Dismiss bleibt
+                // beim Parent-Task.
+                Capsule(style: .continuous)
+                    .fill(.secondary.opacity(0.5))
+                    .frame(height: 2)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 6)
+                    .scaleEffect(x: reduceMotion ? 1 : remaining, y: 1, anchor: .leading)
+                    .opacity(reduceMotion ? Double(remaining) : 1)
             }
         }
+        // Glass entry to go with the banner slide the parent applies: without
+        // it the panel fades its contents but never its material.
+        .standaloneGlassTransition(reduceMotion: reduceMotion)
         .accessibilityElement(children: .contain)
+        .accessibilityLabel("Gespeichert: \(label)")
+        .accessibilityAction(named: "Rückgängig") { action() }
+        .onAppear { startTimer() }
+        .onChange(of: label) { _, _ in startTimer() }
+    }
+
+    /// Startet die 5-s-Animation neu — auch bei neuem Undo im selben Banner.
+    private func startTimer() {
+        remaining = 1
+        withAnimation(
+            reduceMotion ? .easeOut(duration: 0.2) : .linear(duration: 5)
+        ) { remaining = 0 }
     }
 }
 

@@ -1,14 +1,42 @@
 import SwiftUI
 
-/// Floating surfaces over the map — the navigation layer.
+/// Einheitliche Glanzkante für ALLE Glas-Zweige — einzige Wahrheit, kein Duplikat.
 ///
-/// The HIG puts Liquid Glass in the navigation layer and standard materials in the
-/// content layer, so panels that float over the map get glass and cards inside a
-/// scrolling list deliberately do not.
+/// - `MapChromeModifier`, `ContentCardModifier`, `SectionSurface` nutzen alle diese
+///   Funktion; keine Inline-`white.opacity(...)`-Rahmen anderswo (auch nicht 0.10/0.22/0.55).
+/// - Opake Zweige nutzen NIEMALS diese Kante, sondern `separator.opacity(0.6)`, 0.5 pt.
+/// - Hell braucht mehr Hub als Dunkel: Weiß auf hellem Glas säuft bei 0.34 ab,
+///   darum hell 0.55→0.10, dunkel 0.34→0.04. Breite immer 0.75.
+/// - Offene Migration (fremde Map-Datei — NICHT hier editieren): `LegacyPreviewSurface`
+///   in `Map/MapChrome.swift` dupliziert das Rim noch inline mit fest 0.34→0.04
+///   (nur Dunkel-Werte, Hell 0.55→0.10 fehlt). Bei nächster Map-Änderung dort auf
+///   `glossyRim(for:colorScheme:)` umstellen. Helper bewusst `internal` (nicht
+///   `private`), damit die Map-Datei ihn ohne Duplikat nutzen kann.
+func glossyRim<S: InsettableShape>(for shape: S, colorScheme: ColorScheme) -> some View {
+    let top = colorScheme == .dark ? 0.34 : 0.55
+    let bottom = colorScheme == .dark ? 0.04 : 0.10
+    return shape.strokeBorder(
+        LinearGradient(
+            colors: [.white.opacity(top), .white.opacity(bottom)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        ),
+        lineWidth: 0.75
+    )
+}
+
+/// Einheitlicher Press-Highlight-Wert für alle Stile — eine Zahl, kein Drift.
 ///
-/// Liquid Glass adapts to Reduce Transparency and Increase Contrast on its own for
-/// system controls, but a custom panel has to opt in — and on a map already busy
-/// compositing thousands of pins, the opaque path is also the cheaper one.
+/// `GroupedRowStyle`, `LegacyCardControlStyle` und `LegacyMapControlStyle` lesen
+/// alle diesen Wert (0.08). Skalierung steuert jeder Stil selbst (siehe unten).
+enum PressHighlight {
+    /// Primär-Tönung bei gedrücktem Zustand. Absichtlich dezent: lesbar, ohne Schmutz.
+    static let opacity: CGFloat = 0.08
+}
+
+/// Floating panels and content cards share continuous corners and the one rim
+/// above. The rim is static while the glass underneath stays interactive, which
+/// keeps co-located panels reading as one material instead of drifting apart.
 struct MapChromeModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -22,9 +50,15 @@ struct MapChromeModifier: ViewModifier {
 
     /// `accessibilityReduceTransparency` is read-only and the simulator cannot
     /// toggle it, so the harness forces the opaque path to verify it renders.
+    /// Cached: the environment lookup must not run per panel per frame.
+    #if DEBUG
+    private static let debugForceOpaque: Bool =
+        ProcessInfo.processInfo.environment["NACHBESUCH_REDUCE_TRANSPARENCY"] != nil
+    #endif
+
     private var prefersOpaque: Bool {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["NACHBESUCH_REDUCE_TRANSPARENCY"] != nil {
+        if Self.debugForceOpaque {
             return true
         }
         #endif
@@ -37,24 +71,22 @@ struct MapChromeModifier: ViewModifier {
         if prefersOpaque {
             content
                 .background(Color(uiColor: .secondarySystemBackground), in: shape)
-                .overlay { shape.strokeBorder(Color(uiColor: .separator), lineWidth: 0.5) }
-                .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+                .overlay { shape.strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5) }
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.30 : 0.12), radius: 12, y: 4)
         } else {
             content.compatGlass(
                 interactive: isInteractive,
                 in: shape,
                 role: role,
-                legacyShadowRadius: 8
+                legacyShadowRadius: 12
             )
             .overlay {
+                // iOS 26 glass only: on the legacy path `compatGlass` already drew
+                // its separator hairline, and a white rim over an opaque surface
+                // is the bright stroke the audit reports.
+                // Kanonisch: alle Glas-Zweige nutzen `glossyRim(for:colorScheme:)`.
                 if !LegacyChrome.isActive {
-                    shape.strokeBorder(
-                        LinearGradient(colors: [
-                            .white.opacity(colorScheme == .dark ? 0.22 : 0.6),
-                            .white.opacity(0.02)
-                        ], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.5
-                    )
-                    .allowsHitTesting(false)
+                    glossyRim(for: shape, colorScheme: colorScheme)
                 }
             }
         }
@@ -99,12 +131,13 @@ extension View {
     }
 }
 
-/// Content-layer card.
+/// One glass surface per card, with an inexpensive opaque iOS 18 fallback.
 ///
-/// Glass, but a quieter grade than the floating chrome: a card sits *in* the scroll
-/// view rather than over it, so it gets the material plus a hairline edge and a soft
-/// shadow to lift it off the backdrop. Flat `secondarySystemGroupedBackground` panels
-/// read as white boxes against the tinted backdrop these screens use.
+/// Schatten-Regel (einheitlich 12/4 Karten, 3/1 Controls):
+/// - `elevated: true` NUR wo die Karte schwebt — Banner, Chrome, Hero-Karten.
+/// - `elevated: false` für Listen-Zeilen und alles in scrollenden Stapeln: ein
+///   weicher Schatten pro Zeile ist ein Offscreen-Pass pro Zeile und macht langes
+///   Scrollen unruhig. Opaker Zweig dimmt den Schatten ebenfalls auf 0.
 struct ContentCardModifier: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -115,9 +148,15 @@ struct ContentCardModifier: ViewModifier {
     /// an offscreen pass per row, and it is what makes a long list scroll unevenly.
     let isElevated: Bool
 
+    /// Cached: the environment lookup must not run per card per frame.
+    #if DEBUG
+    private static let debugForceOpaque: Bool =
+        ProcessInfo.processInfo.environment["NACHBESUCH_REDUCE_TRANSPARENCY"] != nil
+    #endif
+
     private var prefersOpaque: Bool {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["NACHBESUCH_REDUCE_TRANSPARENCY"] != nil {
+        if Self.debugForceOpaque {
             return true
         }
         #endif
@@ -135,21 +174,22 @@ struct ContentCardModifier: ViewModifier {
             // list on an iPhone 11 pays that per card per frame.
             content
                 .background(Color(uiColor: .secondarySystemGroupedBackground), in: shape)
-                .overlay { shape.strokeBorder(Color(uiColor: .separator), lineWidth: 0.5) }
+                .overlay { shape.strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5) }
+                .shadow(
+                    color: .black.opacity(isElevated ? (colorScheme == .dark ? 0.30 : 0.12) : 0),
+                    radius: isElevated ? 12 : 0,
+                    y: isElevated ? 4 : 0
+                )
         } else {
+            // iOS 26 only: `LegacyChrome` takes the opaque branch above, so the
+            // glossy rim here can never land on an opaque surface.
+            // Kanonisch: selber `glossyRim` wie überall, kein Inline-Weiß.
             content
                 .compatGlass(interactive: isInteractive, in: shape)
-                // The rim is what makes a glass card read as an object rather than a
-                // lighter patch of background.
-                .overlay {
-                    shape.strokeBorder(
-                        .white.opacity(colorScheme == .dark ? 0.10 : 0.55),
-                        lineWidth: 0.66
-                    )
-                }
+                .overlay { glossyRim(for: shape, colorScheme: colorScheme) }
                 .shadow(
-                    color: .black.opacity(isElevated ? (colorScheme == .dark ? 0.30 : 0.07) : 0),
-                    radius: isElevated ? 10 : 0,
+                    color: .black.opacity(isElevated ? (colorScheme == .dark ? 0.30 : 0.12) : 0),
+                    radius: isElevated ? 12 : 0,
                     y: isElevated ? 4 : 0
                 )
         }
@@ -157,6 +197,9 @@ struct ContentCardModifier: ViewModifier {
 }
 
 extension View {
+    /// Wann `elevated` an oder aus gehört (Schatten 12/4, dunkel 0.30 / hell 0.12):
+    /// - `true`: Banner, schwebendes Chrome, Hero-Karten — alles, was über Inhalt floatet.
+    /// - `false`: Listen-Zeilen, Outcome-Buttons, alles in scrollenden Stapeln (Perf).
     func contentCard(
         cornerRadius: CGFloat = AppRadius.card,
         interactive: Bool = false,
@@ -173,6 +216,12 @@ extension View {
 }
 
 extension View {
+    /// Ein Panel *innerhalb* einer Karte — die EINZIGE Innenflächen-Füllung.
+    ///
+    /// - NUR für innere Blöcke (tertiär 0.5); niemals als Kartenfüllung selbst —
+    ///   Glas auf Glas wird matschig, darum trägt die Karte außen das Material.
+    /// - Ecken immer `AppRadius.control` (iOS 26: 18, iOS 18: 10), Stil `.continuous`.
+    /// - Kein Rim, kein Schatten: die umgebende Karte trägt beides.
     /// A panel *inside* a card. Glass on glass reads as mud, so an inner block gets
     /// a plain tinted fill and lets the card around it carry the material.
     func contentPanel(cornerRadius: CGFloat = AppRadius.control) -> some View {
@@ -180,6 +229,33 @@ extension View {
             Color(uiColor: .tertiarySystemFill).opacity(0.5),
             in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         )
+    }
+}
+
+/// Keep selection inside the glass edge. Both the inset and its reduced radius
+/// use the same geometry, so the ring stays concentric at every corner.
+///
+/// Fest: Tint 1/0, 1.5 pt, Inset 3 — kein Glow. Ein Glow wäre ein zweiter
+/// Blur-Pass pro selektierter Zeile; der Ring allein trägt die Auswahl.
+struct SelectionRing: ViewModifier {
+    let isSelected: Bool
+    let tint: Color
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .inset(by: 3)
+                .strokeBorder(tint.opacity(isSelected ? 1 : 0), lineWidth: 1.5)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+extension View {
+    func selectionRing(_ isSelected: Bool, tint: Color,
+                       cornerRadius: CGFloat = AppRadius.control) -> some View {
+        modifier(SelectionRing(isSelected: isSelected, tint: tint, cornerRadius: cornerRadius))
     }
 }
 
@@ -214,6 +290,11 @@ struct AppBackdrop: View {
     }
 
     private var glassGround: some View {
+        // Static washes only — no GeometryReader, no blur. The previous ground drew
+        // two radial fields through a full-screen blur, an offscreen pass the size
+        // of the screen recomposited behind the scrolling list. Flat gradients
+        // rasterise once (`drawingGroup`) and stay monochrome so no accent split
+        // can read as a second theme; the low contrast keeps the ground quiet.
         ZStack {
             Color(uiColor: .systemGroupedBackground)
             LinearGradient(
@@ -221,64 +302,25 @@ struct AppBackdrop: View {
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
-            // Two soft fields in the selected accent give glass something subtle to
-            // refract. Keeping both fields monochrome avoids the accidental red/blue
-            // split that made the app feel like two unrelated themes, while the low
-            // contrast keeps the backdrop quiet behind field data.
-            GeometryReader { proxy in
-                let side = max(proxy.size.width, proxy.size.height)
-                ZStack {
-                    field(accent, opacity: colorScheme == .dark ? 0.18 : 0.08)
-                        .frame(width: side * 0.95, height: side * 0.95)
-                        .offset(x: -side * 0.28, y: -side * 0.20)
-                    field(accent, opacity: colorScheme == .dark ? 0.10 : 0.045)
-                        .frame(width: side * 0.85, height: side * 0.85)
-                        .offset(x: side * 0.34, y: side * 0.30)
-                }
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .blur(radius: 60)
-            }
-            .allowsHitTesting(false)
+            LinearGradient(
+                colors: [.clear, accent.opacity(colorScheme == .dark ? 0.06 : 0.03)],
+                startPoint: .topTrailing,
+                endPoint: .bottomLeading
+            )
         }
         .ignoresSafeArea()
-    }
-
-    private func field(_ tint: Color, opacity: Double) -> some View {
-        Circle().fill(
-            RadialGradient(
-                colors: [tint.opacity(opacity), tint.opacity(0)],
-                center: .center,
-                startRadius: 0,
-                endRadius: 320
-            )
-        )
+        .allowsHitTesting(false)
+        .drawingGroup()
     }
 }
 
 // MARK: - Grouped section surface
 
-/// One street and its addresses, drawn as a single container.
+/// One glossy container per street, collapsed or expanded. iOS 18 and
+/// accessibility opacity settings retain the inexpensive solid fill.
 ///
-/// Apple's guidance for iOS 26 is explicit that Liquid Glass belongs to the
-/// navigation layer — toolbars, tab bars, floating controls — and never to content;
-/// a glass effect on every list row is called out by name as the way to overuse it.
-/// The comment at the top of this file said the same thing already, and then
-/// `contentCard` put glass on all 268 address rows anyway.
-///
-/// A material, and **not** `glassEffect` — tried, photographed, reverted.
-///
-/// A `listRowBackground` is per row, so "one glass surface per street" is not what
-/// that spelling buys: it is one glass element per *row*, and a dozen of them
-/// sampling and re-blurring inside the list's `GlassEffectContainer` compounds into
-/// a muddy wash that leaves the house numbers barely legible. That is the "super
-/// weird interface" Apple's guidance describes, and it looks exactly as bad as the
-/// guidance says.
-///
-/// The reason this surface read as flat grey before was never the material. It was
-/// the backdrop: a material is a lens, and `AppBackdrop` was very nearly one colour,
-/// so there was nothing to bring into focus. The fields now behind it are what make
-/// this read as glass, and they cost one blurred gradient for the whole screen
-/// instead of a sample per row.
+/// Glas-Zweig trägt denselben `glossyRim` wie Karten/Chrome (kein zweites Rim),
+/// opaker Zweig dieselbe Separator-Haarlinie (0.6, 0.5 pt) wie überall.
 struct SectionSurface: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -292,9 +334,15 @@ struct SectionSurface: View {
     /// so the gap between two streets cannot drift from the corner that sits in it.
     var topGap: CGFloat = 0
 
+    /// Cached: the environment lookup must not run per section per frame.
+    #if DEBUG
+    private static let debugForceOpaque: Bool =
+        ProcessInfo.processInfo.environment["NACHBESUCH_REDUCE_TRANSPARENCY"] != nil
+    #endif
+
     private var prefersOpaque: Bool {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["NACHBESUCH_REDUCE_TRANSPARENCY"] != nil {
+        if Self.debugForceOpaque {
             return true
         }
         #endif
@@ -305,29 +353,27 @@ struct SectionSurface: View {
         let shape = sectionShape(isFirst: isFirst, isLast: isLast)
         Group {
             if prefersOpaque || LegacyChrome.isActive {
+                // Opak: gleiche Haarlinie wie Karten/Chrome — sonst steht die
+                // Sektion rahmenlos neben berandeten Karten.
                 shape.fill(Color(uiColor: .secondarySystemGroupedBackground))
-            } else {
-                // Match Archive's regular material grade, but keep it strictly in
-                // the background. `glassEffect` is safe on Archive's card content;
-                // as a List row background it becomes an effect layer over the row
-                // and blurs the address text behind it.
-                Color.clear
-                    .background(.regularMaterial, in: shape)
                     .overlay {
-                        shape.strokeBorder(
-                            .white.opacity(colorScheme == .dark ? 0.10 : 0.55),
-                            lineWidth: 0.66
-                        )
+                        shape.strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5)
                     }
+            } else {
+                // One glossy container per street, collapsed or expanded. The old
+                // split (glass when shut, ultraThin when open) is what made an open
+                // street go flat, and two stacked materials are what drew the seam
+                // across the middle.
+                // Kanonisch: selber Glanz wie Karten/Chrome, kein Inline-Weiß.
+                Color.clear
+                    .compatGlass(interactive: false, in: shape)
+                    .overlay {
+                        glossyRim(for: shape, colorScheme: colorScheme)
+                    }
+
             }
         }
-        // Structural list updates are intentionally atomic. Animating these radii
-        // independently from UIKit's row removal creates a transient pill or a clipped
-        // bottom edge while the old rows are being recycled. The chevron and progress
-        // controls still provide motion; the container shape simply resolves to the
-        // correct geometry for its current state.
         .padding(.top, topGap)
-        .padding(.horizontal, AppSpacing.regular)
     }
 }
 
@@ -349,11 +395,14 @@ func sectionShape(isFirst: Bool, isLast: Bool) -> UnevenRoundedRectangle {
 
 /// Press feedback for a row that shares a surface with its neighbours.
 ///
-/// `PressableRowStyle` scales its label to 0.98, which is right for a card floating
-/// on its own and wrong here: a row inside a continuous container visibly tears away
-/// from the rows above and below it, and the container's edge ripples where the
-/// scaled row no longer reaches it. A grouped row highlights instead — what a native
-/// `List` row does, and the only press feedback that leaves the geometry alone.
+/// Gegenstück zu `PressableRowStyle` (FilterBar, freischwebende Karten-Zeilen):
+/// - `GroupedRowStyle`: NUR Highlight (`PressHighlight.opacity` = 0.08), KEIN Scale.
+///   Skalieren reißt die Zeile aus dem durchgehenden Container (Kanten wellen sich).
+///   Was eine native `List`-Zeile tut — Geometrie bleibt unangetastet.
+/// - `PressableRowStyle`: Scale 0.98 + Dimmen — richtig für frei floatende Karten,
+///   falsch im Container.
+/// - Beide: kein Scale unter Reduce Motion, Animation immer `.appFeedback` (.24 snappy).
+/// - Opazität überall 0.08 (`PressHighlight`), kein Sonderwert.
 struct GroupedRowStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -367,7 +416,8 @@ struct GroupedRowStyle: ButtonStyle {
         configuration.label
             .background {
                 sectionShape(isFirst: isFirst, isLast: isLast)
-                    .fill(.primary.opacity(configuration.isPressed ? 0.08 : 0))
+                    // Einheitlich 0.08 (`PressHighlight`), kein Scale — siehe Typ-Doku.
+                    .fill(.primary.opacity(configuration.isPressed ? PressHighlight.opacity : 0))
                     .padding(.top, topGap)
                     .padding(.horizontal, AppSpacing.regular)
                     .allowsHitTesting(false)
@@ -377,17 +427,22 @@ struct GroupedRowStyle: ButtonStyle {
 }
 
 extension View {
-    /// The hairline between two rows of a section, inset to the text column so it
-    /// starts where the words start — the iOS convention, and the thing that makes a
-    /// run of rows read as one list instead of as separate slabs.
+    /// Die Haarlinie zwischen zwei Zeilen einer Sektion — KANONISCH.
+    ///
+    /// - Liegt an der Unterkante, beginnt bei `leading` (Standard `AppLayout.textInset`,
+    ///   also Textspalte — iOS-Konvention: Zeilen lesen sich als eine Liste).
+    /// - Gewicht immer 0.5 pt, Farbe `.separator`.
+    /// - KEIN blanker `Divider` / `Rectangle` an Call-Sites: Einzug und Gewicht würden
+    ///   sonst von Screen zu Screen driften. Wer eine Sektions-Trennlinie braucht,
+    ///   nutzt diese Funktion (ggf. mit eigenem `leading`).
     @ViewBuilder
-    func rowSeparator(_ isVisible: Bool) -> some View {
+    func rowSeparator(_ isVisible: Bool, leading: CGFloat = AppLayout.textInset) -> some View {
         overlay(alignment: .bottom) {
             if isVisible {
                 Rectangle()
                     .fill(.separator)
                     .frame(height: 0.5)
-                    .padding(.leading, AppLayout.textInset)
+                    .padding(.leading, leading)
             }
         }
     }

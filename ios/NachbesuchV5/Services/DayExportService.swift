@@ -321,9 +321,17 @@ enum DayExportService {
     }
 
     private static func legacyDateLabel(for gebiet: Gebiet, scope: DayScope) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "de_AT")
-        formatter.dateFormat = "dd.MM.yyyy"
+        // Shared static: the old code allocated + locale-parsed a DateFormatter
+        // on every export.
+        struct Cache {
+            static let formatter: DateFormatter = {
+                let f = DateFormatter()
+                f.locale = Locale(identifier: "de_AT")
+                f.dateFormat = "dd.MM.yyyy"
+                return f
+            }()
+        }
+        let formatter = Cache.formatter
         switch scope {
         case .day1:
             return formatter.string(from: gebiet.day1Date)
@@ -818,12 +826,14 @@ nonisolated enum ExportScratch {
     }
 
     /// Removes exports from previous launches.
-    static func sweep() {
+    static func sweep(olderThan launchTime: Date) {
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: root,
-            includingPropertiesForKeys: nil
+            includingPropertiesForKeys: [.creationDateKey]
         ) else { return }
         for url in contents {
+            guard let created = try? url.resourceValues(forKeys: [.creationDateKey]).creationDate,
+                  created < launchTime else { continue }
             try? FileManager.default.removeItem(at: url)
         }
     }

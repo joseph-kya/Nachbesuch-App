@@ -60,7 +60,9 @@ enum AppLayout {
 }
 
 enum AppSpacing {
+    /// Enge Gruppe (z. B. `CompatGlassContainer` für verschmelzende Chips).
     static let tight: CGFloat = 6
+    /// Standard-Abstand co-located Panels / Container-Spacing.
     static let snug: CGFloat = 10
     static let regular: CGFloat = 16
     static let loose: CGFloat = 24
@@ -101,7 +103,13 @@ enum AppTouch {
 }
 
 extension View {
-    /// Guarantees a 44 pt hit target without changing how the control looks.
+    /// Garantiert 44 pt Trefferfläche, ohne die Optik zu ändern.
+    ///
+    /// - Mindestmaß für JEDE tippbare Fläche (HIG); visuell kleine Glyph-Buttons
+    ///   (z. B. Ellipse auf Karte, `LegacyCardControlStyle`) bekommen so trotzdem
+    ///   ein verlässliches Ziel — auch unter Dynamic Type / AX-Größen.
+    /// - Form mitgeben, wenn die Trefferfläche der sichtbaren Form folgen soll
+    ///   (Kreis für runde Controls), sonst Rechteck.
     func tappable(_ shape: some Shape = Rectangle()) -> some View {
         frame(minWidth: AppTouch.minimum, minHeight: AppTouch.minimum)
             .contentShape(shape)

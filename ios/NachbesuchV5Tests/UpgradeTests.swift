@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UserNotifications
 @testable import NachbesuchV5
 
 @Suite("Upgrade reliability contract")
@@ -60,4 +61,21 @@ struct UpgradeTests {
         #expect(plan.overflow == 100 - ReminderService.revisitBudget)
         #expect(plan.scheduledCandidates.first?.address == "Teststraße 0")
     }
+    @Test func reminderRepairDetectsChangedTimeAndAddress() {
+        let houseID = UUID()
+        let doorID = UUID()
+        let date = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        func request(_ address: String, _ offset: TimeInterval) -> UNNotificationRequest {
+            ReminderService.revisitRequest(.init(
+                houseID: houseID, doorID: doorID, day: 2,
+                address: address, doorLabel: "Tür 2", isApartmentBuilding: true,
+                date: date.addingTimeInterval(offset)
+            ))
+        }
+        let original = request("Teststraße 1", 0)
+        #expect(ReminderService.sameRevisitRequest(original, request("Teststraße 1", 0)))
+        #expect(!ReminderService.sameRevisitRequest(original, request("Teststraße 1", 3600)))
+        #expect(!ReminderService.sameRevisitRequest(original, request("Teststraße 2", 0)))
+    }
+
 }

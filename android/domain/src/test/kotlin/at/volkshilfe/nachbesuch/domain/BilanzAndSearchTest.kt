@@ -58,6 +58,15 @@ class BilanzAndSearchTest {
     private fun summaryFor(name: String): at.volkshilfe.nachbesuch.domain.stats.TerritorySummary =
         TerritorySummarizer.summarize(listOf(Gebiet(id = "G", name = name)), emptyList()).first()
 
+    @Test fun abblockerFindsExistingEarlyNoResults() {
+        val areas = TerritorySummarizer.summarize(
+            listOf(Gebiet(id = "G1", name = "Testgebiet")),
+            listOf(house("Test 1", listOf(DoorResult("D", "Haushalt", VisitOutcome.EARLY_NO, 1L))))
+        )
+        assertEquals(areas, ArchiveSearchEngine.search("Abblocker", areas))
+        assertTrue(ArchiveSearchEngine.search("Abblocker", listOf(summaryFor("Leer"))).isEmpty())
+    }
+
     @Test fun keywordSearchMatchesOutcomeWords() {
         val open = house("Offenstraße 1", listOf(DoorResult("D", "Haushalt")), gebietID = "G")
         val done = house(

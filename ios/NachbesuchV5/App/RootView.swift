@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import UIKit
 
 enum AppTab: Hashable {
     case map, list, archive
@@ -32,6 +33,7 @@ struct RootView: View {
     /// not reproduce in a simulator, which has no jetsam limit and borrows the Mac's
     /// memory. The reconciliation now fetches what it needs, uses it, and lets it go.
     @State private var saveRevision = 0
+    @State private var initializationComplete = false
 
     @AppStorage("migration.legacyDaysToGebiete.v3") private var didMigrateLegacyDays = false
     /// Distinguishes "brand new install" from "the user deliberately deleted
@@ -59,13 +61,29 @@ struct RootView: View {
     /// and two services would mean two GPS sessions.
     @State private var location = LocationService()
 
-    @State private var tab: AppTab = {
-        #if DEBUG
+    #if DEBUG
+    /// Einmalig cachen: Environment-Dict pro Body wäre Dauer-Overhead.
+    private static let debugInitialTab: AppTab = {
         switch ProcessInfo.processInfo.environment["NACHBESUCH_TAB"] {
         case "list": return .list
         case "archive": return .archive
         default: return .map
         }
+    }()
+    private static let debugTabStressCount: Int? = {
+        guard let raw = ProcessInfo.processInfo.environment["NACHBESUCH_TAB_STRESS"],
+              let switches = Int(raw), switches > 0 else { return nil }
+        return switches
+    }()
+    private static let debugTabStressInterval: Int = {
+        ProcessInfo.processInfo.environment["NACHBESUCH_TAB_STRESS_MS"]
+            .flatMap(Int.init) ?? 350
+    }()
+    #endif
+
+    @State private var tab: AppTab = {
+        #if DEBUG
+        return Self.debugInitialTab
         #else
         return .map
         #endif
@@ -134,15 +152,25 @@ struct RootView: View {
             }
             #endif
             ensureSelection()
-            // Before the reminder reconciliation: both the safety backup and
-            // the tour setup run off the main actor and must not wait on a
-            // system alert the user hasn't answered yet. The backup reads the
-            // migrated, seeded store — never the empty one the scene task
-            // would see a moment earlier.
-            await AutoBackupService(modelContainer: modelContext.container).runIfNeeded()
-            // The reconciliation awaits the notification authorization, which
-            // on a fresh install waits for a system alert the user hasn't
-            // answered yet. Nothing launch-critical may sit behind it.
+            initializationComplete = true
+        }
+        .task(id: initializationComplete, priority: .background) {
+            guard initializationComplete else { return }
+            // Sicherung erst 5 s nach dem ersten Karten-Refresh: Der Pin-Aufbau
+            // gewinnt die CPU, die Sicherung läuft danach im Hintergrund.
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            let container = modelContext.container
+            let backup = Task.detached(priority: .background) {
+                await AutoBackupService(modelContainer: container).runIfNeeded()
+            }
+            await withTaskCancellationHandler {
+                await backup.value
+            } onCancel: {
+                backup.cancel()
+            }
+            guard !Task.isCancelled else { return }
+            // Repair notifications only after initialization and backup finish.
             await reconcileReminders()
         }
         #if DEBUG
@@ -162,18 +190,16 @@ struct RootView: View {
         // Then watch `ps -o %cpu=,rss= -p <pid>`: it has to fall to zero once the run
         // ends. A freeze shows up as CPU that never comes down.
         .task {
-            guard let raw = ProcessInfo.processInfo.environment["NACHBESUCH_TAB_STRESS"],
-                  let switches = Int(raw), switches > 0
+            guard let switches = Self.debugTabStressCount
             else { return }
-            let interval = ProcessInfo.processInfo.environment["NACHBESUCH_TAB_STRESS_MS"]
-                .flatMap(Int.init) ?? 350
+            let interval = Self.debugTabStressInterval
             let sequence: [AppTab] = [.list, .archive, .map]
             for index in 0..<switches {
                 try? await Task.sleep(for: .milliseconds(interval))
                 guard !Task.isCancelled else { return }
                 tab = sequence[index % sequence.count]
             }
-            print("[TabStress] completed \(switches) switches")
+            FileHandle.standardOutput.write(Data("[TabStress] completed \(switches) switches\n".utf8))
         }
         #endif
         .onChange(of: gebiete.count) { _, _ in
@@ -197,11 +223,19 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
             saveRevision &+= 1
         }
-        .task(id: saveRevision) {
+        // The 260-entry pin bitmap cache never shrank (purge had zero callers).
+        // Reclaim it under pressure instead of dying with tiles + export alive.
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            PinArtCache.shared.purge()
+        }
+        .task(id: saveRevision, priority: .utility) {
             guard scenePhase == .active, saveRevision > 0 else { return }
             // Coalesce a burst of writes — a bulk import commits many times in a
             // row, and reconciling after each one re-reads the whole store.
-            try? await Task.sleep(for: .milliseconds(600))
+            // 2.5 s, utility: the tapped door's own scheduleRevisit is instant;
+            // this is only repair for overflow/capacity, so it must not win CPU
+            // over the next tap or scroll.
+            try? await Task.sleep(for: .milliseconds(2500))
             guard !Task.isCancelled else { return }
             await reconcileReminders()
         }
@@ -218,7 +252,7 @@ struct RootView: View {
     private func reconcileReminders() async {
         let candidates: [RevisitReminderCandidate]
         do {
-            let reader = HouseReadService(modelContainer: modelContext.container)
+            let reader = await HouseReadService.background(container: modelContext.container)
             candidates = try await reader.revisitCandidates()
         } catch is CancellationError {
             return
@@ -280,19 +314,40 @@ struct RootView: View {
             didChange = true
         }
 
-        // Houses written before territories existed carry only the legacy key.
-        let orphans: [House]
-        do {
-            orphans = try modelContext.fetch(
-                FetchDescriptor<House>(predicate: #Predicate { $0.gebietID == nil })
-            )
-        } catch {
-            notices.report(error, context: "Alte Hauszuordnungen konnten nicht geprüft werden")
-            return
-        }
-        for house in orphans where house.dayID != nil {
-            house.gebietID = house.dayID
-            didChange = true
+        // Häuser ohne Gebiet_key: Nur IDs im Hintergrund sammeln, Zuordnung
+        // und Save bleiben auf Main — der Scan blockiert sonst den Start.
+        let container = modelContext.container
+        let orphanLinks: [(houseID: UUID, dayID: UUID)] = await Task.detached(priority: .utility) {
+            let backgroundContext = ModelContext(container)
+            let descriptor = FetchDescriptor<House>(predicate: #Predicate { $0.gebietID == nil })
+            guard let houses = try? backgroundContext.fetch(descriptor) else { return [] }
+            var links: [(UUID, UUID)] = []
+            links.reserveCapacity(houses.count)
+            for house in houses {
+                if let dayID = house.dayID {
+                    links.append((house.id, dayID))
+                }
+            }
+            return links
+        }.value
+        guard !Task.isCancelled else { return }
+        if !orphanLinks.isEmpty {
+            // Gebündelt nach IDs statt Vollscan auf Main — wenige Zeilen, indexiert.
+            let ids = orphanLinks.map(\.houseID)
+            do {
+                let descriptor = FetchDescriptor<House>(predicate: #Predicate { ids.contains($0.id) })
+                let orphans = try modelContext.fetch(descriptor)
+                let dayByHouse = Dictionary(uniqueKeysWithValues: orphanLinks.map { ($0.houseID, $0.dayID) })
+                for house in orphans {
+                    if let dayID = dayByHouse[house.id] {
+                        house.gebietID = dayID
+                        didChange = true
+                    }
+                }
+            } catch {
+                notices.report(error, context: "Alte Hauszuordnungen konnten nicht geprüft werden")
+                return
+            }
         }
 
         guard didChange else {

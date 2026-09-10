@@ -35,6 +35,9 @@ struct FilterBar: View {
     var contextLabel: String
     var onSelect: (String) -> Void
     var onHelp: (() -> Void)?
+    /// Suche läuft (Rohtext ≠ Debounce): zeigt einen 6-pt-Punkt am Zeilenende.
+    /// Immer im Layout, nur die Deckkraft wechselt — kein Layoutsprung.
+    var isSearching = false
 
     private var selectedID: String? { chips.first(where: \.isSelected)?.id }
 
@@ -83,6 +86,7 @@ struct FilterBar: View {
                     if !LegacyChrome.isActive {
                         helpButton
                     }
+                    searchingDot
                 }
                 .padding(.horizontal, 2)
                 // Liquid Glass grows a few points while pressed. Reserve that
@@ -122,8 +126,8 @@ struct FilterBar: View {
 
     @ViewBuilder
     private func chipButton(_ chip: FilterChip) -> some View {
-        // Only the glyph carries the status colour when unselected — tinting the
-        // whole row of chips made every filter shout at once.
+        // Nur das Icon trägt die Statusfarbe bei Abwahl — alle Chips voll
+        // getönt schreien gleichzeitig.
         let label = HStack(spacing: 5) {
             Image(systemName: chip.systemImage)
                 .imageScale(.small)
@@ -131,10 +135,7 @@ struct FilterBar: View {
             Text(chip.title)
                 .fixedSize(horizontal: true, vertical: false)
             if let count = chip.count {
-                Text("\(count)")
-                    .monospacedDigit()
-                    .font(.caption.weight(.bold))
-                    .contentTransition(.numericText(value: Double(count)))
+                ChipCount(count: count)
             }
         }
         .font(.subheadline.weight(.semibold))
@@ -156,6 +157,44 @@ struct FilterBar: View {
             .accessibilityLabel("\(contextLabel): \(chip.title)")
             .accessibilityValue(chip.count.map { "\($0)" } ?? "")
             .accessibilityAddTraits(chip.isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// Sucht-Punkt: reserviert immer 6 pt, blendet nur die Deckkraft — still,
+    /// kein Spinner, kein Schieben der Chips wenn die Debounce einholt.
+    private var searchingDot: some View {
+        Circle()
+            .fill(.secondary)
+            .frame(width: 6, height: 6)
+            .opacity(isSearching ? 1 : 0)
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: isSearching)
+            .accessibilityHidden(true)
+    }
+}
+
+/// Zähler im Chip: morpht per NumericText und poppt kurz auf.
+///
+/// Eigene View, damit das Pop-State nicht im Chip-Modell landet: `FilterChip`
+/// bleibt ein reiner Wert für den Bar-Diff. Pop nur bei Änderung, ohne
+/// Reduce Motion nur der Zahlenwechsel.
+private struct ChipCount: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let count: Int
+    @State private var pop: CGFloat = 1
+
+    var body: some View {
+        Text("\(count)")
+            .monospacedDigit()
+            .font(.caption.weight(.bold))
+            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(count)))
+            .scaleEffect(pop)
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: count)
+            .onChange(of: count) { _, _ in
+                // Bereits der Morph trägt; das Pop ist nur die Kirsche.
+                guard !reduceMotion else { return }
+                pop = 0.8
+                withAnimation(.appFeedback(reduceMotion: false)) { pop = 1 }
+            }
+            .accessibilityHidden(true)
     }
 }
 

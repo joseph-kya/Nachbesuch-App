@@ -53,7 +53,14 @@ final class PinArtCache {
 
     private var cache: [Key: UIImage] = [:]
     private var order: [Key] = []
-    private let limit = 260
+    /// Deckel gegen pathologische Datensätze (siehe Typ-Doku). Als Init-Parameter,
+    /// damit Tests die Verdrängung mit wenigen Bitmaps belegen können — Standard
+    /// bleibt 260.
+    private let limit: Int
+
+    init(limit: Int = 260) {
+        self.limit = limit
+    }
 
     // MARK: Geometry
 
@@ -133,6 +140,63 @@ final class PinArtCache {
     func purge() {
         cache.removeAll(keepingCapacity: true)
         order.removeAll(keepingCapacity: true)
+    }
+
+    /// Rückschnitt bei Speicherdruck (Memory Warning).
+    ///
+    /// Wave-4-Absprache mit dem Map-Agenten: EIN Trimmpfad, keine Duplikate —
+    /// die Logik trägt `trim(keeping:)` (dort hängt auch der echte Aufrufer in
+    /// `MapScreen`), diese Methode ist nur der spezifizierte Alias und reicht
+    /// geklemmt durch. `purge()` bleibt der harte Schnitt beim Hintergrundgang.
+    func clear(keeping count: Int = 0) {
+        trim(keeping: max(count, 0))
+    }
+
+    /// Behält die zuletzt genutzten `keeping` Bitmaps, verwirft den Rest.
+    /// Aufruf bei Memory Warning — Vorwärmen/Render füllen bei Bedarf nach.
+    func trim(keeping count: Int = 20) {
+        guard order.count > count else { return }
+        let drop = order.count - count
+        for key in order.prefix(drop) { cache.removeValue(forKey: key) }
+        order.removeFirst(drop)
+    }
+
+    // MARK: Vorwärmen
+
+    /// Wärmt die häufigsten Bitmaps im Hintergrund vor (Start, Utility-QoS).
+    /// Full/Compact/Dot × Outcomes × Selektion × Hell/Dunkel bleibt weit unter
+    /// dem Limit (260) — der erste Schwenk zahlt so keinen Render-Stau.
+    /// Dot-Tier bewusst mit leerem Text (showsGlyph false bleibt).
+    nonisolated static func prewarm() {
+        Task.detached(priority: .utility) {
+            await MainActor.run {
+                PinArtCache.shared.warmCommonArtwork()
+            }
+        }
+    }
+
+    /// Nur die Standardvarianten: Emoji je Outcome, keine Zähler — Zähler
+    /// streuen zu stark („3/8", „12/124") und werden bei Bedarf nachgerendert.
+    private func warmCommonArtwork() {
+        let outcomes: [VisitOutcome?] = [nil] + VisitOutcome.allCases
+        let scales: [PinScale] = [.full, .compact, .dot]
+        for outcome in outcomes {
+            for scale in scales {
+                for isSelected in [false, true] {
+                    for isDark in [false, true] {
+                        let text = scale.showsGlyph ? (outcome?.emoji ?? "•") : ""
+                        let key = Key(
+                            outcome: outcome,
+                            text: text,
+                            isSelected: isSelected,
+                            isDark: isDark,
+                            scale: scale
+                        )
+                        _ = pinImage(for: key)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: Rendering

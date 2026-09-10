@@ -29,7 +29,7 @@ enum class VisitOutcome {
 
     val germanTitle: String get() = when (this) {
         NOT_HOME -> "Niemand da"
-        EARLY_NO -> "Frühes Nein"
+        EARLY_NO -> "Abblocker"
         LATE_NO -> "Spätes Nein"
         JOINED -> "Dabei"
         LATER -> "Später"
@@ -38,7 +38,7 @@ enum class VisitOutcome {
     /** Compact form for chips and tight rows. */
     val shortTitle: String get() = when (this) {
         NOT_HOME -> "Niemand"
-        EARLY_NO -> "Früh"
+        EARLY_NO -> "Abblocker"
         LATE_NO -> "Spät"
         JOINED -> "Dabei"
         LATER -> "Später"

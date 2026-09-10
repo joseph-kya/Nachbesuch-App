@@ -7,6 +7,7 @@ import SwiftUI
 /// colour-blind user cannot reliably separate at 12 pt.
 struct OutcomeButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .largeTitle) private var glyphSize: CGFloat = 30
 
     let outcome: VisitOutcome
@@ -17,27 +18,24 @@ struct OutcomeButton: View {
         Button(action: action) {
             VStack(spacing: 5) {
                 Text(outcome.emoji)
-                    .font(.system(size: glyphSize))
+                    .font(.system(size: min(glyphSize, 48)))
                     .scaleEffect(isSelected && !reduceMotion ? 1.08 : 1)
                 Text(outcome.title)
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1, reservesSpace: true)
                     .multilineTextAlignment(.center)
                 Text(outcome.explanation)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2, reservesSpace: true)
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
             .padding(.horizontal, 8)
-            .background {
-                RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                    .fill(isSelected ? AnyShapeStyle(StatusChipFill(outcome.tint)) : AnyShapeStyle(Color(uiColor: .tertiarySystemFill)))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                    .strokeBorder(isSelected ? outcome.tint : .clear, lineWidth: 2)
-            }
+            .contentCard(cornerRadius: AppRadius.control, elevated: false)
+            .selectionRing(isSelected, tint: outcome.tint)
+            .contentShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
         }
         // Not `.plain`: `.plain` applies no styling at all to a custom label, so
         // these tiles had no pressed state — the only feedback was the model write
@@ -89,14 +87,9 @@ struct LaterButton: View {
             .frame(maxWidth: .infinity, minHeight: AppTouch.minimum, alignment: .leading)
             .padding(.vertical, 8)
             .padding(.horizontal, 12)
-            .background {
-                RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                    .fill(isSelected ? AnyShapeStyle(StatusChipFill(outcome.tint)) : AnyShapeStyle(Color(uiColor: .tertiarySystemFill)))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                    .strokeBorder(isSelected ? outcome.tint : .clear, lineWidth: 2)
-            }
+            .contentCard(cornerRadius: AppRadius.control, elevated: false)
+            .selectionRing(isSelected, tint: outcome.tint)
+            .contentShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
         }
         // Not `.plain`: `.plain` applies no styling at all to a custom label, so
         // these tiles had no pressed state — the only feedback was the model write
