@@ -91,6 +91,8 @@ struct GebietEditorSheet: View {
                         .lineLimit(2...6)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background { AppBackdrop() }
             .navigationTitle(isEditing ? "Gebiet bearbeiten" : "Neues Gebiet")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

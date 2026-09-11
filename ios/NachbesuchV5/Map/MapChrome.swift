@@ -25,13 +25,11 @@ struct MapSummaryCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.headline)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                     Text(subtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                     // Unsicherer Fix: Genauigkeit in der Kopfzeile (statt teurer
                     // Puck-Annotation), RM-sicher nur Opazität, kein Versatz.
                     if let accuracyText {
@@ -160,18 +158,29 @@ struct StatStrip: View {
 
 /// The Gesamt / Tag 1 / Tag 2 switch, written once instead of three times.
 struct DayScopePicker: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Binding var scope: DayScope
 
     var body: some View {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                picker.pickerStyle(.menu)
+            } else {
+                picker.pickerStyle(.segmented)
+            }
+        }
+        .sensoryFeedback(.selection, trigger: scope)
+        .accessibilityLabel("Angezeigter Kampagnentag")
+    }
+
+    private var picker: some View {
         Picker("Zeitraum", selection: $scope) {
             ForEach(DayScope.allCases) { value in
                 Text(value.title).tag(value)
             }
         }
-        .pickerStyle(.segmented)
-        .sensoryFeedback(.selection, trigger: scope)
-        .accessibilityLabel("Angezeigter Kampagnentag")
     }
+
 }
 
 // MARK: - Action bar
@@ -420,7 +429,6 @@ struct BoundaryDrawingBar: View {
     let onMoveSelected: () -> Void
     let onSave: () -> Void
     /// Zählt ungültige Speicher-Taps für die einmalige Fehlerhaptik.
-    @State private var invalidTaps = 0
 
     var body: some View {
         VStack(spacing: AppSpacing.snug) {
@@ -507,24 +515,20 @@ struct BoundaryDrawingBar: View {
                     .compatGlassID("map.drawAdd", in: namespace)
                 }
 
-                // Speichern braucht ≥3 Punkte: kein .disabled (schluckt den Tap),
-                // sondern dimmen + Fehlerhaptik — subtil, ohne Lageversatz.
+                // Saving becomes available once the boundary has three points.
                 Button {
-                    if pointCount < 3 { invalidTaps &+= 1 } else { onSave() }
+                    onSave()
                 } label: {
                     Image(systemName: "checkmark").frame(width: 24, height: 24)
                 }
-                .compatGlassButton(prominent: true)
+                .compatGlassButton(role: .map)
                 .controlSize(.large)
                 .buttonBorderShape(.circle)
                 // Prominent circles need the clip or the glass leaves artifacts
                 // at the rim; the wide pills keep the automatic shape.
                 .clipShape(Circle())
                 .tint(accent)
-                .opacity(pointCount < 3 ? 0.5 : 1)
-                // Einmalige Fehlerhaptik nur im ungültigen Pfad; gültig meldet
-                // weiterhin den Erfolgsstoß aus dem Screen — kein Doppel.
-                .sensoryFeedback(.error, trigger: invalidTaps)
+                .disabled(pointCount < 3)
                 .compatGlassID("map.drawSave", in: namespace)
                 // Einzel-ID ohne Partner — materialisieren statt matchen.
                 .standaloneGlassTransition(reduceMotion: reduceMotion)
@@ -638,8 +642,6 @@ struct MapGuideCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAccent) private var accent
     let namespace: Namespace.ID
-    let onAddHouse: () -> Void
-    let onImport: () -> Void
     let onDismiss: () -> Void
 
     var body: some View {
@@ -650,7 +652,7 @@ struct MapGuideCard: View {
                         .font(.headline)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
-                    Text("Karte auf deine Straße schieben und das erste Haus erfassen. Das Gebiet einzeichnen kannst du im Menü daneben.")
+                    Text("Bewege die Karte zu deiner Straße und tippe unten auf „Haus hinzufügen“. Im Kartenmenü kannst du dein Gebiet einzeichnen und Häuser laden.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -668,27 +670,7 @@ struct MapGuideCard: View {
                 .accessibilityHint("Blendet diese Einführung aus")
             }
 
-            VStack(spacing: AppSpacing.tight) {
-                Button(action: onAddHouse) {
-                    Label("Haus hinzufügen", systemImage: "plus")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity, minHeight: AppTouch.minimum)
-                }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-                .tint(accent)
-                .accessibilityHint("Erfasst ein Haus an der Kartenmitte")
 
-                Button(action: onImport) {
-                    Label("Gebiet importieren", systemImage: "square.and.arrow.down")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity, minHeight: AppTouch.minimum)
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .accessibilityHint("Lädt Häuser aus den Kartendaten")
-            }
-            .accessibilitySortPriority(1)
         }
         .padding(AppSpacing.regular)
         .mapChrome()
@@ -703,11 +685,15 @@ struct MapGuideCard: View {
 /// Warnt bei ungefährer Position: Entfernungen und Puck sind ungenau.
 /// Glas über der Karte, Einzug per appBanner, Hilfetaste öffnet Einstellungen.
 struct MapAccuracyBanner: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.appAccent) private var accent
     let onHelp: () -> Void
 
     var body: some View {
-        HStack(spacing: AppSpacing.snug) {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: AppSpacing.snug))
+            : AnyLayout(HStackLayout(spacing: AppSpacing.snug))
+        layout {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
                 .font(.headline)
@@ -732,7 +718,7 @@ struct MapAccuracyBanner: View {
             .accessibilitySortPriority(2)
             // Direktsprung in die Einstellungen (simpler Open, kein Snooze bis
             // zum nächsten Start) — Label nennt die Wirkung, nicht „Hilfe".
-            Button("Genauigkeit verbessern", action: onHelp)
+            Button("Einstellungen", action: onHelp)
                 .font(.subheadline.weight(.semibold))
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
@@ -816,18 +802,7 @@ private struct LegacyPreviewSurface: ViewModifier {
         } else {
             content
                 .compatGlass(interactive: false, in: shape, role: .map)
-                // Einheitliche Glanzkante: weiß 0.34→0.04, 0.75 pt — gleiche
-                // Sprache wie die übrigen Kartenflächen, kein zweites Rim.
-                .overlay {
-                    shape.strokeBorder(
-                        LinearGradient(
-                            colors: [.white.opacity(0.34), .white.opacity(0.04)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 0.75
-                    )
-                }
+                .overlay { glossyRim(for: shape, colorScheme: colorScheme) }
                 // Kartenschatten: dunkel 0.30 / hell 0.12, Radius 12, y 4.
                 .shadow(
                     color: .black.opacity(colorScheme == .dark ? 0.30 : 0.12),

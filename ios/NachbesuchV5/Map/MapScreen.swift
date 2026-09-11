@@ -449,14 +449,6 @@ struct MapScreen: View {
                 if showsGuide {
                     MapGuideCard(
                         namespace: glass,
-                        onAddHouse: {
-                            UISelectionFeedbackGenerator().selectionChanged()
-                            setMode(.placingHouse)
-                        },
-                        onImport: {
-                            UISelectionFeedbackGenerator().selectionChanged()
-                            sheetRoute = .importArea
-                        },
                         onDismiss: { hasSeenGuide = true }
                     )
                     // Standalone: `map.guide` has no partner to morph into, so the

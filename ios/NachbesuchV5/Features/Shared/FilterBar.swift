@@ -171,29 +171,17 @@ struct FilterBar: View {
     }
 }
 
-/// Zähler im Chip: morpht per NumericText und poppt kurz auf.
-///
-/// Eigene View, damit das Pop-State nicht im Chip-Modell landet: `FilterChip`
-/// bleibt ein reiner Wert für den Bar-Diff. Pop nur bei Änderung, ohne
-/// Reduce Motion nur der Zahlenwechsel.
+/// A changing count uses one transition, respecting Reduce Motion.
 private struct ChipCount: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let count: Int
-    @State private var pop: CGFloat = 1
 
     var body: some View {
         Text("\(count)")
             .monospacedDigit()
             .font(.caption.weight(.bold))
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(count)))
-            .scaleEffect(pop)
             .animation(.appFeedback(reduceMotion: reduceMotion), value: count)
-            .onChange(of: count) { _, _ in
-                // Bereits der Morph trägt; das Pop ist nur die Kirsche.
-                guard !reduceMotion else { return }
-                pop = 0.8
-                withAnimation(.appFeedback(reduceMotion: false)) { pop = 1 }
-            }
             .accessibilityHidden(true)
     }
 }

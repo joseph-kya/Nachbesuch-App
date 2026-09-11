@@ -67,6 +67,8 @@ struct AppInformationView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .scrollContentBackground(.hidden)
+        .background { AppBackdrop() }
         .navigationTitle("Datenschutz & Support")
         .navigationBarTitleDisplayMode(.inline)
     }

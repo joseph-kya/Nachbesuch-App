@@ -78,11 +78,11 @@ extension EnvironmentValues {
 }
 
 struct AppearanceSettingsSheet: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.dismiss) private var dismiss
     @AppStorage("appearance.mode") private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage("appearance.accent") private var accentRaw = AppAccent.volkshilfe.rawValue
     @AppStorage(ReminderSettings.dailyListKey) private var dailyListRemindersEnabled = false
-    @AppStorage("export.deleteAfterExportPrompt") private var deleteAfterExportPrompt = false
     /// Whether the system will actually deliver anything. Checked on appear so a
     /// toggle that is on but muted in iOS Settings cannot silently lie.
     @State private var notificationsAllowed = true
@@ -117,7 +117,7 @@ struct AppearanceSettingsSheet: View {
 
                     settingsGroup("Akzentfarbe", systemImage: "paintpalette.fill") {
                         LazyVGrid(
-                            columns: [GridItem(.adaptive(minimum: 112), spacing: AppSpacing.snug)],
+                            columns: [GridItem(.adaptive(minimum: dynamicTypeSize.isAccessibilitySize ? 260 : 140), spacing: AppSpacing.snug)],
                             spacing: AppSpacing.snug
                         ) {
                             ForEach(AppAccent.allCases) { value in
@@ -152,7 +152,7 @@ struct AppearanceSettingsSheet: View {
                     settingsGroup("Erinnerungen", systemImage: "bell.badge.fill") {
                         Toggle(isOn: $dailyListRemindersEnabled) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Liste an Teamleiter senden")
+                                Text("Ans Senden der Liste erinnern")
                                     .font(.subheadline.weight(.medium))
                                 Text(reminderTimesText)
                                     .font(.caption)
@@ -172,26 +172,12 @@ struct AppearanceSettingsSheet: View {
                             .fixedSize(horizontal: false, vertical: true)
                         }
 
-                        Text("Gilt auch für „Später“: ein Haus mit gebuchter Uhrzeit meldet sich pünktlich.")
+                        Text("Termine unter „Später“ erinnern unabhängig von diesem Schalter an den nächsten Besuch.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("Beim Einschalten fragt die App nach Mitteilungs-Erlaubnis.")
+                        Text("Erinnerungen benötigen erlaubte Mitteilungen. Die App versendet keine Listen automatisch.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    }
-
-                    settingsGroup("Daten", systemImage: "externaldrive.fill") {
-                        Toggle(isOn: $deleteAfterExportPrompt) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Nach Export löschen anbieten")
-                                    .font(.subheadline.weight(.medium))
-                                Text("Der Export fragt, ob das Gebiet danach vom Gerät gelöscht werden soll.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .frame(minHeight: AppTouch.minimum)
-                        .sensoryFeedback(.selection, trigger: deleteAfterExportPrompt)
                     }
 
                     settingsGroup("Über Nachbesuch", systemImage: "info.circle") {
@@ -203,10 +189,6 @@ struct AppearanceSettingsSheet: View {
                         }
                     }
 
-                    Text("Die Einstellung gilt sofort für Karte, Liste und Archiv.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 4)
                 }
                 .padding(AppSpacing.regular)
             }
@@ -248,6 +230,7 @@ struct AppearanceSettingsSheet: View {
                 .font(.headline)
             content()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppSpacing.regular)
         .contentCard(cornerRadius: AppRadius.card)
     }

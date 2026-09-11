@@ -22,14 +22,11 @@ struct ExportSheet: View {
 
     @AppStorage("export.visitedOnly") private var visitedOnly = true
     @AppStorage("export.includeNotes") private var includeNotes = true
-    /// Pre-built retention prompt (B12), defaulted off: with the flag on, the
-    /// export offers deleting the territory from the device afterwards.
-    @AppStorage("export.deleteAfterExportPrompt") private var deleteAfterExportPrompt = false
-
     @State private var document: ExportDocument?
     @State private var pdfURL: URL?
     @State private var isBuilding = true
-    @State private var showsDeleteConfirm = false
+    @State private var pdfFailed = false
+    @State private var buildRevision = 0
 
     private var options: ExportOptions {
         ExportOptions(visitedOnly: visitedOnly && !isPreselected, includeNotes: includeNotes)
@@ -41,6 +38,7 @@ struct ExportSheet: View {
         let count: Int
         let visitedOnly: Bool
         let includeNotes: Bool
+        let revision: Int
     }
 
     private var buildKey: BuildKey {
@@ -53,7 +51,8 @@ struct ExportSheet: View {
             scope: scope,
             count: houses.count,
             visitedOnly: options.visitedOnly,
-            includeNotes: options.includeNotes
+            includeNotes: options.includeNotes,
+            revision: buildRevision
         )
     }
 
@@ -64,8 +63,9 @@ struct ExportSheet: View {
                 if !isPreselected { rangeSection }
                 contentSection
                 shareSection
-                if deleteAfterExportPrompt, !isPreselected { cleanupSection }
             }
+            .scrollContentBackground(.hidden)
+            .background { AppBackdrop() }
             .navigationTitle("Exportieren")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -74,17 +74,7 @@ struct ExportSheet: View {
                 }
             }
             .task(id: buildKey) { await rebuild() }
-            .alert(
-                "„\(gebiet.displayName)“ löschen?",
-                isPresented: $showsDeleteConfirm,
-                actions: {
-                    Button("Löschen", role: .destructive) { Task { await deleteGebiet() } }
-                    Button("Behalten", role: .cancel) {}
-                },
-                message: {
-                    Text("Der Export bleibt bestehen. Alle Häuser und Ergebnisse werden vom Gerät entfernt.")
-                }
-            )
+
         }
     }
 
@@ -107,7 +97,7 @@ struct ExportSheet: View {
             Text("Umfang")
         } footer: {
             if let document {
-                Text(visitedOnly
+                Text(options.visitedOnly
                      ? "\(document.includedHouses) von \(document.totalHouses) Adressen — Häuser ohne Eintrag bleiben weg."
                      : "Alle \(document.totalHouses) Adressen, auch die ohne Eintrag.")
             } else {
@@ -170,7 +160,7 @@ struct ExportSheet: View {
                 ContentUnavailableView {
                     Label("Nichts zu exportieren", systemImage: "tray")
                 } description: {
-                    Text(visitedOnly
+                    Text(options.visitedOnly
                          ? "In diesem Zeitraum wurde noch keine Adresse besucht. Schalte „Nur besuchte Adressen“ aus, um die Arbeitsliste zu exportieren."
                          : "Für dieses Gebiet sind keine Adressen erfasst.")
                 }
@@ -183,7 +173,12 @@ struct ExportSheet: View {
                             systemImage: "doc.richtext"
                         )
                     }
-                    .simultaneousGesture(shareTap)
+                } else if pdfFailed {
+                    Button {
+                        buildRevision &+= 1
+                    } label: {
+                        Label("PDF erneut erstellen", systemImage: "arrow.clockwise")
+                    }
                 } else {
                     HStack {
                         Label("PDF wird erstellt …", systemImage: "doc.text")
@@ -201,21 +196,19 @@ struct ExportSheet: View {
                             systemImage: "text.alignleft"
                         )
                     }
-                    .simultaneousGesture(shareTap)
                     ShareLink(item: DayExportService.makeLegacyText(document)) {
                         exportAction(
-                            title: "Legacy-Adressliste",
+                            title: "Kompakte Adressliste",
                             subtitle: "Straßen, Hausnummern und Statussymbole",
                             systemImage: "list.bullet.rectangle"
                         )
                     }
-                    .simultaneousGesture(shareTap)
                 }
             }
         } header: {
             Text("Format")
         } footer: {
-            Text("Die Legacy-Liste entspricht dem früheren kompakten Adressschema und enthält keine Notizen.")
+            Text("Die kompakte Adressliste enthält Straßen, Hausnummern und Status, ohne Notizen.")
         }
     }
 
@@ -251,42 +244,13 @@ struct ExportSheet: View {
 
     private var summaryTotal: Int { summaryCounts.houses + summaryCounts.passanten }
 
-    /// Teilen-Tippen bestätigt den Erfolg: ShareLink meldet kein Fertig zurück,
-    /// darum bestätigt der Tipp selbst — stumm teilen fühlt sich kaputt an.
-    private var shareTap: some Gesture {
-        TapGesture().onEnded { _ in
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-        }
-    }
-
-    private var cleanupSection: some View {
-        Section {
-            if let document, document.isExportable, !document.isEmpty {
-                Button(role: .destructive) { showsDeleteConfirm = true } label: {
-                    Label("Gebiet exportiert. Jetzt vom Gerät löschen?", systemImage: "trash")
-                }
-            }
-        } header: {
-            Text("Aufräumen")
-        } footer: {
-            Text("Erst exportieren, dann löschen — nie umgekehrt.")
-        }
-    }
-
-    private func deleteGebiet() async {
-        // Namen vorher sichern: Nach dem Löschen ist das Modell fort.
-        let name = gebiet.displayName
-        guard await GebietDeletion.delete(gebiet.id, in: modelContext, notices: notices) else { return }
-        // Quittung nach Export+Löschen; Navigation bleibt beim Aufrufer.
-        notices.show("„\(name)“ gelöscht. Der Export bleibt bestehen.")
-        dismiss()
-    }
-
     private func rebuild() async {
         isBuilding = true
         // The old file is stale the moment an option changes; drop it so the button
         // cannot hand out a document that no longer matches the settings.
         pdfURL = nil
+        document = nil
+        pdfFailed = false
         defer { isBuilding = false }
 
         let built = await DayExportService.makeDocument(
@@ -305,6 +269,7 @@ struct ExportSheet: View {
             guard !Task.isCancelled else { return }
             pdfURL = url
         } catch {
+            pdfFailed = true
             notices.report(error, context: "PDF konnte nicht erstellt werden")
         }
     }
