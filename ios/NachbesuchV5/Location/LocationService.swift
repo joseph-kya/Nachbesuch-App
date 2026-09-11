@@ -299,12 +299,23 @@ final class LocationService: NSObject {
 
     // MARK: - Reduced accuracy (B6)
 
+    nonisolated static func shouldExplainReducedAccuracy(
+        authorization: CLAuthorizationStatus,
+        accuracy: CLAccuracyAuthorization
+    ) -> Bool {
+        (authorization == .authorizedWhenInUse || authorization == .authorizedAlways)
+            && accuracy == .reducedAccuracy
+    }
+
     private static let reducedExplainerKey = "location.reducedExplainerShown"
 
     private func refreshReducedAccuracy() {
         let reduced: Bool
         if #available(iOS 14, *) {
-            reduced = manager.accuracyAuthorization == .reducedAccuracy
+            reduced = Self.shouldExplainReducedAccuracy(
+                authorization: manager.authorizationStatus,
+                accuracy: manager.accuracyAuthorization
+            )
         } else {
             reduced = false
         }
@@ -348,7 +359,10 @@ extension LocationService: CLLocationManagerDelegate {
         let status = manager.authorizationStatus
         let reduced: Bool
         if #available(iOS 14, *) {
-            reduced = manager.accuracyAuthorization == .reducedAccuracy
+            reduced = Self.shouldExplainReducedAccuracy(
+                authorization: manager.authorizationStatus,
+                accuracy: manager.accuracyAuthorization
+            )
         } else {
             reduced = false
         }

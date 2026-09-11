@@ -8,6 +8,7 @@ import UIKit
 /// keystroke. Outcome taps apply immediately like the list's quick statuses,
 /// so the pin repaints under the opening sheet.
 struct PassantDetailSheet: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(AppNoticeCenter.self) private var notices
@@ -19,7 +20,6 @@ struct PassantDetailSheet: View {
     @State private var draftNote: String
     @State private var showsTimePicker = false
     @State private var showDeleteConfirmation = false
-    @FocusState private var noteIsFocused: Bool
 
     init(passant: Passant, onDelete: @escaping (UUID) -> Void = { _ in }) {
         self.passant = passant
@@ -33,22 +33,15 @@ struct PassantDetailSheet: View {
                 Section {
                     TextField("Notiz", text: $draftNote, axis: .vertical)
                         .lineLimit(1...3)
-                        .focused($noteIsFocused)
                         .textInputAutocapitalization(.sentences)
                     LabeledContent("Erfasst", value: passant.createdAt.formatted(date: .abbreviated, time: .omitted))
                 } header: {
                     Text("Gespräch")
-                } footer: {
-                    // Zeichenzahl als Hinweis, kein Limit — lange Notizen bleiben erlaubt.
-                    Text("\(draftNote.count)/500")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
                 }
 
                 Section("Ergebnis") {
                     LazyVGrid(
-                        columns: [GridItem(.flexible(), spacing: AppSpacing.snug), GridItem(.flexible(), spacing: AppSpacing.snug)],
+                        columns: Array(repeating: GridItem(.flexible(), spacing: AppSpacing.snug), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2),
                         spacing: AppSpacing.snug
                     ) {
                         ForEach([VisitOutcome.joined, .earlyNo]) { result in
@@ -60,13 +53,6 @@ struct PassantDetailSheet: View {
                     LaterButton(isSelected: passant.outcome == .later, bookedAt: passant.revisitAt) {
                         showsTimePicker = true
                     }
-                    // Gebuchte Zeit mit relativem Label; tippen öffnet die
-                    // Zeitauswahl erneut — gleiche Zeile wie im Haus-Detail.
-                    if passant.outcome == .later, let revisitAt = passant.revisitAt {
-                        BookedTimeGlance(bookedAt: revisitAt) {
-                            showsTimePicker = true
-                        }
-                    }
                 }
 
                 Section {
@@ -75,6 +61,8 @@ struct PassantDetailSheet: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background { AppBackdrop() }
             .navigationTitle("Begegnung")
             .navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)
@@ -120,13 +108,6 @@ struct PassantDetailSheet: View {
                 if phase != .active { commitDrafts() }
             }
             .onDisappear { commitDrafts() }
-            .task {
-                // Tastatur erst nach dem Einschwingen, wie im Anlege-Sheet —
-                // sonst ruckelt das Sheet unter der Tastatur hoch.
-                try? await Task.sleep(for: .milliseconds(350))
-                guard !Task.isCancelled else { return }
-                noteIsFocused = true
-            }
         }
     }
 

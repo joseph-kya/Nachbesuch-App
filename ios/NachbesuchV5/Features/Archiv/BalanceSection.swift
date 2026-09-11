@@ -181,7 +181,6 @@ struct BalanceSection: View {
             .foregroundStyle(.secondary)
             // WAVE2: numeric morph (RM-gated) + badge pop on change.
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(tally.completed)))
-            .scaleEffect(isComplete && !reduceMotion ? 1.06 : 1.0)
             .animation(.appFeedback(reduceMotion: reduceMotion), value: tally.completed)
             .animation(.appFeedback(reduceMotion: reduceMotion), value: isComplete)
     }

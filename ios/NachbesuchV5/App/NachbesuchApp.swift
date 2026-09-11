@@ -96,15 +96,7 @@ private struct LaunchView: View {
             ProgressView("Gebiete werden geladen …")
                 .progressViewStyle(.circular)
                 .opacity(appeared ? 1 : 0)
-            // WAVE3: ruhige Versionszeile, blockiert nichts (reine Ansicht).
-            // WAVE4: kein Migrations-Fortschritt — V1→V2 ist leichtgewichtig und
-            // sofort fertig. Der Kreisel gehört nur zum Hintergrund-Öffnen, kein
-            // gefälschter Fortschritt.
-            Text("Version 5 · Schema V2")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .opacity(appeared ? 1 : 0)
-                .accessibilityLabel("Version 5, Schema Version 2")
+
         }
         .padding()
         .onAppear {
@@ -113,8 +105,7 @@ private struct LaunchView: View {
             }
         }
         .accessibilityElement(children: .combine)
-        // WAVE3: Versionszeile ist Teil der kombinierten Ansage.
-        .accessibilityLabel("Nachbesuch wird geladen, Version 5, Schema Version 2")
+        .accessibilityLabel("Nachbesuch wird geladen")
     }
 }
 

@@ -68,6 +68,8 @@ struct DiagnosticsSheet: View {
                     .accessibilityValue(copied ? "Kopiert" : "")
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background { AppBackdrop() }
             .navigationTitle("Diagnose")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

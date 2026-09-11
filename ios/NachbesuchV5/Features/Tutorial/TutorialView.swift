@@ -76,8 +76,8 @@ struct TutorialView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Überspringen") { finish() }
-                        .accessibilityLabel("Anleitung überspringen")
+                    Button("Schließen") { finish() }
+                        .accessibilityLabel("Anleitung schließen")
                 }
             }
         }
@@ -160,11 +160,11 @@ struct TutorialPage: Identifiable {
         TutorialPage(
             id: 4,
             systemImage: "bell.badge.fill",
-            title: "Nichts geht vergessen",
+            title: "Termine im Blick",
             intro: "Gebuchte Uhrzeiten melden sich von selbst.",
             points: [
                 Point(symbol: "clock.badge.checkmark.fill", text: "„Später“ erinnert pünktlich an die Tür"),
-                Point(symbol: "calendar.badge.clock", text: "Mo–Fr erinnert dich die Liste an den Teamleiter"),
+                Point(symbol: "calendar.badge.clock", text: "Optional: Mo–Fr ans Senden der Liste erinnern lassen"),
                 Point(symbol: "arrow.clockwise", text: "Tag 2 gehört den echten Zweitbesuchen"),
             ]
         ),
@@ -185,9 +185,9 @@ struct TutorialPage: Identifiable {
             title: "Deine Daten bleiben deine",
             intro: "Jeder zeichnet sein eigenes Gebiet — und sichert es selbst.",
             points: [
-                Point(symbol: "person.fill", text: "Keine Zentrale, keine Übergaben: Inseln statt Verteiler"),
+                Point(symbol: "person.fill", text: "Gebiete und Notizen werden auf deinem Gerät gespeichert"),
                 Point(symbol: "clock.arrow.circlepath", text: "Die App sichert täglich automatisch im Hintergrund"),
-                Point(symbol: "trash.fill", text: "Löschen erst nach dem Export — der fragt vorher"),
+                Point(symbol: "trash.fill", text: "Sicherung teilen oder in Dateien speichern, bevor du ein Gebiet löschst"),
             ]
         ),
     ]
@@ -223,17 +223,7 @@ private struct TutorialCard: View {
             VStack(alignment: .leading, spacing: AppSpacing.regular) {
                 Image(systemName: page.systemImage)
                     .font(.system(size: cappedHero))
-                    .foregroundStyle(.white)
-                    .frame(width: cappedHero * 2, height: cappedHero * 2)
-                    .background(accent.gradient, in: Circle())
-                    // WAVE3: dezentes Aufploppen je Seite, einmalig (Wert = Seiten-ID).
-                    // RM: nonRepeating, kein Rauschen beim Blättern.
-                    .symbolEffect(
-                        .bounce,
-                        options: reduceMotion ? .nonRepeating : .default,
-                        value: page.id
-                    )
-                    .symbolEffectsRemoved(reduceMotion)
+                    .foregroundStyle(accent)
                     .accessibilityHidden(true)
 
                 Text(page.title)
@@ -263,6 +253,5 @@ private struct TutorialCard: View {
         }
         .contentCard(cornerRadius: AppRadius.card)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(page.title). \(page.intro)")
     }
 }

@@ -690,35 +690,20 @@ struct ListScreen: View {
     /// Picker+Divider+Disabled-Logik war zu komplex für den Type-Checker.
     private func listMenu(proxy: ScrollViewProxy) -> some View {
         Menu {
-            listFilterMenuSection(proxy: proxy)
+            Picker("Filter", selection: Binding(
+                get: { filter },
+                set: { applyFilter($0, proxy: proxy) }
+            )) {
+                ForEach(ListFilter.allCases) { value in
+                    Label(value.title, systemImage: value.systemImage).tag(value)
+                }
+            }
             Button("Statuslegende", systemImage: "questionmark.circle") { showsLegend = true }
             listOrderMenuSection
             Divider()
             listBulkMenuSection
         } label: {
             Image(systemName: "slider.horizontal.3")
-        }
-    }
-
-    private func listFilterMenuSection(proxy: ScrollViewProxy) -> some View {
-        Section {
-            ForEach(ListFilter.allCases) { value in
-                Button {
-                    applyFilter(value, proxy: proxy)
-                } label: {
-                    listFilterMenuLabel(for: value)
-                }
-            }
-        } header: {
-            Text("Filter")
-        }
-    }
-
-    private func listFilterMenuLabel(for value: ListFilter) -> some View {
-        if filter == value {
-            Label(value.title, systemImage: "checkmark")
-        } else {
-            Label(value.title, systemImage: value.systemImage)
         }
     }
 
@@ -761,7 +746,7 @@ struct ListScreen: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             listMenu(proxy: proxy)
-                .accessibilityLabel("Filter und Reihenfolge")
+                .accessibilityLabel("Listenoptionen")
         }
         ToolbarItem(placement: .topBarTrailing) {
             exportToolbarButton
@@ -1147,8 +1132,8 @@ private struct HouseRow: View, Equatable {
                     // at 20 pt under a 15 pt header inverted the hierarchy.
                     .font(.body.weight(.semibold))
                     .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let subtitle = row.subtitle {
                     Text(subtitle)
                         .font(.caption)
@@ -1258,7 +1243,6 @@ private struct HouseRow: View, Equatable {
 private struct OpenCountBadge: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let count: Int
-    @State private var pop: CGFloat = 1
 
     var body: some View {
         Text("\(count)")
@@ -1269,13 +1253,7 @@ private struct OpenCountBadge: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(StatusChipFill(.red), in: Capsule())
-            .scaleEffect(pop)
             .animation(.appFeedback(reduceMotion: reduceMotion), value: count)
-            .onChange(of: count) { _, _ in
-                guard !reduceMotion else { return }
-                pop = 0.8
-                withAnimation(.appFeedback(reduceMotion: false)) { pop = 1 }
-            }
             .accessibilityHidden(true)
     }
 }
@@ -1577,7 +1555,7 @@ private struct StreetHeader: View {
                     .lineLimit(1)
                     // AX5 schrumpft statt zu clippen; ohne ScaleFactor frisst die
                     // einzeilige Zahl den Balken daneben.
-                    .minimumScaleFactor(0.7)
+                    .fixedSize(horizontal: false, vertical: true)
                     .transition(.blockSwap(reduceMotion: reduceMotion))
             }
         }
@@ -1767,7 +1745,7 @@ struct StatusLegendSheet: View {
                 Section("Status") {
                     ForEach(VisitOutcome.allCases) { outcome in
                         HStack(spacing: AppSpacing.snug) {
-                            Text(outcome.emoji).font(.title3)
+                            Image(systemName: outcome.symbolName).font(.title3).foregroundStyle(outcome.tint)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(outcome.title).font(.body.weight(.medium))
                                 Text(outcome.explanation)
@@ -1785,7 +1763,9 @@ struct StatusLegendSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Hilfe")
+            .scrollContentBackground(.hidden)
+            .background { AppBackdrop() }
+            .navigationTitle("Statuslegende")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

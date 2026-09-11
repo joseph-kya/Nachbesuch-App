@@ -57,7 +57,7 @@ struct AreaHouseImportSheet: View {
                                     .redacted(reason: .placeholder)
                             }
                         } header: {
-                            Text("Vorschau")
+                            Text("Adressen")
                         } footer: {
                             Text("Alle neuen Einträge entstehen als Einzelhäuser. Quelle: © OpenStreetMap-Mitwirkende.")
                         }
@@ -111,7 +111,7 @@ struct AreaHouseImportSheet: View {
                             }
 
                             Section {
-                                ForEach(addresses.prefix(60)) { address in
+                                ForEach(addresses) { address in
                                     let isSelected = !deselectedIDs.contains(address.id)
                                     Button {
                                         toggleSelection(address.id)
@@ -129,19 +129,16 @@ struct AreaHouseImportSheet: View {
                                     .accessibilityLabel(address.address)
                                     .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
                                 }
-                                if addresses.count > 60 {
-                                    Text("… und \(addresses.count - 60) weitere")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
                             } header: {
                                 HStack {
-                                    Text("Vorschau")
+                                    Text("Adressen")
                                     Spacer()
                                     Button("Alle") { setAllSelected(true) }
                                         .font(.footnote)
+                                        .tappable()
                                     Button("Keine") { setAllSelected(false) }
                                         .font(.footnote)
+                                        .tappable()
                                 }
                             }
                         }
@@ -149,6 +146,9 @@ struct AreaHouseImportSheet: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background { AppBackdrop() }
+            .disabled(phase == .saving)
             .navigationTitle("Häuser im Gebiet")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -157,6 +157,7 @@ struct AreaHouseImportSheet: View {
                         loadTask?.cancel()
                         dismiss()
                     }
+                    .disabled(phase == .saving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("\(selectedAddresses.count) anlegen") {
@@ -169,31 +170,13 @@ struct AreaHouseImportSheet: View {
                     .disabled(selectedAddresses.isEmpty || phase != .ready)
                 }
             }
-            // Klebrige Fußzeile in der nativen Liste (kein Glas): Daumen-Ziel mit
-            // Live-Zähler, 44pt, prominent im Form-Stil.
-            .safeAreaInset(edge: .bottom) {
-                if phase == .ready, !addresses.isEmpty {
-                    Button("\(selectedAddresses.count) anlegen") {
-                        Task { await save() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(selectedAddresses.count)))
-                    .animation(.appFeedback(reduceMotion: reduceMotion), value: selectedAddresses.count)
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(uiColor: .systemGroupedBackground))
-                    .disabled(selectedAddresses.isEmpty)
-                }
-            }
             .overlay {
                 if phase == .saving {
                     ProgressView("Wird gespeichert …").controlSize(.large)
                 }
             }
         }
+        .interactiveDismissDisabled(phase == .saving)
         .task { startLoading() }
         .onDisappear { loadTask?.cancel() }
     }
