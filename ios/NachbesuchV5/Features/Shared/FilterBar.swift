@@ -17,10 +17,6 @@ struct FilterChip: Identifiable, Equatable {
 /// `ListFilterBar`), ~90 duplicated lines whose differences were all accidental:
 /// 34 vs 36 pt chips, one firing a haptic the other didn't, and one using a
 /// hardcoded `.black` badge that was invisible in dark mode.
-/// The app's filter bar — a single implementation.
-///
-/// There used to be two near-identical copies (`QuickFilterBar` and `ListFilterBar`),
-/// ~90 duplicated lines whose differences were all accidental.
 ///
 /// Every chip is one glass capsule; the selected one's glass takes the chip's
 /// tint, so the selection travels as a colour change and nothing in the row moves.
@@ -74,9 +70,10 @@ struct FilterBar: View {
 
     private var chipScroller: some View {
         ScrollView(.horizontal) {
-            // Container spacing matches the stack's, so the chips stay distinct at
-            // rest and only blend while the selection moves between them.
-            CompatGlassContainer(spacing: AppSpacing.tight) {
+            // Zero, not the stack's spacing: at a merge distance equal to the gap,
+            // neighbours already blend at rest, and the selected chip's tint bled
+            // a red sliver onto the edge of the chip beside it.
+            CompatGlassContainer(spacing: 0) {
                 HStack(spacing: AppSpacing.tight) {
                     ForEach(chips) { chip in
                         chipButton(chip)
@@ -139,11 +136,13 @@ struct FilterBar: View {
                     .imageScale(.small)
                     .foregroundStyle(chip.isSelected ? AnyShapeStyle(Color.white) : AnyShapeStyle(chip.tint))
                 Text(chip.title)
-                    .fixedSize(horizontal: true, vertical: false)
                 if let count = chip.count {
                     ChipCount(count: count)
                 }
             }
+            // The whole label, not just the title: with only the title fixed, the
+            // count was the part that gave way and "Offen 104" read "Offen …".
+            .fixedSize()
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(chip.isSelected ? Color.white : Color.primary)
         }
@@ -180,10 +179,34 @@ private struct FilterChipStyle: ButtonStyle {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .frame(minHeight: 36)
-            .background { ChipSurface(isSelected: isSelected, tint: tint, isPressed: configuration.isPressed) }
+            .modifier(ChipGlass(isSelected: isSelected, tint: tint, isPressed: configuration.isPressed))
             .contentShape(Capsule(style: .continuous))
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
             .animation(.appPress(reduceMotion: reduceMotion), value: configuration.isPressed)
+    }
+}
+
+/// iOS 26: the glass goes on the label itself, never on a `Color.clear` behind it.
+///
+/// Inside a `GlassEffectContainer` the container draws every member's glass in one
+/// pass, and a glass shape only keeps its *own* content above it. A glass-only
+/// background has no content, so the label ended up as a sibling underneath the
+/// merged glass: the selected chip rendered as a blank red pill and the others as
+/// lensed, blurred text with ghost copies above and below.
+private struct ChipGlass: ViewModifier {
+    let isSelected: Bool
+    let tint: Color
+    let isPressed: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *), !LegacyChrome.isForced {
+            content
+                .glassEffect(isSelected ? Glass.regular.tint(tint) : Glass.regular,
+                             in: Capsule(style: .continuous))
+        } else {
+            content
+                .background { ChipSurface(isSelected: isSelected, tint: tint, isPressed: isPressed) }
+        }
     }
 }
 
@@ -196,28 +219,23 @@ private struct ChipSurface: View {
     let isPressed: Bool
 
     var body: some View {
+        // iOS 18: no blur. The chip bar floats over scrolling rows, so the
+        // unselected fill is dense enough to stay legible over them.
         let shape = Capsule(style: .continuous)
-        if #available(iOS 26, *), !LegacyChrome.isForced {
-            Color.clear
-                .glassEffect(isSelected ? Glass.regular.tint(tint) : Glass.regular, in: shape)
-        } else {
-            // iOS 18: no blur. The chip bar floats over scrolling rows, so the
-            // unselected fill is dense enough to stay legible over them.
-            let opaque = GlassPreference.prefersOpaque(reduceTransparency: reduceTransparency, contrast: contrast)
-            shape
-                .fill(isSelected
-                      ? AnyShapeStyle(tint)
-                      : AnyShapeStyle(Color(uiColor: .secondarySystemGroupedBackground).opacity(opaque ? 1 : 0.92)))
-                .overlay { if !opaque { GlassSheen(shape: shape) } }
-                .overlay { shape.fill(Color.primary.opacity(isPressed ? PressHighlight.opacity : 0)) }
-                .overlay {
-                    if opaque {
-                        shape.strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5)
-                    } else {
-                        glossyRim(for: shape, colorScheme: colorScheme)
-                    }
+        let opaque = GlassPreference.prefersOpaque(reduceTransparency: reduceTransparency, contrast: contrast)
+        shape
+            .fill(isSelected
+                  ? AnyShapeStyle(tint)
+                  : AnyShapeStyle(Color(uiColor: .secondarySystemGroupedBackground).opacity(opaque ? 1 : 0.92)))
+            .overlay { if !opaque { GlassSheen(shape: shape) } }
+            .overlay { shape.fill(Color.primary.opacity(isPressed ? PressHighlight.opacity : 0)) }
+            .overlay {
+                if opaque {
+                    shape.strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5)
+                } else {
+                    glossyRim(for: shape, colorScheme: colorScheme)
                 }
-        }
+            }
     }
 }
 
@@ -252,20 +270,37 @@ private struct ChipCount: View {
 /// strip pinned to the trailing edge says the same thing for one small static
 /// composite that never moves with the content.
 private struct ChipScrollEdge: ViewModifier {
+    /// Whether any chip sits past the trailing edge right now.
+    ///
+    /// The strip fades to plain grouped background, but the screen behind it is the
+    /// accent-tinted backdrop, so an always-on strip drew a dark (light: pale) block
+    /// at the end of a row that had nothing more to show. It now appears only when
+    /// there is something to the right, and goes again once the row is scrolled to
+    /// its end.
+    @State private var hasMore = false
+
     func body(content: Content) -> some View {
         if LegacyChrome.isActive {
-            content.overlay(alignment: .trailing) {
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: Color(uiColor: .systemGroupedBackground), location: 1)
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: 28)
-                .allowsHitTesting(false)
-            }
+            content
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentOffset.x + geometry.containerSize.width
+                        < geometry.contentSize.width - 1
+                } action: { _, more in
+                    hasMore = more
+                }
+                .overlay(alignment: .trailing) {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: Color(uiColor: .systemGroupedBackground), location: 1)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(width: 28)
+                    .opacity(hasMore ? 1 : 0)
+                    .allowsHitTesting(false)
+                }
         } else {
             content
         }

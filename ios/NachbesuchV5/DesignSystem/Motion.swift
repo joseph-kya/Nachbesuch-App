@@ -132,7 +132,7 @@ struct PressableRowStyle: ButtonStyle {
 /// measuring pass per bar per layout, and on the archive that was one per card.
 /// A shape gets its rect for free, keeps round caps at every width, and
 /// interpolates `progress` itself, so the fill glides instead of re-laying out.
-struct ProgressFillShape: Shape {
+nonisolated struct ProgressFillShape: Shape {
     var progress: Double
     /// The rounded stub shown as soon as there is any progress at all.
     var minimumWidth: CGFloat = 5

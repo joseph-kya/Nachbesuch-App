@@ -181,9 +181,11 @@ struct GlassRowFill: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.sheetIsFullHeight) private var sheetIsFullHeight
 
     var body: some View {
-        if GlassPreference.prefersOpaque(reduceTransparency: reduceTransparency, contrast: contrast) {
+        if sheetIsFullHeight
+            || GlassPreference.prefersOpaque(reduceTransparency: reduceTransparency, contrast: contrast) {
             Color(uiColor: .secondarySystemGroupedBackground)
         } else {
             Color(uiColor: .secondarySystemGroupedBackground)
@@ -204,8 +206,7 @@ extension View {
     /// background painted over them hid it completely. iOS 18 puts the app's
     /// tinted ground behind the translucent rows instead — see `compatSheetGlass`.
     func glassForm() -> some View {
-        scrollContentBackground(.hidden)
-            .compatSheetGlass()
+        modifier(GlassFormModifier())
     }
 
     /// The sheet's ground: the system glass on iOS 26 (nothing to do), the app's
@@ -221,6 +222,52 @@ extension View {
             background { AppBackdrop() }
         } else {
             self
+        }
+    }
+}
+
+/// Whether the sheet around a `glassForm` is at full height. Read by `GlassRowFill`.
+extension EnvironmentValues {
+    @Entry var sheetIsFullHeight = false
+}
+
+/// The glass form, and what it turns into at full height.
+///
+/// iOS 26 draws a sheet as Liquid Glass only at partial heights. At `.large` it is
+/// an opaque plain background, and translucent white rows on plain white vanish:
+/// "Neues Gebiet" (large-only) showed its fields floating on a blank page, and
+/// every medium sheet did the same once dragged up. At full height the form takes
+/// the standard grouped ground and opaque rows instead; at partial heights it keeps
+/// the glass. iOS 18 is unchanged — its sheets sit on the tinted backdrop.
+private struct GlassFormModifier: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isFullHeight = false
+
+    func body(content: Content) -> some View {
+        if LegacyChrome.isActive {
+            content
+                .scrollContentBackground(.hidden)
+                .compatSheetGlass()
+        } else {
+            content
+                .scrollContentBackground(.hidden)
+                .background {
+                    Color(uiColor: .systemGroupedBackground)
+                        .opacity(isFullHeight ? 1 : 0)
+                        .ignoresSafeArea()
+                }
+                .environment(\.sheetIsFullHeight, isFullHeight)
+                // A sheet's form reaches the bottom of the screen at every detent,
+                // so how far down it *starts* says which detent it is at: near the
+                // top is `.large` (and an iPad form sheet), halfway is `.medium`.
+                .onGeometryChange(for: Bool.self) { proxy in
+                    let frame = proxy.frame(in: .global)
+                    return frame.minY < frame.maxY * 0.3
+                } action: { full in
+                    withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
+                        isFullHeight = full
+                    }
+                }
         }
     }
 }
@@ -280,9 +327,13 @@ struct AppBackdrop: View {
                 endPoint: .bottomLeading
             )
         }
-        .ignoresSafeArea()
         .allowsHitTesting(false)
         .drawingGroup()
+        // Outside the drawing group, never inside it: the group rasterises into
+        // its own safe-area frame, so an `ignoresSafeArea` within it was clipped
+        // back — the tint stopped under the bars and left a white (dark: black)
+        // band with a hard edge above the list, the archive and the launch screen.
+        .ignoresSafeArea()
     }
 }
 

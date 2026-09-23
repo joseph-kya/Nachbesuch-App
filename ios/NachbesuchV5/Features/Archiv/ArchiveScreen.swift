@@ -1256,6 +1256,9 @@ struct GebietRow: View, Equatable {
                         .monospacedDigit()
                         .contentTransition(reduceMotion ? .identity : .numericText(value: Double(model.completed)))
                         .foregroundStyle(.secondary)
+                        // A fixed column, so "176/210" and "16/18" leave every
+                        // card's bar ending at the same x instead of a ragged edge.
+                        .frame(minWidth: 64, alignment: .trailing)
                 }
 
                 HStack(spacing: AppSpacing.snug) {

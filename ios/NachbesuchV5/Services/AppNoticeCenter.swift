@@ -151,7 +151,7 @@ struct AppNoticeBanner: View {
             // down there. Release either commits (fling or 30 pt up) or springs
             // back on the same damped curve.
             .offset(y: dragOffset < 0 ? dragOffset : dragOffset * 0.25)
-            .opacity(1 - min(max(-dragOffset, 0) / 140, 0.6))
+            .opacity(Double(1 - min(max(-dragOffset, 0) / 140, 0.6)))
             .gesture(
                 DragGesture(minimumDistance: 12)
                     .onChanged { dragOffset = $0.translation.height }

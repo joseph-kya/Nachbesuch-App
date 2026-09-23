@@ -124,7 +124,9 @@ struct ExportSheet: View {
             // „N Häuser, M Passanten" mit Zahlen-Morph — derselbe Stand, den die
             // Teilen-Buttons gleich darunter verschicken.
             HStack {
-                Text("Umfang")
+                // Not "Umfang": that is already the heading of the section above,
+                // and one sheet had two different things called the same.
+                Text("Im Export")
                 Spacer()
                 Text("\(summaryCounts.houses) Häuser, \(summaryCounts.passanten) Passanten")
                     .monospacedDigit()

@@ -441,7 +441,7 @@ private struct LegacyGlassProminentStyle: ButtonStyle {
 
 /// Type-erases the two control outlines so one style can draw either without
 /// generic parameters leaking into every call site.
-struct AnyInsettableShape: InsettableShape {
+nonisolated struct AnyInsettableShape: InsettableShape {
     private let makePath: @Sendable (CGRect) -> Path
     private let inset: CGFloat
 

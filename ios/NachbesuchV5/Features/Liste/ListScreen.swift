@@ -115,8 +115,6 @@ struct ListScreen: View {
         let isActive: Bool
     }
 
-    @Namespace private var zoom
-
     /// Nearest-first ordering, using the live position.
     ///
     /// This is what you actually want standing on a street: not "which house did I
@@ -303,7 +301,7 @@ struct ListScreen: View {
                 listToolbar(proxy: proxy)
             }
             .sheet(item: $selectedHouse) { selection in
-                HouseSheetHost(id: selection.id, scope: scope, writeDay: writeDay, zoom: zoom)
+                HouseSheetHost(id: selection.id, scope: scope, writeDay: writeDay)
             }
             .sheet(isPresented: $showsExport, onDismiss: { exportHouses = []; exportPassanten = [] }) {
                 exportSheetContent
@@ -384,7 +382,6 @@ struct ListScreen: View {
                             section: section,
                             isExpanded: isExpanded,
                             now: clock,
-                            zoom: zoom,
                             onToggle: { toggleSection(section.id) },
                             onOpen: { openHouse($0) },
                             onJumpTop: { proxy.scrollTo(section.id, anchor: .top) }
@@ -719,25 +716,23 @@ struct ListScreen: View {
         }
     }
 
+    /// Toggles, so the current filter gets the same leading checkmark beside its own
+    /// icon that the order picker below draws. The hand-rolled buttons swapped the
+    /// selected filter's icon *for* a checkmark instead, so one menu showed
+    /// selection two different ways. Not a `Picker`: inside a menu that swallows
+    /// the section's "Filter" header.
     private func listFilterMenuSection(proxy: ScrollViewProxy) -> some View {
         Section {
             ForEach(ListFilter.allCases) { value in
-                Button {
-                    applyFilter(value, proxy: proxy)
-                } label: {
-                    listFilterMenuLabel(for: value)
+                Toggle(isOn: Binding(
+                    get: { filter == value },
+                    set: { isOn in if isOn { applyFilter(value, proxy: proxy) } }
+                )) {
+                    Label(value.title, systemImage: value.systemImage)
                 }
             }
         } header: {
             Text("Filter")
-        }
-    }
-
-    private func listFilterMenuLabel(for value: ListFilter) -> some View {
-        if filter == value {
-            Label(value.title, systemImage: "checkmark")
-        } else {
-            Label(value.title, systemImage: value.systemImage)
         }
     }
 
@@ -1082,13 +1077,14 @@ private struct ListSensors: View {
 /// transaction: the sheet starts moving on the tap, the live model faults in
 /// behind it.
 ///
-/// Two things made this tap look broken. The zoom transition sat on the resolved
-/// form, which does not exist yet on the frame the presentation starts, so the row
-/// often had nothing to zoom into and the sheet slid up instead. And the spinner
-/// placeholder was swapped for the form mid-transition — a flash of "wird
-/// geöffnet …" on every tap, for a fetch that takes a millisecond. The zoom now
-/// belongs to the host, and the placeholder is empty glass that the form fades
-/// into; a spinner appears only if resolving is genuinely slow.
+/// The spinner placeholder used to be swapped for the form mid-transition — a
+/// flash of "wird geöffnet …" on every tap, for a fetch that takes a millisecond.
+/// The placeholder is now empty glass that the form fades into; a spinner appears
+/// only if resolving is genuinely slow.
+///
+/// No zoom transition out of the row: the sheet rests at the medium detent with
+/// the list still in view, and a zoom source stays hidden for as long as its
+/// sheet is up — the tapped address left a blank gap in its street card.
 private struct HouseSheetHost: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1096,7 +1092,6 @@ private struct HouseSheetHost: View {
     let id: UUID
     let scope: DayScope
     let writeDay: Int
-    let zoom: Namespace.ID
     @State private var house: House?
     @State private var didResolve = false
     @State private var isSlow = false
@@ -1127,9 +1122,6 @@ private struct HouseSheetHost: View {
         }
         .animation(.appFeedback(reduceMotion: reduceMotion), value: didResolve)
         .animation(.appFeedback(reduceMotion: reduceMotion), value: isSlow)
-        // The row grows into the sheet, and dragging it back down collapses it
-        // into the same row. On the host, so it is there from the first frame.
-        .navigationTransition(.zoom(sourceID: id, in: zoom))
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .task(id: id) {
@@ -1400,7 +1392,6 @@ private struct StreetCard: View {
     let section: StreetSection
     let isExpanded: Bool
     let now: Date
-    let zoom: Namespace.ID
     let onToggle: () -> Void
     let onOpen: (UUID) -> Void
     /// Scroll zum Sektionskopf — Closure vom Außen-Reader aus listSurface,
@@ -1466,7 +1457,6 @@ private struct StreetCard: View {
                         // Highlight, never scale: rows share one surface, and a
                         // scaled row would tear its edge away from its neighbours.
                         .buttonStyle(AddressRowPressStyle())
-                        .matchedTransitionSource(id: row.id, in: zoom)
                         .padding(.top, 11)
                         .padding(.bottom, row.id == lastID ? 4 : 11)
                         .overlay(alignment: .bottom) {
@@ -1659,7 +1649,9 @@ private struct StreetHeader: View {
                     .labelStyle(.titleAndIcon)
                     .lineLimit(1)
             } else {
-                Text("\(section.openCount) offen")
+                // "Türen", not a bare "offen": beside "11 Adressen" a bare
+                // "18 offen" read as eighteen open out of eleven addresses.
+                Text("\(section.openCount) \(section.openCount == 1 ? "Tür" : "Türen") offen")
                     .font(.caption.weight(.semibold))
                     .monospacedDigit()
                     .foregroundStyle(stateTint)
