@@ -226,14 +226,7 @@ private struct TutorialCard: View {
                     .foregroundStyle(.white)
                     .frame(width: cappedHero * 2, height: cappedHero * 2)
                     .background(accent.gradient, in: Circle())
-                    // WAVE3: dezentes Aufploppen je Seite, einmalig (Wert = Seiten-ID).
-                    // RM: nonRepeating, kein Rauschen beim Blättern.
-                    .symbolEffect(
-                        .bounce,
-                        options: reduceMotion ? .nonRepeating : .default,
-                        value: page.id
-                    )
-                    .symbolEffectsRemoved(reduceMotion)
+                    .overlay { GlassSheen(shape: Circle()) }
                     .accessibilityHidden(true)
 
                 Text(page.title)

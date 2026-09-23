@@ -295,9 +295,6 @@ struct LocateButton: View {
     let isBusy: Bool
     let isDenied: Bool
     let namespace: Namespace.ID
-    /// Zählt uncertain→trusted-Wechsel im Folgen-Modus — löst je einmal
-    /// einen dezenten Bounce aus (RM-sicher: System dämpft ihn weg).
-    var accuracyPulse: Int = 0
     let action: () -> Void
 
     var body: some View {
@@ -305,8 +302,9 @@ struct LocateButton: View {
             Image(systemName: symbolName)
                 .font(.system(size: 17, weight: .semibold))
                 .frame(width: 26, height: 26)
-                // Einmaliges Aufpoppen bei besserem GPS-Fix (Folgen-Modus).
-                .symbolEffect(.bounce, value: accuracyPulse)
+                // Following is a state, so it is shown as one — the accent glyph —
+                // rather than left to whatever tint the environment carries.
+                .foregroundStyle(isFollowing ? AnyShapeStyle(accent) : AnyShapeStyle(.primary))
                 // A gentle pulse only while a fix is being acquired — a repeating
                 // effect has to stop as soon as it stops meaning something.
                 .symbolEffect(.pulse, isActive: isBusy && !reduceMotion)
@@ -316,7 +314,6 @@ struct LocateButton: View {
         .compatGlassButton(shape: .circle, role: .map)
         .controlSize(.large)
         .buttonBorderShape(.circle)
-        .tint(isFollowing ? accent : nil)
         .compatGlassID("map.locate", in: namespace)
         .accessibilityLabel(isFollowing ? "Standortverfolgung beenden" : "Zu meinem Standort")
         .accessibilityHint(isFollowing ? "Beendet das Folgen deiner Position" : "Zentriert die Karte auf deinen Standort")
@@ -514,7 +511,7 @@ struct BoundaryDrawingBar: View {
                 } label: {
                     Image(systemName: "checkmark").frame(width: 24, height: 24)
                 }
-                .compatGlassButton(prominent: true)
+                .compatGlassButton(prominent: true, shape: .circle)
                 .controlSize(.large)
                 .buttonBorderShape(.circle)
                 // Prominent circles need the clip or the glass leaves artifacts
@@ -549,7 +546,7 @@ struct BoundaryDrawingBar: View {
 
 /// Crosshair for placing a house or a boundary corner.
 ///
-/// Die Drag-Skalierung (1.0→1.15) legt der Caller per `scaleEffect` darüber —
+/// Die Drag-Skalierung (1.0→1.1) legt der Caller per `scaleEffect` darüber —
 /// nur Skalierung, nie Versatz, damit sie nie gegen die Kamera kämpft.
 ///
 /// The artwork hangs off a **zero-height anchor** pinned to the map centre. The
@@ -674,6 +671,8 @@ struct MapGuideCard: View {
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity, minHeight: AppTouch.minimum)
                 }
+                // System bordered styles, not glass: these sit *inside* a glass
+                // panel, and glass nested in glass breaks the sampling of both.
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
                 .tint(accent)
@@ -693,8 +692,8 @@ struct MapGuideCard: View {
         .padding(AppSpacing.regular)
         .mapChrome()
         .compatGlassID("map.guide", in: namespace)
-        // Bounce-in beim ersten Erscheinen (appChrome), RM-sicher nur Fade.
-        .transition(.appChrome(reduceMotion: reduceMotion))
+        // Grows out of the header it docks under; RM: fade only.
+        .transition(.appChrome(reduceMotion: reduceMotion, anchor: .top))
     }
 }
 
@@ -734,6 +733,7 @@ struct MapAccuracyBanner: View {
             // zum nächsten Start) — Label nennt die Wirkung, nicht „Hilfe".
             Button("Genauigkeit verbessern", action: onHelp)
                 .font(.subheadline.weight(.semibold))
+                // Inside the banner's glass: bordered, not a second glass layer.
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
                 .tint(accent)
@@ -800,47 +800,12 @@ struct ApartmentStatusPreview: View {
     }
 }
 
-/// Long-press preview over the map. Glas über der Karte statt Dauer-Material:
-/// ein Material tastet die lebenden Kacheln jeden Frame ab — auf einem iPhone 11
-/// die unleserlichste und teuerste Variante, gleicher Befund wie beim
-/// schwebenden Chrom. Deckend auf dem Legacy-Zweig, wie dort.
-private struct LegacyPreviewSurface: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
-
-    func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
-        if LegacyChrome.isActive {
-            content
-                .background(Color(uiColor: .secondarySystemBackground), in: shape)
-                .overlay { shape.strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5) }
-        } else {
-            content
-                .compatGlass(interactive: false, in: shape, role: .map)
-                // Einheitliche Glanzkante: weiß 0.34→0.04, 0.75 pt — gleiche
-                // Sprache wie die übrigen Kartenflächen, kein zweites Rim.
-                .overlay {
-                    shape.strokeBorder(
-                        LinearGradient(
-                            colors: [.white.opacity(0.34), .white.opacity(0.04)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 0.75
-                    )
-                }
-                // Kartenschatten: dunkel 0.30 / hell 0.12, Radius 12, y 4.
-                .shadow(
-                    color: .black.opacity(colorScheme == .dark ? 0.30 : 0.12),
-                    radius: 12,
-                    y: 4
-                )
-        }
-    }
-}
-
+/// Long-press preview over the map: the same glass as every floating panel —
+/// Liquid Glass on iOS 26, material glass on iOS 18, opaque under Reduce
+/// Transparency. One surface definition instead of a hand-copied rim.
 private extension View {
     func legacyPreviewSurface() -> some View {
-        modifier(LegacyPreviewSurface())
+        mapChrome(cornerRadius: AppRadius.card)
     }
 }
 
@@ -881,8 +846,10 @@ struct StackedPinsSheet: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(house.address)
                 .accessibilityValue(summary.markerOutcome.displayTitle)
+                .glassRows()
             }
             .listStyle(.insetGrouped)
+            .glassForm()
             .navigationTitle("Pins an dieser Stelle")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -909,6 +876,7 @@ struct TerritoryButton: View {
         Button(action: action) {
             Image(systemName: "scope")
                 .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.primary)
                 .frame(width: 26, height: 26)
         }
         .compatGlassButton(shape: .circle, role: .map)

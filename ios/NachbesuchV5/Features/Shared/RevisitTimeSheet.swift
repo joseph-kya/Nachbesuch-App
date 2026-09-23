@@ -57,6 +57,7 @@ struct RevisitTimeSheet: View {
                         )
                         .foregroundStyle(.red)
                     }
+                    .glassRows()
                 } else if let existing, !matchesExisting(existing) {
                     Section {
                         Label(
@@ -65,6 +66,7 @@ struct RevisitTimeSheet: View {
                         )
                         .foregroundStyle(VisitOutcome.later.tint)
                     }
+                    .glassRows()
                 }
 
                 Section {
@@ -102,6 +104,7 @@ struct RevisitTimeSheet: View {
                 } footer: {
                     Text(subject)
                 }
+                .glassRows()
 
                 Section {
                     DatePicker(
@@ -132,6 +135,7 @@ struct RevisitTimeSheet: View {
                             .foregroundStyle(.red)
                     }
                 }
+                .glassRows()
 
                 if let onClear {
                     Section {
@@ -144,8 +148,10 @@ struct RevisitTimeSheet: View {
                         }
                         .frame(minHeight: AppTouch.minimum)
                     }
+                    .glassRows()
                 }
             }
+            .glassForm()
             .navigationTitle("Später")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

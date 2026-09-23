@@ -36,9 +36,8 @@ final class AppNoticeCenter {
         present(Notice(message: "\(context): \(error.localizedDescription)", isError: true))
     }
 
-    /// WAVE3: höchstens ein Banner — ein neues ersetzt das alte, kein Stapel.
-    /// Der Wechsel morpht über `.appBanner` + `animation(value: notice.id)` in
-    /// der Ansicht, daher hier kein Queue.
+    /// Höchstens ein Banner — ein neues ersetzt das alte, kein Stapel. Die
+    /// Überblendung besitzt das Overlay in `RootView` (`animation(value: id)`).
     private func present(_ notice: Notice) {
         dismissTask?.cancel()
         current = notice
@@ -94,12 +93,6 @@ struct AppNoticeBanner: View {
                 HStack(spacing: AppSpacing.snug) {
                     Image(systemName: notice.isError ? "exclamationmark.triangle.fill" : "info.circle.fill")
                         .foregroundStyle(notice.isError ? .red : .orange)
-                        .symbolEffect(
-                            .bounce,
-                            options: reduceMotion ? .nonRepeating : .default,
-                            value: notice.id
-                        )
-                        .symbolEffectsRemoved(reduceMotion)
                         .accessibilityHidden(true)
                     Text(notice.message)
                         .font(.subheadline)
@@ -141,7 +134,7 @@ struct AppNoticeBanner: View {
                 // Errors stay until dismissed, so no bar there. RM: opacity only.
                 if !notice.isError {
                     Capsule(style: .continuous)
-                        .fill(.orange.opacity(0.7))
+                        .fill(.secondary.opacity(0.35))
                         .frame(height: 2)
                         .scaleEffect(x: reduceMotion ? 1 : timerProgress, anchor: .leading)
                         .opacity(reduceMotion ? timerProgress : 1)
@@ -153,14 +146,17 @@ struct AppNoticeBanner: View {
             // Floats above content, so it is navigation layer and gets glass.
             .mapChrome(cornerRadius: AppRadius.card)
             .padding(.horizontal, AppSpacing.regular)
-            // WAVE2: swipe-to-dismiss with fade. Snap-back respects RM via appFeedback.
-            .offset(y: dragOffset)
-            .opacity(1 - min(abs(dragOffset) / 120, 0.5))
+            // Swipe up to dismiss. Upward travel follows the finger; downward
+            // travel is rubber-banded, because the banner has nowhere to go
+            // down there. Release either commits (fling or 30 pt up) or springs
+            // back on the same damped curve.
+            .offset(y: dragOffset < 0 ? dragOffset : dragOffset * 0.25)
+            .opacity(1 - min(max(-dragOffset, 0) / 140, 0.6))
             .gesture(
-                DragGesture(minimumDistance: 20)
+                DragGesture(minimumDistance: 12)
                     .onChanged { dragOffset = $0.translation.height }
                     .onEnded { value in
-                        if value.translation.height < -30 || abs(value.translation.height) > 60 {
+                        if value.translation.height < -30 || value.predictedEndTranslation.height < -80 {
                             dismissTaps += 1
                             notices.dismiss()
                         } else {
@@ -186,25 +182,38 @@ struct AppNoticeBanner: View {
             .accessibilityAddTraits(.isStaticText)
             .accessibilityLabel(notice.isError ? "Fehlerhinweis" : "Hinweis")
             .transition(.appBanner(edge: .top, reduceMotion: reduceMotion))
+            // Glass entry to go with the glide: without it the panel fades its
+            // contents but pops its material. The parent overlay owns the timing.
             .standaloneGlassTransition(reduceMotion: reduceMotion)
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: notice.id)
         }
     }
 }
 
 struct ReminderCapacityBanner: View {
     let count: Int
+    let onDismiss: () -> Void
 
     var body: some View {
-        Label(
-            "\(count) Erinnerungen konnten nicht geplant werden. Alle Termine bleiben unter „Heute fällig“ sichtbar.",
-            systemImage: "bell.badge.fill"
-        )
-        .font(.subheadline.weight(.medium))
-        .foregroundStyle(.orange)
-        .fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .top, spacing: AppSpacing.snug) {
+            Label(
+                "\(count) Erinnerungen konnten nicht geplant werden. Alle Termine bleiben unter „Heute fällig“ sichtbar.",
+                systemImage: "bell.badge.fill"
+            )
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                    .tappable(Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(.vertical, -12)
+            .accessibilityLabel("Hinweis ausblenden")
+        }
         .padding(AppSpacing.regular)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .mapChrome(cornerRadius: AppRadius.card)
         .padding(.horizontal, AppSpacing.regular)
         .accessibilityElement(children: .combine)

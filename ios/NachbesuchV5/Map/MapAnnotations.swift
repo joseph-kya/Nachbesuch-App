@@ -196,36 +196,41 @@ final class HousePinView: MKAnnotationView {
         coordinator?.houseTappedFromGesture(annotation.houseID)
     }
 
-    /// A freshly placed house drops onto the map.
+    /// A freshly placed house settles onto the map.
+    ///
+    /// A short descent from just above its spot, on a damped spring with one
+    /// small overshoot — it reads as "set down here". The old 70 pt drop on a
+    /// loose spring (damping 0.66) travelled further than the eye could follow
+    /// and wobbled on landing, right where the user was aiming.
     func performDrop() {
-        guard !UIAccessibility.isReduceMotionEnabled else { return }
-        transform = CGAffineTransform(translationX: 0, y: -70).scaledBy(x: 0.9, y: 0.9)
+        guard !UIAccessibility.isReduceMotionEnabled else {
+            alpha = 0
+            UIView.animate(withDuration: 0.2) { self.alpha = 1 }
+            return
+        }
+        layer.removeAllAnimations()
+        transform = CGAffineTransform(translationX: 0, y: -24).scaledBy(x: 0.82, y: 0.82)
         alpha = 0
-        UIView.animate(
-            withDuration: 0.55,
-            delay: 0,
-            usingSpringWithDamping: 0.66,
-            initialSpringVelocity: 0.2
-        ) {
+        UIView.animate(springDuration: 0.5, bounce: 0.18, initialSpringVelocity: 0, delay: 0,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
             self.transform = .identity
             self.alpha = 1
         }
     }
 
-    /// Kurzes Aufpoppen des angetippten Pins (0.9→1, appFeedback-nah).
-    /// Nur der getroffene Pin, RM-sicher, kein Layoutsprung (reine Skalierung).
+    /// Acknowledges the tap on the pin that was hit: a slight press-in and a
+    /// damped return. Pure scale, so the pin's tip never leaves its coordinate.
     func performSelectPop() {
         guard !UIAccessibility.isReduceMotionEnabled else { return }
-        // Schnelles Tappen darf keine Skalen stapeln.
-        layer.removeAnimation(forKey: "selectPop")
-        transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
-        UIView.animate(
-            withDuration: 0.24,
-            delay: 0,
-            usingSpringWithDamping: 0.7,
-            initialSpringVelocity: 0.3
-        ) {
-            self.transform = .identity
+        // Rapid taps continue from wherever the last one left off — no stacking.
+        UIView.animate(springDuration: 0.12, bounce: 0, initialSpringVelocity: 0, delay: 0,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+        } completion: { _ in
+            UIView.animate(springDuration: 0.34, bounce: 0.12, initialSpringVelocity: 0, delay: 0,
+                           options: [.allowUserInteraction, .beginFromCurrentState]) {
+                self.transform = .identity
+            }
         }
     }
 

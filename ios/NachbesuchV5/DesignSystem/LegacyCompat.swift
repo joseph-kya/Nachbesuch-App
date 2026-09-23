@@ -2,22 +2,18 @@ import SwiftUI
 
 /// The iOS 18 presentation tier.
 ///
-/// This file used to be a set of one-line substitutions: every Liquid Glass API got
-/// a "material equivalent" underneath it, and the iOS 18 build was iOS 26 with the
-/// rendering engine removed. `IOS18_UI_AUDIT_AND_REMEDIATION.md` names what that
-/// produced — a rounded control sitting inside a second, differently shaped box,
-/// map chrome that dissolves into the map, and materials stacked on materials until
-/// dark mode goes muddy.
+/// iOS 18 has no Liquid Glass, so this file builds the closest equivalent from
+/// what iOS 18 does well: system materials (a real backdrop blur) for floating
+/// chrome, a blur-free frosted fill for scrolling content, and the same sheen and
+/// glossy rim on every surface. One design language on both OS versions; the
+/// cost is spent where it shows (a handful of floating panels), never per list row.
 ///
-/// It is now a **branch**, not a fallback. iOS 18 gets its own composition, built
-/// from what iOS 18 is actually good at: semantic colours, opaque elevated
-/// surfaces, system button styles, native bars, and short honest motion. Feature
-/// parity is required; pixel parity is explicitly not.
-///
-/// The single rule the old file broke, and the one every wrapper here now keeps:
+/// The rule every wrapper here keeps:
 ///
 /// > One view owns the shape. One view owns the fill. One view owns the border.
 /// > One view owns the pressed state. One view owns the hit region.
+///
+/// Reduce Transparency and Increase Contrast always get an opaque surface.
 
 /// Whether to render the pre-iOS 26 chrome.
 ///
@@ -99,15 +95,17 @@ enum CompatSurfaceRole {
 }
 
 extension View {
-    /// `glassEffect(_:in:)` with a genuine iOS 18 surface underneath it.
+    /// `glassEffect(_:in:)` on iOS 26, and the closest iOS 18 equivalent below it.
     ///
-    /// On iOS 18 this is **opaque**, not translucent, and that is deliberate rather
-    /// than a compromise. A blurred material over the map has to sample and re-blur
-    /// the map every frame — which on an iPhone 11 is both the least legible option
-    /// and the most expensive one. An elevated semantic background with a hairline
-    /// and a soft shadow is what iOS 18 itself uses for floating chrome, reads at a
-    /// glance over standard *and* satellite tiles in both appearances, and costs one
-    /// fill.
+    /// iOS 18 has no Liquid Glass, but it has the ingredients: a system material
+    /// (a real backdrop blur, the same one iOS 18's own Maps controls float on), a
+    /// specular sheen along the top edge, and the glossy rim every glass surface in
+    /// this app carries. Reduce Transparency and Increase Contrast still get an
+    /// opaque surface — see `LegacyGlassSurface`.
+    ///
+    /// Only floating chrome reaches this: content cards and list sections take the
+    /// blur-free `FrostedSurface` on iOS 18, because a live blur per scrolling card
+    /// is a backdrop pass per card per frame.
     @ViewBuilder
     func compatGlass(
         interactive: Bool,
@@ -118,46 +116,108 @@ extension View {
         if #available(iOS 26, *), !LegacyChrome.isForced {
             glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
         } else {
-            modifier(LegacySurface(shape: shape, role: role, shadowRadius: legacyShadowRadius))
+            modifier(LegacyGlassSurface(shape: shape, role: role, shadowRadius: legacyShadowRadius))
         }
     }
 }
 
-/// The iOS 18 floating surface: one fill, one border, one shadow, one shape.
-private struct LegacySurface<S: InsettableShape>: ViewModifier {
+/// Whether a custom surface must fall back to an opaque fill.
+///
+/// `accessibilityReduceTransparency` is read-only and the simulator cannot toggle
+/// it, so the harness forces the opaque path with `NACHBESUCH_REDUCE_TRANSPARENCY`.
+/// Cached: the environment lookup must not run per surface per frame.
+enum GlassPreference {
+    static let debugForceOpaque: Bool = {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["NACHBESUCH_REDUCE_TRANSPARENCY"] != nil
+        #else
+        return false
+        #endif
+    }()
+
+    static func prefersOpaque(reduceTransparency: Bool, contrast: ColorSchemeContrast) -> Bool {
+        debugForceOpaque || reduceTransparency || contrast == .increased
+    }
+}
+
+/// The light that makes a flat fill read as a pane of glass: a soft white sheen
+/// falling off from the top edge. Static and cheap — one gradient fill, no blur.
+struct GlassSheen<S: Shape>: View {
     @Environment(\.colorScheme) private var colorScheme
+    let shape: S
+
+    var body: some View {
+        shape.fill(
+            LinearGradient(
+                colors: [.white.opacity(colorScheme == .dark ? 0.10 : 0.38), .white.opacity(0)],
+                startPoint: .top,
+                endPoint: .center
+            )
+        )
+        .allowsHitTesting(false)
+    }
+}
+
+/// The iOS 18 floating glass: material, sheen, rim, one shadow on the shape.
+private struct LegacyGlassSurface<S: InsettableShape>: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
     let shape: S
     let role: CompatSurfaceRole
     let shadowRadius: CGFloat
 
-    private var fill: Color {
+    private var opaqueFill: Color {
         switch role {
-        // `secondarySystemBackground` is the elevated level over a plain grouped
-        // ground; over the map the surface has to win against arbitrary tile colour,
-        // so it takes the base background — white in light, near-black in dark.
         case .map: Color(uiColor: .systemBackground)
-        // `.card` never reaches here — a control on a card draws no surface at all —
-        // but a panel asking for one gets the elevated level like any other.
         case .content, .card: Color(uiColor: .secondarySystemBackground)
         }
     }
 
+    /// Over MapKit the surface has to win against arbitrary tile colour, so it
+    /// takes the thicker material; over the quiet app ground the regular one.
+    private var material: Material {
+        role == .map ? .regularMaterial : .thinMaterial
+    }
+
+    private func shadowOpacity(opaque: Bool) -> Double {
+        switch (opaque, colorScheme == .dark) {
+        case (true, true): 0.32
+        case (true, false): 0.12
+        case (false, true): 0.24
+        case (false, false): 0.07
+        }
+    }
+
     func body(content: Content) -> some View {
+        let opaque = GlassPreference.prefersOpaque(reduceTransparency: reduceTransparency, contrast: contrast)
         content
             .background {
-                // Opaque on iOS 18 by design: a blurred material over MapKit
-                // re-samples the tiles every frame (most expensive on A13) and
-                // goes muddy in dark mode. Elevated semantic fill + hairline.
-                shape.fill(fill)
+                // The shadow belongs to the shape, never to the label: a shadow on
+                // the whole view is an offscreen pass over its text as well.
+                Group {
+                    if opaque {
+                        shape.fill(opaqueFill)
+                    } else {
+                        shape.fill(material)
+                            .overlay { GlassSheen(shape: shape) }
+                    }
+                }
+                // Lighter under glass than under an opaque fill: a material is
+                // translucent, and a heavy shadow shows through it as a smudge.
+                .shadow(
+                    color: .black.opacity(shadowRadius > 0 ? shadowOpacity(opaque: opaque) : 0),
+                    radius: shadowRadius,
+                    y: shadowRadius > 0 ? shadowRadius / 3 : 0
+                )
             }
             .overlay {
-                shape.strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5)
+                if opaque {
+                    shape.strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5)
+                } else {
+                    glossyRim(for: shape, colorScheme: colorScheme)
+                }
             }
-            .shadow(
-                color: .black.opacity(shadowRadius > 0 ? (colorScheme == .dark ? 0.30 : 0.12) : 0),
-                radius: shadowRadius,
-                y: shadowRadius > 0 ? 4 : 0
-            )
     }
 }
 
@@ -215,22 +275,17 @@ enum CompatControlShape {
 extension View {
     /// Replaces `.buttonStyle(.glass)` / `.buttonStyle(.glassProminent)`.
     ///
-    /// **This is the fix for the audit's §3.1.** The old fallback put a system
-    /// `.bordered` button — which owns its own shape, padding, clipping and pressed
-    /// state — inside a separately applied `.regularMaterial` capsule with its own
-    /// stroke. Two containers, two shapes, two boundaries, and when the parent
-    /// proposed a rectangle the material took the rectangle while the control stayed
-    /// round inside it. That is the "rounded button in a box" the field build shows.
+    /// Each branch has exactly one owner of shape, fill, border, press and hit
+    /// region — no system button nested inside a separately drawn capsule, which is
+    /// what produced the "rounded button in a box" on iOS 18 before.
     ///
-    /// Each branch below now has exactly one owner of the container:
-    ///
-    /// - **prominent** → `.borderedProminent`. Fully system-owned; honours `.tint`
-    ///   and `.buttonBorderShape`, and already carries its own press state.
-    /// - **plain over content** → `.bordered`. Same deal, quieter.
-    /// - **plain over the map** → `LegacyMapControlStyle`. The one case a system
-    ///   style cannot serve: `.bordered` is a faint wash of the tint, and a faint
-    ///   wash over map tiles is invisible. This style owns shape, fill, border,
-    ///   press and hit region itself, and nothing is layered around it.
+    /// - iOS 26: the system glass styles.
+    /// - iOS 18 prominent → `LegacyGlassProminentStyle`: a tinted glass drop with a
+    ///   sheen, a rim and a soft coloured shadow.
+    /// - iOS 18 plain → `LegacyGlassControlStyle`: material, sheen and rim, the
+    ///   label in the tint (or primary over the map).
+    /// - iOS 18 on a card → `LegacyCardControlStyle`: the glyph only — the card
+    ///   already is the surface.
     @ViewBuilder
     func compatGlassButton(
         prominent: Bool = false,
@@ -244,22 +299,38 @@ extension View {
                 buttonStyle(.glass)
             }
         } else if prominent {
-            buttonStyle(.borderedProminent)
+            buttonStyle(LegacyGlassProminentStyle(shape: shape))
         } else {
             switch role {
-            case .map: buttonStyle(LegacyMapControlStyle(shape: shape))
+            case .map: buttonStyle(LegacyGlassControlStyle(shape: shape, role: .map))
             case .card: buttonStyle(LegacyCardControlStyle())
-            case .content: buttonStyle(.bordered)
+            case .content: buttonStyle(LegacyGlassControlStyle(shape: shape, role: .content))
             }
         }
     }
 }
 
+/// Label padding per control size, close to what the system bordered styles give,
+/// so swapping styles never meaningfully changes a button's footprint.
+private func legacyControlPadding(_ size: ControlSize, shape: CompatControlShape) -> EdgeInsets {
+    if shape == .circle {
+        let inset: CGFloat = switch size {
+        case .mini, .small: 6
+        case .large, .extraLarge: 10
+        default: 8
+        }
+        return EdgeInsets(top: inset, leading: inset, bottom: inset, trailing: inset)
+    }
+    switch size {
+    case .mini, .small: return EdgeInsets(top: 5, leading: 11, bottom: 5, trailing: 11)
+    // Large lands a 26 pt label exactly on the 44 pt target, level with the
+    // circular map controls beside it.
+    case .large, .extraLarge: return EdgeInsets(top: 9, leading: 20, bottom: 9, trailing: 20)
+    default: return EdgeInsets(top: 7, leading: 14, bottom: 7, trailing: 14)
+    }
+}
+
 /// A control on a card: the glyph, nothing behind it, and a real hit region.
-///
-/// `.bordered` inherits the app tint, so an ellipsis on a white card came out as a
-/// red glyph on a pale red disc — a second surface on a surface, and one that reads
-/// as a status colour on a screen where red already means "offen".
 private struct LegacyCardControlStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
@@ -269,62 +340,93 @@ private struct LegacyCardControlStyle: ButtonStyle {
             .foregroundStyle(isEnabled ? Color.secondary : Color.secondary.opacity(0.4))
             .frame(minWidth: AppTouch.minimum, minHeight: AppTouch.minimum)
             .background(
-                // Einheitlich `PressHighlight.opacity` (0.08) — siehe AdaptiveSurface.
                 Circle().fill(Color.primary.opacity(configuration.isPressed ? PressHighlight.opacity : 0))
             )
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: configuration.isPressed)
+            .animation(.appPress(reduceMotion: reduceMotion), value: configuration.isPressed)
             .contentShape(Circle())
     }
 }
 
-/// A map control on iOS 18: one opaque disc or capsule, one hairline, one press.
+/// iOS 18 glass control: material disc or capsule with sheen and rim.
 ///
-/// Deliberately not built on a system style. `.bordered` tints its fill at roughly
-/// 15 % opacity, which over map tiles reads as nothing at all — and adding a
-/// material behind a `.bordered` button is precisely the double container this
-/// whole file exists to remove.
-///
-/// Feinschliff (WAVE2): Haarlinie Separator 0.6 / 0.5 pt wie überall, Schatten
-/// 3/1 (Control-Maß, nicht Karten-Maß 12/4), Press-Highlight `PressHighlight.opacity`
-/// (0.08, einheitlich), Scale nur ohne Reduce Motion, Animation `.appFeedback`.
-private struct LegacyMapControlStyle: ButtonStyle {
+/// Over the map the label stays primary — a faint tinted glyph over map tiles
+/// reads as nothing. Over content it takes the tint, as `.bordered` did.
+private struct LegacyGlassControlStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.controlSize) private var controlSize
     let shape: CompatControlShape
-
-    private var horizontalPadding: CGFloat {
-        switch shape {
-        case .circle: 0
-        case .capsule: controlSize == .small ? 12 : 16
-        }
-    }
+    let role: CompatSurfaceRole
 
     func makeBody(configuration: Configuration) -> some View {
         let outline = AnyInsettableShape(shape)
         configuration.label
-            .font(.body.weight(.medium))
-            .foregroundStyle(isEnabled ? Color.primary : Color.secondary)
-            .padding(.horizontal, horizontalPadding)
-            // 44 pt is the target and also the visible size of the circular
-            // controls, so there is no separate `.tappable()` expanding a smaller
-            // pill — one region, and it is the one that is drawn.
-            .frame(
-                minWidth: AppTouch.minimum,
-                minHeight: AppTouch.minimum
-            )
-            .background(Color(uiColor: .systemBackground), in: outline)
-            .overlay { outline.strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5) }
-            // Einheitliches Highlight 0.08, kein Sonderwert 0.10.
+            .fontWeight(.medium)
+            .foregroundStyle(role == .map ? AnyShapeStyle(Color.primary) : AnyShapeStyle(.tint))
+            .padding(legacyControlPadding(controlSize, shape: shape))
+            .frame(minWidth: shape == .circle ? AppTouch.minimum : nil,
+                   minHeight: role == .map || controlSize == .large ? AppTouch.minimum : nil)
+            .compatGlass(interactive: false, in: outline, role: role,
+                         legacyShadowRadius: role == .map ? 6 : 0)
             .overlay { outline.fill(Color.primary.opacity(configuration.isPressed ? PressHighlight.opacity : 0)) }
-            .shadow(
-                color: .black.opacity(colorScheme == .dark ? 0.27 : 0.10),
-                radius: 3,
-                y: 1
-            )
+            .opacity(isEnabled ? 1 : 0.45)
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: configuration.isPressed)
+            .animation(.appPress(reduceMotion: reduceMotion), value: configuration.isPressed)
+            .contentShape(outline)
+    }
+}
+
+/// iOS 18 prominent glass: the tint as a lit, rounded drop.
+///
+/// Fill is the environment tint (`.tint`), so every `.tint(…)` at a call site
+/// still decides the colour. The sheen and rim are what make it glass rather
+/// than a flat pill; the coloured shadow is on the shape only.
+private struct LegacyGlassProminentStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.controlSize) private var controlSize
+    let shape: CompatControlShape
+
+    func makeBody(configuration: Configuration) -> some View {
+        let outline = AnyInsettableShape(shape)
+        configuration.label
+            .fontWeight(.semibold)
+            .foregroundStyle(.white)
+            .padding(legacyControlPadding(controlSize, shape: shape))
+            .frame(minWidth: shape == .circle ? AppTouch.minimum : nil,
+                   minHeight: controlSize == .large ? AppTouch.minimum : nil)
+            .background {
+                // Disabled drains the colour in the fill itself rather than via a
+                // saturation filter over the whole button (an extra render pass).
+                outline.fill(isEnabled ? AnyShapeStyle(.tint) : AnyShapeStyle(Color(uiColor: .systemGray3)))
+                    .overlay {
+                        if !reduceTransparency {
+                            outline.fill(
+                                LinearGradient(
+                                    colors: [.white.opacity(0.30), .white.opacity(0)],
+                                    startPoint: .top,
+                                    endPoint: .center
+                                )
+                            )
+                        }
+                    }
+                    .shadow(color: .black.opacity(isEnabled ? 0.18 : 0), radius: 6, y: 3)
+            }
+            .overlay {
+                outline.strokeBorder(
+                    LinearGradient(
+                        colors: [.white.opacity(0.45), .white.opacity(0.06)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 0.75
+                )
+            }
+            .overlay { outline.fill(Color.black.opacity(configuration.isPressed ? 0.10 : 0)) }
+            .opacity(isEnabled ? 1 : 0.7)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
+            .animation(.appPress(reduceMotion: reduceMotion), value: configuration.isPressed)
             .contentShape(outline)
     }
 }
@@ -443,8 +545,13 @@ enum LegacyBarAppearance {
         // system bar that iOS 26 draws differently anyway.
         if #available(iOS 26, *) { return }
 
+        // The system material, in both states. The default scroll-edge appearance
+        // is fully transparent, which over edge-to-edge MapKit left three loose
+        // icons floating on the tiles; an opaque strip fixed that but was the one
+        // solid slab in an otherwise glass interface. The blurred default bar is
+        // iOS 18's own glass and separates from the map on its own.
         let tabBar = UITabBarAppearance()
-        tabBar.configureWithOpaqueBackground()
+        tabBar.configureWithDefaultBackground()
         UITabBar.appearance().standardAppearance = tabBar
         UITabBar.appearance().scrollEdgeAppearance = tabBar
 

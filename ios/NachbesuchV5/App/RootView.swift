@@ -360,23 +360,45 @@ struct RootView: View {
     }
 }
 
+/// Transient and standing banners over every tab.
+///
+/// An overlay, always installed, never a conditional wrapper. The previous shape
+/// was `if banner { content.safeAreaBar { … } } else { content }` — two branches
+/// of an `if` are two different views to SwiftUI, so every notice appearing or
+/// leaving tore down and rebuilt the entire `TabView`: the map, the list with its
+/// scroll position, the archive index. That was the jolt behind every banner, and
+/// it also meant the banner's own transition never ran, because it arrived as
+/// part of a brand-new tree. An always-present overlay keeps the tabs' identity
+/// and gives the banner a stable parent to animate in and out of.
+///
+/// An overlay (rather than an always-installed safe-area bar) also sidesteps the
+/// iOS 18 layout renegotiation an empty inset around a `TabView` could trigger.
 private struct RootBannerModifier: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AppNoticeCenter.self) private var notices
     let unscheduledRevisits: Int
+    /// The standing capacity banner can be put away; it returns when the count
+    /// changes, because that is new information.
+    @State private var dismissedCapacityCount: Int?
 
-    @ViewBuilder
+    private var showsCapacity: Bool {
+        unscheduledRevisits > 0 && dismissedCapacityCount != unscheduledRevisits
+    }
+
     func body(content: Content) -> some View {
-        if notices.current != nil || unscheduledRevisits > 0 {
-            content.compatSafeAreaBar(edge: .top, spacing: 0) {
-                VStack(spacing: AppSpacing.tight) {
-                    AppNoticeBanner()
-                    if unscheduledRevisits > 0 {
-                        ReminderCapacityBanner(count: unscheduledRevisits)
+        content.overlay(alignment: .top) {
+            VStack(spacing: AppSpacing.tight) {
+                AppNoticeBanner()
+                if showsCapacity {
+                    ReminderCapacityBanner(count: unscheduledRevisits) {
+                        dismissedCapacityCount = unscheduledRevisits
                     }
+                    .transition(.appBanner(edge: .top, reduceMotion: reduceMotion))
                 }
             }
-        } else {
-            content
+            .padding(.top, AppSpacing.tight)
+            .animation(.appSettle(reduceMotion: reduceMotion), value: notices.current?.id)
+            .animation(.appSettle(reduceMotion: reduceMotion), value: showsCapacity)
         }
     }
 }

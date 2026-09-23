@@ -66,6 +66,7 @@ struct ExportSheet: View {
                 shareSection
                 if deleteAfterExportPrompt, !isPreselected { cleanupSection }
             }
+            .glassForm()
             .navigationTitle("Exportieren")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -98,6 +99,7 @@ struct ExportSheet: View {
                 LabeledContent("Tag", value: scope.title)
             }
         }
+        .glassRows()
     }
 
     private var rangeSection: some View {
@@ -114,6 +116,7 @@ struct ExportSheet: View {
                 Text("Häuser ohne einen einzigen Eintrag werden weggelassen.")
             }
         }
+        .glassRows()
     }
 
     private var contentSection: some View {
@@ -150,6 +153,7 @@ struct ExportSheet: View {
         } footer: {
             Text("Notizen sind interne Stichworte und landen sonst mit im Dokument.")
         }
+        .glassRows()
     }
 
     @ViewBuilder
@@ -217,6 +221,7 @@ struct ExportSheet: View {
         } footer: {
             Text("Die Legacy-Liste entspricht dem früheren kompakten Adressschema und enthält keine Notizen.")
         }
+        .glassRows()
     }
 
     private func exportAction(title: String, subtitle: String, systemImage: String) -> some View {
@@ -271,6 +276,7 @@ struct ExportSheet: View {
         } footer: {
             Text("Erst exportieren, dann löschen — nie umgekehrt.")
         }
+        .glassRows()
     }
 
     private func deleteGebiet() async {

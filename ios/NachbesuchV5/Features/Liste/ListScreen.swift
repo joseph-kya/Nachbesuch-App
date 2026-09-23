@@ -95,6 +95,13 @@ struct ListScreen: View {
     @State private var seedStore: [UUID: HouseListBuilder.Seed] = [:]
     /// Neuestes gesehenes `updatedAt`: Delta-Reads fragen nur danach.
     @State private var listWatermark: Date?
+    /// Bumped when a filter or ordering change delivers its new sections. The
+    /// list is keyed on it, so a different *set* of rows crossfades in as a whole
+    /// instead of hundreds of UIKit row insertions and deletions racing each
+    /// other — and it lands at the top, which is where a new filter should start.
+    @State private var listGeneration = 0
+    /// Set by a filter/ordering change; consumed by the next section rebuild.
+    @State private var crossfadeNextSections = false
     /// Letzter Korpus-Aufbau ist fehlgeschlagen — bei leerer Liste + Gebiet +
     /// ohne Query/Filter zeigt der Empty-State einen Retry statt
     /// „Noch keine Häuser".
@@ -132,25 +139,30 @@ struct ListScreen: View {
         let label: String
     }
 
-    private struct UndoInsetModifier: ViewModifier {
+    /// The undo banner, floating over the bottom of the list.
+    ///
+    /// Always installed, never `if undo { content.safeAreaBar } else { content }`:
+    /// the two branches of that `if` are two different views, so every status
+    /// write rebuilt the whole `List` — scroll position included — the moment the
+    /// banner appeared, and again when it left. An overlay keeps the list's
+    /// identity, costs no layout negotiation on iOS 18, and gives the banner a
+    /// stable parent to glide in and out of.
+    private struct UndoOverlayModifier: ViewModifier {
         let undo: UndoEntry?
         let reduceMotion: Bool
         let onUndo: (UndoEntry) -> Void
 
-        @ViewBuilder
         func body(content: Content) -> some View {
-            // An empty safeAreaInset is not inert on iOS 18: after repeated TabView
-            // transitions it can keep renegotiating layout forever. No undo means no
-            // inset in the hierarchy at all.
-            if let undo {
-                content.compatSafeAreaBar(edge: .bottom, spacing: 0) {
-                    UndoBanner(label: undo.label) { onUndo(undo) }
-                        .padding(.horizontal, AppSpacing.regular)
-                        .padding(.bottom, AppSpacing.tight)
-                        .transition(.appBanner(edge: .bottom, reduceMotion: reduceMotion))
+            content.overlay(alignment: .bottom) {
+                ZStack {
+                    if let undo {
+                        UndoBanner(label: undo.label) { onUndo(undo) }
+                            .padding(.horizontal, AppSpacing.regular)
+                            .padding(.bottom, AppSpacing.snug)
+                            .transition(.appBanner(edge: .bottom, reduceMotion: reduceMotion))
+                    }
                 }
-            } else {
-                content
+                .animation(.appSettle(reduceMotion: reduceMotion), value: undo?.id)
             }
         }
     }
@@ -227,7 +239,10 @@ struct ListScreen: View {
             await rebuildCorpus()
         }
         .onChange(of: debouncedQuery) { _, _ in recomputeSections() }
-        .onChange(of: sortByDistance) { _, _ in recomputeSections() }
+        .onChange(of: sortByDistance) { _, _ in
+            crossfadeNextSections = true
+            recomputeSections()
+        }
         .task(id: PresentationTaskKey(version: presentationVersion, isActive: isActive)) {
             guard isActive else { return }
             await rebuildSections()
@@ -326,7 +341,7 @@ struct ListScreen: View {
                 .padding(.vertical, 6)
             }
             .modifier(
-                UndoInsetModifier(
+                UndoOverlayModifier(
                     undo: undo,
                     reduceMotion: reduceMotion,
                     onUndo: performUndo
@@ -357,8 +372,6 @@ struct ListScreen: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .transition(.opacity)
-                    .animation(.appFeedback(reduceMotion: reduceMotion), value: sortByDistance && sortOrigin == nil)
                     .accessibilityLabel("Standort wird gesucht")
             }
             if sections.isEmpty {
@@ -390,6 +403,8 @@ struct ListScreen: View {
         .listStyle(.insetGrouped)
         .listSectionSpacing(AppSpacing.regular)
         .scrollContentBackground(.hidden)
+        .id(listGeneration)
+        .transition(.opacity)
         // iPad/landscape: insetGrouped liefe sonst über die volle Breite —
         // Doppel-Frame engt auf 700 pt ein und zentriert (außen infinity).
         // Harmlos am iPhone (schmaler als 700), Hintergrund bleibt AppBackdrop.
@@ -622,9 +637,22 @@ struct ListScreen: View {
                                                query: query, origin: origin, streetOrder: order)
         }
         guard !Task.isCancelled, version == presentationVersion else { return }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { sections = built }
+        if crossfadeNextSections {
+            // A new filter or ordering: the old rows fade out as one, the new
+            // ones fade in as one, starting at the top.
+            crossfadeNextSections = false
+            withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
+                listGeneration &+= 1
+                sections = built
+            }
+        } else {
+            // Data changes (a status written elsewhere, a keystroke) swap in
+            // place without row animations: the rows are the same rows, and a
+            // list re-sorting itself under the thumb is not something to animate.
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { sections = built }
+        }
     }
 
     /// Adopts a new origin only after a real move — 25 m is far enough that the
@@ -647,37 +675,27 @@ struct ListScreen: View {
         // Auf/zu = eine Selection-Haptik via `collapsedSections`-Trigger am Screen.
         // Absichtlich kein zusätzlicher Impact für auf vs. zu: zwei Feedbacks auf
         // demselben Trigger wären ein Doppel-Brumm pro Tap.
-        withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
+        withAnimation(.appExpand(reduceMotion: reduceMotion)) {
             if collapsedSections.contains(id) { collapsedSections.remove(id) }
             else { collapsedSections.insert(id) }
         }
     }
 
-    /// Filterwechsel: Datentausch ohne Animation, danach Scroll nach oben mit
-    /// appSettle — wie Archiv.applyFilter: nur der Scroll läuft sichtbar.
-    private func applyFilter(_ value: ListFilter, proxy: ScrollViewProxy) {
+    /// Filterwechsel: the chip moves at once (FilterBar owns that animation);
+    /// the rows follow as one crossfade when the new sections are ready, and the
+    /// new list starts at the top. No scroll animation racing a data swap.
+    private func applyFilter(_ value: ListFilter, proxy _: ScrollViewProxy) {
         // Haptik besitzt die FilterBar (`selection` auf selectedID) — hier kein
         // zweiter Trigger, sonst brummt jeder Chipwechsel doppelt.
         guard filter != value else { return }
-        let topID = sections.first?.id
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            filter = value
-            recomputeSections()
-        }
-        // Der Scroll ist die einzige Animation — Ziel ist die alte erste
-        // Straße (liegt oben), der Neuaufbau läuft danach still ein.
-        if let topID {
-            withAnimation(.appSettle(reduceMotion: reduceMotion)) {
-                proxy.scrollTo(topID, anchor: .top)
-            }
-        }
+        filter = value
+        crossfadeNextSections = true
+        recomputeSections()
     }
 
     private func setAllStreets(expanded: Bool) {
         // Gleicher Trigger wie toggleSection: eine Selection pro Massen-Tap.
-        withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
+        withAnimation(.appExpand(reduceMotion: reduceMotion)) {
             if expanded {
                 collapsedSections.removeAll()
             } else {
@@ -972,7 +990,8 @@ struct ListScreen: View {
                     refreshGate?.reset()
                     dataVersion &+= 1
                 }
-                .buttonStyle(.borderedProminent)
+                .compatGlassButton(prominent: true)
+                .buttonBorderShape(.capsule)
                 .accessibilityLabel("Erneut versuchen")
                 .accessibilityHint("Lädt die Liste neu")
             }
@@ -995,7 +1014,8 @@ struct ListScreen: View {
                 // zu lösen, statt leer dazustehen.
                 if filter != .all {
                     Button("Filter zurücksetzen") { applyFilter(.all, proxy: proxy) }
-                        .buttonStyle(.bordered)
+                        .compatGlassButton()
+                        .buttonBorderShape(.capsule)
                         .accessibilityLabel("Filter zurücksetzen")
                         .accessibilityHint("Zeigt wieder alle Adressen")
                 }
@@ -1004,21 +1024,16 @@ struct ListScreen: View {
             .accessibilityLabel("Keine Treffer für \(debouncedQuery)")
         } else {
             ContentUnavailableView {
-                // Hüpft einmal beim Erscheinen (Filterwechsel), ohne Reduce Motion.
-                // Label trägt den Effekt — wirkt aufs Symbol, nicht auf den Text.
+                // No bounce: the list already crossfades to this state, and a
+                // second motion on arrival says nothing the first did not.
                 Label(filter.emptyTitle, systemImage: filter.systemImage)
-                    .symbolEffect(
-                        .bounce,
-                        options: reduceMotion ? .nonRepeating : .default,
-                        value: reduceMotion ? "" : filter.id
-                    )
-                    .symbolEffectsRemoved(reduceMotion)
             } description: {
                 Text(filter.emptyMessage)
             } actions: {
                 if filter != .all {
                     Button("Filter zurücksetzen") { applyFilter(.all, proxy: proxy) }
-                        .buttonStyle(.borderedProminent)
+                        .compatGlassButton(prominent: true)
+                        .buttonBorderShape(.capsule)
                         .accessibilityLabel("Filter zurücksetzen")
                         .accessibilityHint("Zeigt wieder alle Adressen")
                 }
@@ -1226,7 +1241,6 @@ private struct HouseRow: View, Equatable {
             }
             Text(glance.label)
                 .monospacedDigit()
-                .contentTransition(reduceMotion ? .identity : .numericText())
             if glance.extraDoors > 0 {
                 Text("+\(glance.extraDoors)")
                     .monospacedDigit()
@@ -1251,31 +1265,20 @@ private struct HouseRow: View, Equatable {
     }
 }
 
-/// Rote Offen-Badge mit Pop bei Änderung.
-///
-/// Eigene View, damit `HouseRow.==` (row + glance) wirksam bleibt: Das
-/// Pop-State lebt hier drin, nicht im Row-Modell. Ohne Reduce Motion 0.8→1.
+/// Rote Offen-Badge. Static on purpose: list data swaps in place without
+/// animation, so a count "pop" only ever fired on rows the user was not
+/// looking at — the one moment an animation can only distract.
 private struct OpenCountBadge: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let count: Int
-    @State private var pop: CGFloat = 1
 
     var body: some View {
         Text("\(count)")
             .font(.caption.weight(.bold))
             .monospacedDigit()
-            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(count)))
             .foregroundStyle(.red)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(StatusChipFill(.red), in: Capsule())
-            .scaleEffect(pop)
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: count)
-            .onChange(of: count) { _, _ in
-                guard !reduceMotion else { return }
-                pop = 0.8
-                withAnimation(.appFeedback(reduceMotion: false)) { pop = 1 }
-            }
             .accessibilityHidden(true)
     }
 }
@@ -1297,10 +1300,10 @@ private struct StreetHeaderPressStyle: ButtonStyle {
         configuration.label
             .overlay {
                 sectionShape(isFirst: true, isLast: isLast)
-                    .fill(.primary.opacity(configuration.isPressed ? 0.08 : 0))
+                    .fill(.primary.opacity(configuration.isPressed ? PressHighlight.opacity : 0))
                     .allowsHitTesting(false)
             }
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: configuration.isPressed)
+            .animation(.appPress(reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 }
 
@@ -1312,10 +1315,10 @@ private struct StreetRowPressStyle: ButtonStyle {
         configuration.label
             .overlay {
                 RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous)
-                    .fill(.primary.opacity(configuration.isPressed ? 0.08 : 0))
+                    .fill(.primary.opacity(configuration.isPressed ? PressHighlight.opacity : 0))
                     .allowsHitTesting(false)
             }
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: configuration.isPressed)
+            .animation(.appPress(reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 }
 
@@ -1401,7 +1404,7 @@ private struct StreetCard: View {
                     }
                     if section.rows.count > visible.count {
                         Button {
-                            withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
+                            withAnimation(.appExpand(reduceMotion: reduceMotion)) {
                                 visibleCount += Self.pageSize
                             }
                         } label: {
@@ -1426,11 +1429,14 @@ private struct StreetCard: View {
                     // per Außen-Proxy zum Kopf — sonst scrollt man ewig zurück.
                     if visibleCount > Self.pageSize * 2 {
                         Button {
-                            withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
-                                visibleCount = Self.pageSize
-                            }
+                            // Scroll first, then fold: folding 60+ rows while the
+                            // list scrolls makes the scroll target move under it.
                             withAnimation(.appSettle(reduceMotion: reduceMotion)) {
                                 onJumpTop()
+                            } completion: {
+                                withAnimation(.appExpand(reduceMotion: reduceMotion)) {
+                                    visibleCount = Self.pageSize
+                                }
                             }
                         } label: {
                             HStack(spacing: 6) {
@@ -1450,13 +1456,22 @@ private struct StreetCard: View {
                     }
                 }
                 // Opacity only: a slide/move here would drag text over the rounded
-                // corners mid-height-animation — the next Kantenkatastrophe.
-                // Clipped so fading rows never poke outside the glossy shape.
-                .transition(.opacity)
+                // corners mid-height-animation. Clipped so fading rows never poke
+                // outside the glass while the row grows. Arriving rows fade in
+                // slightly behind the height so the card opens *then* fills;
+                // leaving rows fade out fast so they never outlive their room.
+                .transition(
+                    AnyTransition.asymmetric(
+                        insertion: AnyTransition.opacity.animation(
+                            .appExpand(reduceMotion: reduceMotion).delay(reduceMotion ? 0 : 0.06)
+                        ),
+                        removal: AnyTransition.opacity.animation(.easeOut(duration: 0.14))
+                    )
+                )
                 .clipped()
             }
         }
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: isExpanded)
+        .animation(.appExpand(reduceMotion: reduceMotion), value: isExpanded)
         // Ein Paging-Tap = eine Selection-Haptik. Kein zweiter Trigger auf
         // demselben Wert: withAnimation oben trägt keine Haptik.
         .sensoryFeedback(.selection, trigger: visibleCount)
@@ -1561,42 +1576,21 @@ private struct StreetHeader: View {
                     .foregroundStyle(Color.doneTone)
                     .labelStyle(.titleAndIcon)
                     .lineLimit(1)
-                    .symbolEffect(
-                        .bounce,
-                        options: reduceMotion ? .nonRepeating : .default,
-                        value: reduceMotion ? false : isDone
-                    )
-                    .symbolEffectsRemoved(reduceMotion)
-                    .transition(.blockSwap(reduceMotion: reduceMotion))
             } else {
                 Text("\(section.openCount) offen")
                     .font(.caption.weight(.semibold))
                     .monospacedDigit()
                     .foregroundStyle(stateTint)
-                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(section.openCount)))
                     .lineLimit(1)
                     // AX5 schrumpft statt zu clippen; ohne ScaleFactor frisst die
                     // einzeilige Zahl den Balken daneben.
                     .minimumScaleFactor(0.7)
-                    .transition(.blockSwap(reduceMotion: reduceMotion))
             }
         }
-        // The one place on this screen `appCelebrate` is warranted. `Motion.swift`
-        // reserves it for "genuine moments of completion, never routine interaction",
-        // and the last open door on a street is exactly that — it happens once per
-        // street per campaign, and it is the thing the user is walking around to
-        // achieve. Every other count change on this screen is `appFeedback`.
-        .animation(.appCelebrate(reduceMotion: reduceMotion), value: isDone)
-        // Zählerwechsel (5→4) lebt vom Morph: ohne Animation am Count springt
-        // der numericText-Wechsel hart statt zu laufen.
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: section.openCount)
-    }
-
-    /// One key for bar and tint: progress and completion move together, never
-    /// as two competing animations.
-    private struct ProgressKey: Hashable {
-        let progress: Double
-        let isDone: Bool
+        // No animation modifiers here: sections arrive in a transaction that
+        // disables animations (data swaps in place), so every morph, bounce and
+        // celebrate that used to sit on this header was either dead weight per
+        // row or fired on a row off screen. The completion haptic still lands.
     }
 
     /// A hand-drawn capsule rather than `ProgressView`: the system bar draws its
@@ -1604,29 +1598,18 @@ private struct StreetHeader: View {
     /// identical to one with no doors at all. Here the track is always visible and
     /// the fill keeps a rounded stub as soon as there is any progress at all.
     private func progressBar(width: CGFloat) -> some View {
-        ZStack(alignment: .leading) {
-            Capsule(style: .continuous)
-                .fill(.quaternary)
-            if section.progress > 0 {
-                Capsule(style: .continuous)
-                    .fill(stateTint)
-                    .frame(width: max(5, width * min(section.progress, 1)))
-            }
-        }
-        .frame(width: width, height: 5)
-        .animation(.appSettle(reduceMotion: reduceMotion), value: ProgressKey(progress: section.progress, isDone: isDone))
+        ProgressTrack(progress: section.progress, fill: stateTint)
+            .frame(width: width)
     }
 
     private var chevron: some View {
         Image(systemName: "chevron.down")
             .font(.caption2.weight(.bold))
             .foregroundStyle(.tertiary)
+            // Rotation only, on the same expand curve as the card: the chevron
+            // points where the content goes, and moves exactly as far as it does.
             .rotationEffect(.degrees(isExpanded ? 0 : -90))
-            // Winziges Aufpoppen beim Umschalten (0.9→1), eckensicher: 12-pt
-            // Glyph, kein Container-Geometriebruch. Läuft in derselben
-            // appFeedback-Transaktion wie die Rotation — ein Trigger, ein Takt.
-            .scaleEffect(isExpanded || reduceMotion ? 1 : 0.9)
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: isExpanded)
+            .animation(.appExpand(reduceMotion: reduceMotion), value: isExpanded)
             .frame(width: 12)
             .accessibilityHidden(true)
     }
@@ -1704,11 +1687,6 @@ private struct UndoBanner: View {
                     HStack(spacing: AppSpacing.snug) {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(Color.doneTone)
-                            .symbolEffect(
-                                .bounce,
-                                options: reduceMotion ? .nonRepeating : .default,
-                                value: reduceMotion ? "" : label
-                            )
                         Text(label)
                             .font(.footnote)
                             .lineLimit(2)
@@ -1780,11 +1758,14 @@ struct StatusLegendSheet: View {
                         .accessibilityValue(outcome.explanation)
                     }
                 }
+                .glassRows()
                 Section("Gesten") {
                     Label("Tippen öffnet die Details", systemImage: "hand.tap")
                 }
+                .glassRows()
             }
             .listStyle(.insetGrouped)
+            .glassForm()
             .navigationTitle("Hilfe")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

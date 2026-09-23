@@ -1,3 +1,33 @@
+# iOS glass & motion pass — 2026-09-23
+
+Rendering changes that came with the all-glass redesign. Not yet measured on
+device; the Xcode build and the checks below are still to be run.
+
+- **No more view-tree rebuilds for banners.** The root notice banner and the list's
+  undo banner were installed with `if banner { content.safeAreaBar } else { content }`.
+  Each appearance rebuilt the whole `TabView` (or `List`), discarding scroll position
+  and state. Both are now always-present overlays.
+- **Glass cost is spent where it shows.** iOS 26 uses system Liquid Glass. iOS 18
+  uses a real material only for floating chrome (a handful of panels over the map)
+  and a blur-free frosted fill for anything that scrolls, so a list row never
+  samples its backdrop.
+- **Shadows sit on shapes, not views.** A `.shadow` on a whole card rendered its
+  text offscreen as well. Scrolling cards (archive, list) no longer cast shadows,
+  and iOS 26 glass gets none, because glass brings its own.
+- **Progress bars without `GeometryReader`.** `ProgressFillShape` gets its rect for
+  free and interpolates its own width: one less measuring pass per bar, which was
+  six per balance card plus one per archive card.
+- **Dead animation modifiers removed.** Street headers and list rows carried numeric
+  morphs, bounces and celebrate springs that never ran, because the list swaps data
+  with animations disabled. They were still evaluated per row.
+
+Checks to run on device: scroll a 2,000-house list on an iPhone 11 / iOS 18 and on
+iOS 26; open and close streets; switch filters; trigger a notice while scrolled
+down (scroll position must hold); Reduce Transparency and Reduce Motion on both OS
+versions.
+
+---
+
 # iOS performance checks — 2026-09-05
 
 The list uses native `List` row reuse on iOS 18 and iOS 26. An expanded street,

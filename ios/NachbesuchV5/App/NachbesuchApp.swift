@@ -42,8 +42,8 @@ struct NachbesuchApp: App {
                             .modelContainer(store.container)
                     }
                 } else {
-                    // WAVE2: launch logo settles 0.9→1 + fade, appSettle.
-                    // RM: opacity only, no scale. Store loads async — no blocking.
+                    // Logo settles 0.94→1 with a fade; RM: opacity only.
+                    // Store loads async — no blocking.
                     LaunchView()
                         .transition(.opacity)
                 }
@@ -54,7 +54,11 @@ struct NachbesuchApp: App {
             .environment(\.locale, Locale(identifier: "de_AT"))
             .task(priority: .background) {
                 guard store == nil else { return }
-                store = await AppStore.loadInBackground()
+                let loaded = await AppStore.loadInBackground()
+                // The launch screen hands over with a crossfade instead of a cut.
+                withAnimation(.appSettle(reduceMotion: UIAccessibility.isReduceMotionEnabled)) {
+                    store = loaded
+                }
             }
             .task(id: dailyListRemindersEnabled, priority: .background) {
                 // Entkoppelt vom Pin-Aufbau: Die Listen-Erinnerung fragt erst nach
@@ -72,6 +76,7 @@ struct NachbesuchApp: App {
 /// Async AppStore load kept; this view never blocks, it only covers the wait.
 private struct LaunchView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("appearance.accent") private var accentRaw = AppAccent.volkshilfe.rawValue
     @State private var appeared = false
 
@@ -86,8 +91,10 @@ private struct LaunchView: View {
                 .foregroundStyle(.white)
                 .frame(width: 88, height: 88)
                 .background(accent.gradient, in: Circle())
+                .overlay { GlassSheen(shape: Circle()) }
+                .overlay { glossyRim(for: Circle(), colorScheme: colorScheme) }
                 // RM: opacity only — no positional/scale motion.
-                .scaleEffect(appeared && !reduceMotion ? 1 : 0.9)
+                .scaleEffect(appeared || reduceMotion ? 1 : 0.94)
                 .opacity(appeared ? 1 : 0)
                 .accessibilityHidden(true)
             Text("Nachbesuch")
@@ -107,6 +114,8 @@ private struct LaunchView: View {
                 .accessibilityLabel("Version 5, Schema Version 2")
         }
         .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background { AppBackdrop().environment(\.appAccent, accent) }
         .onAppear {
             withAnimation(.appSettle(reduceMotion: reduceMotion)) {
                 appeared = true

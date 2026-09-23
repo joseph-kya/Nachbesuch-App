@@ -19,7 +19,7 @@ struct OutcomeButton: View {
             VStack(spacing: 5) {
                 Text(outcome.emoji)
                     .font(.system(size: min(glyphSize, 48)))
-                    .scaleEffect(isSelected && !reduceMotion ? 1.08 : 1)
+                    .scaleEffect(isSelected && !reduceMotion ? 1.06 : 1)
                 Text(outcome.title)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1, reservesSpace: true)

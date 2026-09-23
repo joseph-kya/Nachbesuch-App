@@ -476,7 +476,9 @@ struct ArchiveScreen: View {
                     .padding(.trailing, 52)
                     .padding(.leading, AppSpacing.regular)
                     .padding(.vertical, 13)
-                    .contentCard(cornerRadius: AppRadius.card)
+                    // Not elevated: these scroll, and a soft shadow per card is a
+                    // blur pass per card per frame. The glass rim separates them.
+                    .contentCard(cornerRadius: AppRadius.card, elevated: false)
                     // Always present, only its opacity moves. Inserting and removing
                     // the shape made the wash pop on and off; a fill that is animatable
                     // lets the old and the new card trade the highlight in one motion.
@@ -492,7 +494,7 @@ struct ArchiveScreen: View {
                             .fill(
                                 accent.opacity(
                                     gebiet.id == activeGebiet?.id
-                                        ? (LegacyChrome.isActive ? 0.02 : 0.08)
+                                        ? (LegacyChrome.isActive ? 0.05 : 0.08)
                                         : 0
                                 )
                             )
@@ -561,12 +563,6 @@ struct ArchiveScreen: View {
             // legibility via semantic styles.
             ContentUnavailableView {
                 Label("Noch keine Gebiete", systemImage: "archivebox")
-                    .symbolEffect(
-                        .bounce,
-                        options: reduceMotion ? .nonRepeating : .default,
-                        value: gebiete.isEmpty
-                    )
-                    .symbolEffectsRemoved(reduceMotion)
             } description: {
                 Text("Lege ein Gebiet an, um mit dem Erfassen zu beginnen.")
             } actions: {
@@ -1158,13 +1154,6 @@ struct GebietRow: View, Equatable {
                             .foregroundStyle(Color.doneTone)
                             .labelStyle(.titleAndIcon)
                             .fixedSize()
-                            // WAVE2: pop on change, blockSwap kept. Bounce is RM-gated.
-                            .symbolEffect(
-                                .bounce,
-                                options: reduceMotion ? .nonRepeating : .default,
-                                value: model.isActive
-                            )
-                            .symbolEffectsRemoved(reduceMotion)
                             .transition(.blockSwap(reduceMotion: reduceMotion))
                     }
                     if model.isTwoDay {
@@ -1183,19 +1172,8 @@ struct GebietRow: View, Equatable {
                     .lineLimit(1)
 
                 HStack(spacing: AppSpacing.snug) {
-                    GeometryReader { proxy in
-                        ZStack(alignment: .leading) {
-                            Capsule(style: .continuous)
-                                .fill(.quaternary)
-                            if model.progress > 0 {
-                                Capsule(style: .continuous)
-                                    .fill(model.open == 0 ? .green : .red)
-                                    .frame(width: max(5, proxy.size.width * min(model.progress, 1)))
-                            }
-                        }
-                    }
-                    .frame(height: 5)
-                    .animation(.appSettle(reduceMotion: reduceMotion), value: model.progress)
+                    // A shape, not a GeometryReader: no measuring pass per card.
+                    ProgressTrack(progress: model.progress, fill: model.open == 0 ? Color.green : Color.red)
                     Text("\(model.completed)/\(model.total)")
                         .font(.caption.weight(.medium))
                         .monospacedDigit()
@@ -1261,10 +1239,10 @@ private struct GebietCardStyle: ButtonStyle {
         configuration.label
             .overlay {
                 RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
-                    .fill(Color.primary.opacity(configuration.isPressed ? 0.08 : 0))
+                    .fill(Color.primary.opacity(configuration.isPressed ? PressHighlight.opacity : 0))
                     .allowsHitTesting(false)
             }
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: configuration.isPressed)
+            .animation(.appPress(reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 }
 
@@ -1284,10 +1262,11 @@ struct ShareSheet: View {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: checkSize))
                     .foregroundStyle(Color.doneTone)
-                    // WAVE2: icon bounce on appear, RM-gated.
+                    // The one bounce in the app that means something: the backup
+                    // exists. Once, on arrival; RM removes it.
                     .symbolEffect(
                         .bounce,
-                        options: reduceMotion ? .nonRepeating : .default,
+                        options: .nonRepeating,
                         value: appeared
                     )
                     .symbolEffectsRemoved(reduceMotion)
@@ -1312,6 +1291,8 @@ struct ShareSheet: View {
                 .buttonBorderShape(.capsule)
             }
             .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .compatSheetGlass()
             // WAVE2: success haptic once, on presentation (a `trigger: url`
             // sensory never fires — there is no change, only an appear).
             .onAppear {

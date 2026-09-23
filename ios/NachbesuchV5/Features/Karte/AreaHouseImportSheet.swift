@@ -50,6 +50,7 @@ struct AreaHouseImportSheet: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        .glassRows()
                         Section {
                             ForEach(0..<3, id: \.self) { _ in
                                 Text("Musterstraße 00")
@@ -61,7 +62,9 @@ struct AreaHouseImportSheet: View {
                         } footer: {
                             Text("Alle neuen Einträge entstehen als Einzelhäuser. Quelle: © OpenStreetMap-Mitwirkende.")
                         }
+                        .glassRows()
                     }
+                    .glassForm()
                     .listStyle(.insetGrouped)
 
                 case .failed(let message):
@@ -109,6 +112,7 @@ struct AreaHouseImportSheet: View {
                             } footer: {
                                 Text("Alle neuen Einträge entstehen als Einzelhäuser. Quelle: © OpenStreetMap-Mitwirkende.")
                             }
+                            .glassRows()
 
                             Section {
                                 ForEach(addresses.prefix(60)) { address in
@@ -144,7 +148,9 @@ struct AreaHouseImportSheet: View {
                                         .font(.footnote)
                                 }
                             }
+                            .glassRows()
                         }
+                        .glassForm()
                         .listStyle(.insetGrouped)
                     }
                 }
@@ -169,22 +175,25 @@ struct AreaHouseImportSheet: View {
                     .disabled(selectedAddresses.isEmpty || phase != .ready)
                 }
             }
-            // Klebrige Fußzeile in der nativen Liste (kein Glas): Daumen-Ziel mit
-            // Live-Zähler, 44pt, prominent im Form-Stil.
+            // Floating glass action over the list: the thumb target with the live
+            // count. No opaque strip behind it — the rows scroll under the glass.
             .safeAreaInset(edge: .bottom) {
                 if phase == .ready, !addresses.isEmpty {
-                    Button("\(selectedAddresses.count) anlegen") {
+                    Button {
                         Task { await save() }
+                    } label: {
+                        Text("\(selectedAddresses.count) anlegen")
+                            .fontWeight(.semibold)
+                            .monospacedDigit()
+                            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(selectedAddresses.count)))
+                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(selectedAddresses.count)))
+                    .compatGlassButton(prominent: true)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.large)
                     .animation(.appFeedback(reduceMotion: reduceMotion), value: selectedAddresses.count)
-                    .frame(maxWidth: .infinity, minHeight: 44)
                     .padding(.horizontal)
                     .padding(.vertical, 8)
-                    .background(Color(uiColor: .systemGroupedBackground))
                     .disabled(selectedAddresses.isEmpty)
                 }
             }

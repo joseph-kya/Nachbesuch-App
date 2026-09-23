@@ -108,6 +108,7 @@ struct AddHouseSheet: View {
                             .foregroundStyle(.red)
                     }
                 }
+                .glassRows()
 
                 // Dublette als Banner im Sheet statt Alert: Öffnen ist der
                 // Hauptweg, Trotzdem-anlegen die bewusste Ausnahme.
@@ -136,6 +137,7 @@ struct AddHouseSheet: View {
                         .foregroundStyle(.secondary)
                         .frame(minHeight: 44)
                     }
+                    .glassRows()
                 }
 
                 // Dublettenindex defekt: melden plus Wiederholen — ohne ihn
@@ -164,6 +166,7 @@ struct AddHouseSheet: View {
                         .frame(minHeight: 44)
                         .disabled(isRetryingIndex)
                     }
+                    .glassRows()
                 }
 
                 Section {
@@ -193,6 +196,7 @@ struct AddHouseSheet: View {
                 } header: {
                     Text("Art")
                 }
+                .glassRows()
 
                 if !isApartment {
                     Section("Status (optional)") {
@@ -212,8 +216,10 @@ struct AddHouseSheet: View {
                             }
                         }
                     }
+                    .glassRows()
                 }
             }
+            .glassForm()
             .navigationTitle("Haus hinzufügen")
             .navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)

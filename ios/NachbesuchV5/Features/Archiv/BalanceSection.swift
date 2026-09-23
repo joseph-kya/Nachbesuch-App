@@ -107,21 +107,8 @@ struct BalanceSection: View {
                     recordedCount
                 }
             }
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule(style: .continuous)
-                        .fill(.quaternary)
-                    if tally.completionFraction > 0 {
-                        Capsule(style: .continuous)
-                            // WAVE3: voll = grün statt Akzent — ruhige
-                            // Bestätigung ohne Konfetti, Helligkeit bleibt.
-                            .fill(isComplete ? .green : accent)
-                            .frame(width: max(5, proxy.size.width * min(tally.completionFraction, 1)))
-                    }
-                }
-            }
-            .frame(height: 5)
-            .animation(.appSettle(reduceMotion: reduceMotion), value: tally.completionFraction)
+            // Voll = grün statt Akzent — ruhige Bestätigung ohne Konfetti.
+            ProgressTrack(progress: tally.completionFraction, fill: isComplete ? Color.green : accent)
             // WAVE2: completion swaps the open-count line for a checkmark badge.
             // blockSwap kept for the swap; appCelebrate ONLY on the isComplete flip.
             Group {
@@ -129,12 +116,6 @@ struct BalanceSection: View {
                     Label("Vollständig erfasst", systemImage: "checkmark.circle.fill")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.doneTone)
-                        .symbolEffect(
-                            .bounce,
-                            options: reduceMotion ? .nonRepeating : .default,
-                            value: isComplete
-                        )
-                        .symbolEffectsRemoved(reduceMotion)
                         .transition(.blockSwap(reduceMotion: reduceMotion))
                 } else {
                     Text("\(tally.open) Türen offen")
@@ -179,11 +160,9 @@ struct BalanceSection: View {
             .font(.subheadline)
             .monospacedDigit()
             .foregroundStyle(.secondary)
-            // WAVE2: numeric morph (RM-gated) + badge pop on change.
+            // The digits roll; nothing else moves.
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(tally.completed)))
-            .scaleEffect(isComplete && !reduceMotion ? 1.06 : 1.0)
             .animation(.appFeedback(reduceMotion: reduceMotion), value: tally.completed)
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: isComplete)
     }
 
     private func outcomeRow(_ outcome: VisitOutcome) -> some View {
@@ -208,20 +187,8 @@ struct BalanceSection: View {
                         .contentTransition(reduceMotion ? .identity : .numericText(value: Double(value)))
                         .animation(.appFeedback(reduceMotion: reduceMotion), value: value)
                 }
-                // A plain progress track avoids chart axes and chart layout work.
-                GeometryReader { proxy in
-                    ZStack(alignment: .leading) {
-                        Capsule(style: .continuous)
-                            .fill(.quaternary)
-                        if fraction > 0 {
-                            Capsule(style: .continuous)
-                                .fill(outcome.tint)
-                                .frame(width: max(5, proxy.size.width * min(fraction, 1)))
-                        }
-                    }
-                }
-                .frame(height: 5)
-                .animation(.appSettle(reduceMotion: reduceMotion), value: fraction)
+                // A plain track: no chart axes, no measuring pass.
+                ProgressTrack(progress: fraction, fill: outcome.tint)
             }
         }
         .accessibilityElement(children: .ignore)

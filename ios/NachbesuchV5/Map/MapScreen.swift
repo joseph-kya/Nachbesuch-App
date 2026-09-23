@@ -64,8 +64,6 @@ struct MapScreen: View {
     @State private var dropHouseID: UUID?
     @State private var isFollowingUser = false
     @State private var isAwayFromTerritory = false
-    /// Zählt uncertain→trusted-Wechsel für den Folgen-Button-Puls (einmalig).
-    @State private var accuracyPulse = 0
     /// True zwischen erstem Move und Idle einer Geste — nur zwei
     /// Invalidierungen pro Geste (an/aus), kein Per-Frame-Body.
     @State private var isPanning = false
@@ -195,13 +193,9 @@ struct MapScreen: View {
                 onDropConsumed: { id in
                     if dropHouseID == id { dropHouseID = nil }
                 },
-                onPuckConfidenceChanged: { confidence in
-                    // Einmaliges Aufpoppen des Folgen-Buttons bei besserem Fix —
-                    // nur im Folgen-Modus, RM-sicher still (kein Puls unter RM).
-                    if confidence == .trusted, isFollowingUser, !reduceMotion {
-                        accuracyPulse &+= 1
-                    }
-                },
+                // The puck itself shows its confidence; the locate button no
+                // longer bounces on a better fix — motion without a cause.
+                onPuckConfidenceChanged: { _ in },
                 menuProvider: contextMenu(for:),
                 previewProvider: contextPreview(for:)
             ))
@@ -221,18 +215,25 @@ struct MapScreen: View {
                 PinArtCache.shared.trim(keeping: 20)
             }
 
-            if mode != .browsing {
-                PlacementReticle(
-                    kind: mode == .placingHouse ? .house
-                        : mode == .placingPassant ? .passant : .boundaryPoint
-                )
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-                    // Nur Skalierung beim Ziehen (1.0→1.15, RM-sicher still),
-                    // nie Versatz — kämpft nicht mit der Kamera.
-                    .scaleEffect(isPanning && !reduceMotion ? 1.15 : 1.0)
+            // Own container, own animation: the reticle appears where it aims
+            // (scale from its anchor, never an offset) and the map underneath is
+            // never inside that transaction.
+            ZStack {
+                if mode != .browsing {
+                    PlacementReticle(
+                        kind: mode == .placingHouse ? .house
+                            : mode == .placingPassant ? .passant : .boundaryPoint
+                    )
+                    // Lifted while the map moves under it, set down when it
+                    // settles — scale only, so the aim point never shifts.
+                    .scaleEffect(isPanning && !reduceMotion ? 1.1 : 1.0)
                     .animation(.appFeedback(reduceMotion: reduceMotion), value: isPanning)
+                    .transition(reduceMotion ? AnyTransition.opacity : AnyTransition.opacity.combined(with: .scale(scale: 0.7)))
+                }
             }
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: mode)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
         .sheet(item: $sheetRoute, content: sheet(for:))
         #if DEBUG
@@ -494,7 +495,6 @@ struct MapScreen: View {
                         isBusy: isLocating,
                         isDenied: location.isDenied,
                         namespace: glass,
-                        accuracyPulse: accuracyPulse,
                         action: toggleFollow
                     )
                     .standaloneGlassTransition(reduceMotion: reduceMotion)

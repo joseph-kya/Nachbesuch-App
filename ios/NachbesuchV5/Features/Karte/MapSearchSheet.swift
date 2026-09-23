@@ -69,6 +69,7 @@ struct MapSearchSheet: View {
                                 }
                                 .accessibilityHint("Löscht die gespeicherten Suchanfragen")
                             }
+                            .glassRows()
                         }
                         ContentUnavailableView("Adresse suchen", systemImage: "mappin.and.ellipse",
                             description: Text("Suche nach einer Straße, einem Ort oder einem Gebiet."))
@@ -97,10 +98,12 @@ struct MapSearchSheet: View {
                             }
                             .accessibilityHidden(true)
                             .listRowSeparator(.hidden)
+                            .glassRows()
                         }
                     } else if model.suggestions.isEmpty, !model.isResolving {
                         ContentUnavailableView.search(text: model.query)
                             .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                     } else {
                         ForEach(model.suggestions) { suggestion in
                             Button {
@@ -125,6 +128,7 @@ struct MapSearchSheet: View {
                             .disabled(model.isResolving)
                             .accessibilityElement(children: .combine)
                             .accessibilityHint("Öffnet diesen Ort auf der Karte")
+                            .glassRows()
                         }
                     }
                 }

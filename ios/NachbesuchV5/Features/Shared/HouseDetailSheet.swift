@@ -82,12 +82,16 @@ struct HouseDetailSheet: View {
                         )
                         .foregroundStyle(.red)
                     }
+                    .glassRows()
                 }
 
                 Section { header(summary: summary) }
+                    .glassRows()
 
-                // Haus fertig: inline feiern statt Alert — einmalig, RM-sicher.
-                if isDone {
+                // Haus fertig: nur für Mehrparteienhäuser. Ein Einzelhaus schließt
+                // sich nach dem Tipp von selbst — eine Zeile, die einfährt, während
+                // das Blatt schon abfährt, ist Bewegung ohne Leser.
+                if isDone, house.isApartmentBuilding {
                     Section {
                         Label("Fertig — alle Türen erledigt", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
@@ -96,6 +100,7 @@ struct HouseDetailSheet: View {
                             .transition(.blockSwap(reduceMotion: reduceMotion))
                             .accessibilityLabel("Fertig, alle Türen erledigt")
                     }
+                    .glassRows()
                 }
 
                 if house.isApartmentBuilding {
@@ -118,6 +123,7 @@ struct HouseDetailSheet: View {
                             Label("Zu Mehrparteienhaus machen", systemImage: "building.2")
                         }
                     }
+                    .glassRows()
                 }
 
                 Section {
@@ -132,15 +138,17 @@ struct HouseDetailSheet: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
+                .glassRows()
 
                 Section {
                     Button("Haus löschen", systemImage: "trash", role: .destructive) {
                         showDeleteConfirmation = true
                     }
                 }
+                .glassRows()
             }
-            .scrollContentBackground(.hidden)
-            .background { AppBackdrop() }
+            // The sheet's own glass shows through instead of an opaque ground.
+            .glassForm()
             .navigationTitle(house.isApartmentBuilding ? "Mehrparteienhaus" : "Hausbesuch")
             .navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)
@@ -278,7 +286,9 @@ struct HouseDetailSheet: View {
                 Text("Die hintersten Türen werden mitsamt ihren Ergebnissen entfernt. Trotzdem verkleinern?")
             }
             // Erfolg nur bei false→true: Token steigt nur beim Fertigwerden, nie beim Wiederöffnen.
-            .animation(.appCelebrate(reduceMotion: reduceMotion), value: isDone)
+            // The done row arrives on the calm feedback curve — this used to be a
+            // bouncing spring over the entire form, every row wobbling with it.
+            .animation(.appFeedback(reduceMotion: reduceMotion), value: isDone)
             .sensoryFeedback(.success, trigger: celebrateToken)
             .onChange(of: isDone) { _, done in
                 guard done else { return }
@@ -429,6 +439,7 @@ struct HouseDetailSheet: View {
             .padding(.top, 4)
             .disabled(house.isDamaged)
         }
+        .glassRows()
     }
 
     // MARK: Actions
@@ -451,7 +462,9 @@ struct HouseDetailSheet: View {
         guard !voiceOverEnabled else { return }
         dismissTask?.cancel()
         dismissTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(360))
+            // Long enough for the selection ring to finish settling, so the tap
+            // is seen to land before the sheet leaves — one motion, then the next.
+            try? await Task.sleep(for: .milliseconds(420))
             guard !Task.isCancelled else { return }
             commitDrafts()
             dismiss()
@@ -780,7 +793,7 @@ private struct OutcomeChip: View {
                 if isSelected {
                     badge
                         .offset(x: 5, y: -5)
-                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                        .transition(.appChrome(reduceMotion: reduceMotion, anchor: .center))
                 }
             }
         }
@@ -788,17 +801,14 @@ private struct OutcomeChip: View {
         .animation(.appFeedback(reduceMotion: reduceMotion), value: isSelected)
     }
 
-    @ViewBuilder
+    /// One motion for the selection: the check fades and settles in with the
+    /// ring. The old version scaled it from 0.6 *and* bounced the symbol — two
+    /// animations for one tap.
     private var badge: some View {
-        let image = Image(systemName: "checkmark.circle.fill")
+        Image(systemName: "checkmark.circle.fill")
             .font(.caption)
             .foregroundStyle(tint)
             .background(.background, in: Circle())
-        if reduceMotion {
-            image
-        } else {
-            image.symbolEffect(.bounce, value: isSelected)
-        }
     }
 }
 
@@ -853,7 +863,9 @@ private struct UnitCountSheet: View {
                         Text(message)
                     }
                 }
+                .glassRows()
             }
+            .glassForm()
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -171,29 +171,20 @@ struct FilterBar: View {
     }
 }
 
-/// Zähler im Chip: morpht per NumericText und poppt kurz auf.
+/// Zähler im Chip: the digits roll to the new value, nothing else moves.
 ///
-/// Eigene View, damit das Pop-State nicht im Chip-Modell landet: `FilterChip`
-/// bleibt ein reiner Wert für den Bar-Diff. Pop nur bei Änderung, ohne
-/// Reduce Motion nur der Zahlenwechsel.
+/// The old scale "pop" on top of the rolling digits was two motions for one
+/// change, and it fired on every chip whose count moved — several at once.
 private struct ChipCount: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let count: Int
-    @State private var pop: CGFloat = 1
 
     var body: some View {
         Text("\(count)")
             .monospacedDigit()
             .font(.caption.weight(.bold))
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(count)))
-            .scaleEffect(pop)
             .animation(.appFeedback(reduceMotion: reduceMotion), value: count)
-            .onChange(of: count) { _, _ in
-                // Bereits der Morph trägt; das Pop ist nur die Kirsche.
-                guard !reduceMotion else { return }
-                pop = 0.8
-                withAnimation(.appFeedback(reduceMotion: false)) { pop = 1 }
-            }
             .accessibilityHidden(true)
     }
 }
@@ -228,18 +219,5 @@ private struct ChipScrollEdge: ViewModifier {
         } else {
             content
         }
-    }
-}
-
-/// Press feedback for card-style rows. One definition, previously copied verbatim
-/// into two different views.
-struct PressableRowStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
-            .opacity(configuration.isPressed ? 0.85 : 1)
-            .animation(.appFeedback(reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 }

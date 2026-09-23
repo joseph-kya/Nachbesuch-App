@@ -14,22 +14,21 @@ import SwiftUI
 /// rounded things. A street and its addresses are now one container with one
 /// radius, and the shapes inside it are gone.
 ///
-/// **Two scales, because there are two designs.** The values below are iOS 26's:
-/// Liquid Glass is a thick, lensing material and a generous radius is what keeps it
-/// from looking like a sheet of plastic. iOS 18 draws the same shapes as flat opaque
-/// fills, and a 32 pt radius on a full-width flat card is not calm, it is a blob —
-/// it stops reading as a card and starts reading as a lozenge with text in it. Every
-/// iOS 18 radius here is the corresponding system value: 10 for controls, 16 for
-/// grouped cards, matching what `insetGrouped` and iOS 18 sheets draw for themselves.
+/// **Two scales, one material.** Both tiers now draw glass — Liquid Glass on
+/// iOS 26, material glass with sheen and rim on iOS 18 — and glass needs a
+/// generous radius to read as a pane rather than a plastic sheet. iOS 26's glass
+/// is thicker and lensing, so it takes the larger values; iOS 18's flatter glass
+/// sits between the old system radii and iOS 26's, where a full-width card still
+/// reads as a card and not as a lozenge.
 enum AppRadius {
     /// Chips, badges, inline pills.
-    static var small: CGFloat { LegacyChrome.isActive ? 8 : 12 }
+    static var small: CGFloat { LegacyChrome.isActive ? 10 : 12 }
     /// Buttons and segmented controls.
-    static var control: CGFloat { LegacyChrome.isActive ? 10 : 18 }
+    static var control: CGFloat { LegacyChrome.isActive ? 14 : 18 }
     /// Cards and grouped sections in the content layer.
-    static var card: CGFloat { LegacyChrome.isActive ? 16 : 32 }
+    static var card: CGFloat { LegacyChrome.isActive ? 22 : 32 }
     /// Floating panels over the map.
-    static var chrome: CGFloat { LegacyChrome.isActive ? 16 : 32 }
+    static var chrome: CGFloat { LegacyChrome.isActive ? 24 : 32 }
 }
 
 /// The leading columns a grouped list shares.

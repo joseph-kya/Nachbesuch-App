@@ -45,6 +45,7 @@ struct PassantDetailSheet: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
+                .glassRows()
 
                 Section("Ergebnis") {
                     LazyVGrid(
@@ -68,13 +69,16 @@ struct PassantDetailSheet: View {
                         }
                     }
                 }
+                .glassRows()
 
                 Section {
                     Button(role: .destructive) { showDeleteConfirmation = true } label: {
                         Label("Passant löschen", systemImage: "trash")
                     }
                 }
+                .glassRows()
             }
+            .glassForm()
             .navigationTitle("Begegnung")
             .navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)

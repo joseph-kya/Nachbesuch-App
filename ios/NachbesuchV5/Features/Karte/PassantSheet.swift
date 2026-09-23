@@ -41,6 +41,7 @@ struct PassantSheet: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
+                .glassRows()
 
                 Section("Ergebnis (optional)") {
                     LazyVGrid(
@@ -66,7 +67,9 @@ struct PassantSheet: View {
                         }
                     }
                 }
+                .glassRows()
             }
+            .glassForm()
             .navigationTitle("Passant eintragen")
             .navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)

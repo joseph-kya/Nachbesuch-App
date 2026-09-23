@@ -57,6 +57,7 @@ struct GebietEditorSheet: View {
                     TextField("Ort oder Bezirk (optional)", text: $districtOrCity)
                         .textInputAutocapitalization(.words)
                 }
+                .glassRows()
 
                 Section("Zeitraum") {
                     Picker("Dauer", selection: $duration) {
@@ -77,6 +78,7 @@ struct GebietEditorSheet: View {
                         )
                     }
                 }
+                .glassRows()
 
                 if !isEditing, !lastBoundary.isEmpty {
                     Section {
@@ -84,13 +86,16 @@ struct GebietEditorSheet: View {
                     } footer: {
                         Text("Die zuletzt gezeichnete Grenze wird übernommen. Häuser und Ergebnisse bleiben getrennt.")
                     }
+                    .glassRows()
                 }
 
                 Section("Notizen") {
                     TextField("Notizen", text: $notes, axis: .vertical)
                         .lineLimit(2...6)
                 }
+                .glassRows()
             }
+            .glassForm()
             .navigationTitle(isEditing ? "Gebiet bearbeiten" : "Neues Gebiet")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

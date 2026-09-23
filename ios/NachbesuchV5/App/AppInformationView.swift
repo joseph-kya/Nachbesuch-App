@@ -39,12 +39,14 @@ struct AppInformationView: View {
                     LabeledContent("Anbieter", value: name)
                 }
             }
+            .glassRows()
             Section("Datenschutz") {
                 NavigationLink("Daten und Berechtigungen") { PrivacyDetailsView() }
                 if let url = metadata.flatMap({ AppStoreMetadata.webURL($0.privacyPolicyURL) }) {
                     Link("Datenschutzerklärung im Web", destination: url)
                 }
             }
+            .glassRows()
             Section("Hilfe") {
                 Text("Die Anleitung findest du im Archiv über das Menü oben rechts. Sichere deine Daten vor einem Gerätewechsel über Archiv → Sicherung.")
                 if let url = metadata.flatMap({ AppStoreMetadata.webURL($0.supportURL) }) {
@@ -58,6 +60,7 @@ struct AppInformationView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+            .glassRows()
             Section("Kartendaten") {
                 Text("Karte und Ortssuche: Apple Karten. Die Hinweise und Nutzungsbedingungen sind direkt in der Karte erreichbar.")
                 Link("Adressimport: © OpenStreetMap-Mitwirkende",
@@ -66,7 +69,10 @@ struct AppInformationView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+            .glassRows()
         }
+        .scrollContentBackground(.hidden)
+        .background { AppBackdrop() }
         .navigationTitle("Datenschutz & Support")
         .navigationBarTitleDisplayMode(.inline)
     }

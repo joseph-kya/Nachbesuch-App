@@ -35,12 +35,20 @@ Daraus folgen drei Regeln, in dieser Reihenfolge:
 
 ## 2. Was auf welche Ebene gehört
 
-iOS 26 hat zwei Ebenen, und die Trennung ist keine Geschmacksfrage:
+Alles ist Glas — aber nicht überall dasselbe Glas. Die Ebenen bleiben getrennt:
 
-| Ebene | Material | Was dort lebt |
-|---|---|---|
-| **Inhalt** | System-Hintergründe, `contentCard` | Karte, Listenzeilen, Archiv, alles Gelesene |
-| **Navigation / Steuerung** | Liquid Glass (`mapChrome` / `navigationGlass`) | Schwebende Panels, Tab-Leiste, Werkzeugleisten |
+| Ebene | iOS 26 | iOS 18 | Was dort lebt |
+|---|---|---|---|
+| **Inhalt** | Liquid Glass (`contentCard`, `SectionSurface`) | Frostglas ohne Blur (`FrostedSurface`) | Listenzeilen, Archiv, alles Gelesene |
+| **Navigation / Steuerung** | Liquid Glass (`mapChrome` / `navigationGlass`, `.glass`-Knöpfe) | Material-Glas mit Glanz und Kante (`compatGlass`, `compatGlassButton`) | Schwebende Panels, Knöpfe, Banner |
+| **Blätter** | System-Glas des Sheets, durchscheinende Zeilen (`glassForm` + `glassRows`) | `.thickMaterial` als Sheet-Grund, gleiche Zeilen | Formulare, Detailblätter |
+
+Warum iOS 18 für Inhalt **kein** echtes Material bekommt: Eine Karte in einer
+Liste steht auf `AppBackdrop`, das sich nie bewegt. Ein Blur über etwas, das sich
+nie bewegt, sieht aus wie eine halbtransparente Füllung — kostet aber pro Karte
+pro Frame einen Backdrop-Pass. `FrostedSurface` zeichnet genau die Füllung, den
+Glanz und die Kante, ohne den Blur. Echte Materialien gibt es nur dort, wo sich
+wirklich etwas dahinter bewegt: über der Karte und über scrollendem Inhalt.
 
 **Regeln:**
 
@@ -131,9 +139,22 @@ Ein Akzent, sonst Semantik. Mehr nicht.
 ## 7. Bewegung
 
 - Bewegung erklärt eine Veränderung oder sie unterbleibt. Nichts bewegt sich,
-  um hübsch zu sein.
-- Alle Kurven aus `Motion.swift` (`.appFeedback`, `.appSettle`), nie inline.
-- **Jede** Animation prüft `accessibilityReduceMotion`.
+  um hübsch zu sein. Kein Hüpfen beim Erscheinen, kein „Pop" auf Zählern.
+- **Ein Charakter:** kritisch gedämpfte Federn (`.smooth`), kein Nachschwingen.
+  Einzige Ausnahme ist `.appCelebrate` (ein kleiner Überschwinger) für echte
+  Abschlüsse.
+- Alle Kurven aus `Motion.swift`, nie inline:
+  `.appPress` (Drücken) · `.appFeedback` (Auswahl, Zähler, Chrome) ·
+  `.appExpand` (Auf-/Zuklappen) · `.appSettle` (Inhaltswechsel, Scroll, Kamera) ·
+  `.appCelebrate` (Abschluss).
+- **Eine Bewegung pro Ereignis.** Ein Chip wechselt die Farbe *oder* die Zahl
+  rollt — nicht zusätzlich Skalierung und Symbol-Bounce obendrauf.
+- **Identität ist heilig.** Nie `if x { content.modifier() } else { content }`
+  um einen ganzen Bildschirm: Das baut die Ansicht neu (Scrollposition weg,
+  Übergänge laufen nicht). Banner leben in einem immer vorhandenen Overlay.
+- Ersetzter Inhalt (anderer Filter) blendet als Ganzes über; Daten, die sich
+  *unter* dem Nutzer ändern, tauschen still.
+- **Jede** Animation prüft `accessibilityReduceMotion` — dort nur Überblenden.
 - Wiederholende Effekte (Puls) laufen nur, solange sie etwas bedeuten.
 
 ---
