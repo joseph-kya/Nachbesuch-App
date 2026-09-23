@@ -5,6 +5,7 @@ import UIKit
 /// Everything about one address.
 struct HouseDetailSheet: View {
     @Environment(\.appAccent) private var accent
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
@@ -108,11 +109,15 @@ struct HouseDetailSheet: View {
                 } else if let door = summary.units.first {
                     Section("Ergebnis") {
                         singleDoorEditor(door: door)
-                            // Form still clips a transparent row to its grouped
-                            // corners. Concentric spacing keeps the smaller tile
-                            // corners entirely inside that outer silhouette.
+                            // Form clips the row to its grouped corners. Concentric
+                            // spacing keeps the smaller tile corners entirely inside
+                            // that outer silhouette.
                             .padding(AppRadius.card - AppRadius.control)
-                            .listRowBackground(Color.clear)
+                            // The same translucent row as every other section. The
+                            // tiles' inner fill is a light tint made for sitting on
+                            // a row; on a clear row over the map it all but vanished
+                            // and the pins showed straight through the choices.
+                            .glassRows()
                             .listRowInsets(EdgeInsets())
                             .listRowSeparator(.hidden)
                     }
@@ -131,12 +136,6 @@ struct HouseDetailSheet: View {
                         .lineLimit(2...6)
                 } header: {
                     Text("Notiz")
-                } footer: {
-                    // Zeichenzahl als Hinweis, kein Limit — lange Notizen bleiben erlaubt.
-                    Text("\(draftNote.count)/500")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
                 }
                 .glassRows()
 
@@ -335,7 +334,7 @@ struct HouseDetailSheet: View {
                 TextField("Adresse", text: $draftAddress, axis: .vertical)
                     .font(.headline)
                     .lineLimit(1...3)
-                Text("\(summary.completedCount) von \(summary.units.count) erledigt")
+                Text("\(summary.completedCount) von \(summary.units.count) erfasst")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -345,7 +344,7 @@ struct HouseDetailSheet: View {
                         value: summary.completedCount
                     )
                     .accessibilityLabel("Fortschritt")
-                    .accessibilityValue("\(summary.completedCount) von \(summary.units.count) Türen erledigt")
+                    .accessibilityValue("\(summary.completedCount) von \(summary.units.count) Türen erfasst")
             }
         }
     }
@@ -354,7 +353,7 @@ struct HouseDetailSheet: View {
         let current = door.result(on: writeDay)
         return VStack(spacing: AppSpacing.snug) {
             LazyVGrid(
-                columns: [GridItem(.flexible(), spacing: AppSpacing.snug), GridItem(.flexible(), spacing: AppSpacing.snug)],
+                columns: Array(repeating: GridItem(.flexible(), spacing: AppSpacing.snug), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2),
                 spacing: AppSpacing.snug
             ) {
                 ForEach(VisitOutcome.primary) { outcome in
@@ -371,14 +370,6 @@ struct HouseDetailSheet: View {
                 // Tapping an already-postponed door edits its time; the sheet's
                 // own "Zeit entfernen" is the way back to no status.
                 sheetRoute = .revisitTime(door: door)
-            }
-
-            // Gebuchte Zeit als indigofarbene Glanz-Zeile mit relativem Label;
-            // tippen öffnet denselben Zeit-Sheet wie der Später-Button.
-            if current == .later, let booked = door.revisitTime(on: writeDay) {
-                BookedTimeGlance(bookedAt: booked) {
-                    sheetRoute = .revisitTime(door: door)
-                }
             }
 
             if let timestamp = door.timestamp(in: scope) {
@@ -677,13 +668,13 @@ private struct ApartmentDoorRow: View {
                         .font(.subheadline.weight(.medium))
                         .onSubmit { commit() }
                 } else {
-                    Text(draftLabel.isEmpty ? door.label : draftLabel)
-                        .font(.subheadline.weight(.medium))
-                        .contentShape(.rect)
-                        .onTapGesture {
-                            guard !isDisabled else { return }
-                            isEditingLabel = true
-                        }
+                    Button { isEditingLabel = true } label: {
+                        Label(draftLabel.isEmpty ? door.label : draftLabel, systemImage: "pencil")
+                            .font(.subheadline.weight(.medium))
+                            .tappable()
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Türbezeichnung bearbeiten")
                 }
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 1) {
@@ -704,7 +695,7 @@ private struct ApartmentDoorRow: View {
             HStack(spacing: AppSpacing.tight) {
                 ForEach(VisitOutcome.primary) { outcome in
                     OutcomeChip(
-                        emoji: outcome.emoji,
+                        symbol: outcome.symbolName,
                         tint: outcome.tint,
                         isSelected: current == outcome,
                         width: nil,
@@ -717,7 +708,7 @@ private struct ApartmentDoorRow: View {
                 // Narrower than the four results: "Später" postpones the door, it
                 // does not close it, so it does not get equal billing.
                 OutcomeChip(
-                    emoji: VisitOutcome.later.emoji,
+                    symbol: VisitOutcome.later.symbolName,
                     tint: VisitOutcome.later.tint,
                     isSelected: current == .later,
                     width: 46,
@@ -761,54 +752,26 @@ private struct ApartmentDoorRow: View {
     }
 }
 
-/// One emoji status chip in an apartment door row.
-///
-/// Extracted because the inline version of this — five chips, each with its own
-/// conditional fill and border — was past what the type checker would solve in one
-/// expression.
+/// A compact status button with a full touch target and no protruding badge.
 private struct OutcomeChip: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let emoji: String
+    let symbol: String
     let tint: Color
     let isSelected: Bool
-    /// `nil` means "share the row equally"; a value pins the chip narrower.
     let width: CGFloat?
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            ZStack(alignment: .topTrailing) {
-                Text(emoji)
-                    .font(.body)
-                    .frame(maxWidth: width == nil ? .infinity : nil)
-                    .frame(width: width, height: 38)
-                    .contentCard(cornerRadius: AppRadius.control, elevated: false)
-                    .selectionRing(isSelected, tint: tint, cornerRadius: AppRadius.control)
-                    .contentShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
-
-                // Kein Chip-Skalieren: In der Form clippt das an den
-                // Abschnittsrändern. Stattdessen wächst nur das Häkchen
-                // (0.6 → 1, RM-sicher) und hüpft einmal — das Emoji ist Text,
-                // kein Symbol, darum lebt der Bounce auf dem Badge.
-                if isSelected {
-                    badge
-                        .offset(x: 5, y: -5)
-                        .transition(.appChrome(reduceMotion: reduceMotion, anchor: .center))
-                }
-            }
+            Image(systemName: symbol)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(tint)
+                .frame(maxWidth: width == nil ? .infinity : nil)
+                .frame(width: width, height: AppTouch.minimum)
+                .contentPanel(cornerRadius: AppRadius.control)
+                .selectionRing(isSelected, tint: tint)
+                .contentShape(RoundedRectangle(cornerRadius: AppRadius.control))
         }
         .buttonStyle(PressableRowStyle())
-        .animation(.appFeedback(reduceMotion: reduceMotion), value: isSelected)
-    }
-
-    /// One motion for the selection: the check fades and settles in with the
-    /// ring. The old version scaled it from 0.6 *and* bounced the symbol — two
-    /// animations for one tap.
-    private var badge: some View {
-        Image(systemName: "checkmark.circle.fill")
-            .font(.caption)
-            .foregroundStyle(tint)
-            .background(.background, in: Circle())
     }
 }
 
@@ -850,7 +813,7 @@ private struct UnitCountSheet: View {
                             .focused($isFocused)
                             .frame(width: 70)
                             .monospacedDigit()
-                        Stepper("", value: clamped, in: 2...100)
+                        Stepper("Anzahl der Parteien", value: clamped, in: 2...100)
                             .labelsHidden()
                     }
                     // Deutsches Label „Anzahl" plus 44pt-Treffläche für A11y.

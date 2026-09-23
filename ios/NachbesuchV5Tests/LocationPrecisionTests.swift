@@ -8,6 +8,14 @@ import UIKit
 /// about untrustworthy fixes with hysteresis instead of flicker.
 @Suite("Standortpräzision und ehrlicher Punkt")
 struct LocationPrecisionTests {
+    @Test func deniedLocationDoesNotShowApproximateLocationWarning() {
+        for status in [CLAuthorizationStatus.notDetermined, .denied, .restricted] {
+            #expect(!LocationService.shouldExplainReducedAccuracy(authorization: status, accuracy: .reducedAccuracy))
+        }
+        #expect(LocationService.shouldExplainReducedAccuracy(authorization: .authorizedWhenInUse, accuracy: .reducedAccuracy))
+        #expect(!LocationService.shouldExplainReducedAccuracy(authorization: .authorizedWhenInUse, accuracy: .fullAccuracy))
+    }
+
     @Test func followingWinsOverMapVisibility() {
         let profile = AccuracyProfile.resolve(mapVisible: true, following: true)
         #expect(profile.desiredAccuracy == kCLLocationAccuracyBest)

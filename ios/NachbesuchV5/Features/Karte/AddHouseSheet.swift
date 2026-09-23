@@ -6,6 +6,7 @@ import UIKit
 
 /// Creates a house at the coordinate the user aimed at.
 struct AddHouseSheet: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(AppNoticeCenter.self) private var notices
@@ -78,15 +79,6 @@ struct AddHouseSheet: View {
                             ProgressView().controlSize(.small)
                         }
                     }
-                    if let clipboard = UIPasteboard.general.string,
-                       !clipboard.isEmpty, clipboard.count < 120, address != clipboard {
-                        Button {
-                            address = clipboard
-                        } label: {
-                            Label("Aus Zwischenablage übernehmen", systemImage: "doc.on.clipboard")
-                                .font(.footnote)
-                        }
-                    }
                     // Geocode ging leer aus und das Feld ist noch leer: Fehler
                     // zeigen plus Wiederholen statt schweigendem Nichts.
                     if geocodeFailed, !isLoadingAddress, trimmedAddress.isEmpty {
@@ -97,7 +89,7 @@ struct AddHouseSheet: View {
                             Label("Adresse konnte nicht ermittelt werden — erneut versuchen", systemImage: "arrow.clockwise")
                                 .font(.footnote)
                         }
-                        .frame(minHeight: 44)
+                        .frame(minHeight: AppTouch.minimum)
                     }
                 } header: {
                     Text("Adresse")
@@ -128,14 +120,14 @@ struct AddHouseSheet: View {
                         } label: {
                             Label("Vorhanden – öffnen", systemImage: "arrow.up.right.circle")
                         }
-                        .frame(minHeight: 44)
+                        .frame(minHeight: AppTouch.minimum)
                         Button("Trotzdem anlegen") {
                             UISelectionFeedbackGenerator().selectionChanged()
                             didOverrideDuplicate = true
                             duplicateWarning = nil
                         }
                         .foregroundStyle(.secondary)
-                        .frame(minHeight: 44)
+                        .frame(minHeight: AppTouch.minimum)
                     }
                     .glassRows()
                 }
@@ -163,7 +155,7 @@ struct AddHouseSheet: View {
                                 }
                             }
                         }
-                        .frame(minHeight: 44)
+                        .frame(minHeight: AppTouch.minimum)
                         .disabled(isRetryingIndex)
                     }
                     .glassRows()
@@ -175,8 +167,8 @@ struct AddHouseSheet: View {
                         Text("Einzelhaus").tag(false)
                         Text("Mehrparteienhaus").tag(true)
                     }
-                    .pickerStyle(.segmented)
-                    .frame(minHeight: 44)
+                    .pickerStyle(.menu)
+                    .frame(minHeight: AppTouch.minimum)
 
                     if isApartment {
                         HStack {
@@ -187,11 +179,11 @@ struct AddHouseSheet: View {
                                 .multilineTextAlignment(.trailing)
                                 .frame(width: 70)
                                 .monospacedDigit()
-                            Stepper("", value: clampedUnitCount, in: 2...100)
+                            Stepper("Anzahl der Parteien", value: clampedUnitCount, in: 2...100)
                                 .labelsHidden()
                         }
                         // Deutsches Label „Anzahl" plus 44pt-Treffläche für A11y.
-                        .frame(minHeight: 44)
+                        .frame(minHeight: AppTouch.minimum)
                     }
                 } header: {
                     Text("Art")
@@ -199,9 +191,9 @@ struct AddHouseSheet: View {
                 .glassRows()
 
                 if !isApartment {
-                    Section("Status (optional)") {
+                    Section("Ergebnis (optional)") {
                         LazyVGrid(
-                            columns: [GridItem(.flexible(), spacing: AppSpacing.snug), GridItem(.flexible(), spacing: AppSpacing.snug)],
+                            columns: Array(repeating: GridItem(.flexible(), spacing: AppSpacing.snug), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2),
                             spacing: AppSpacing.snug
                         ) {
                             // Results only. "Später" would need a return time, and

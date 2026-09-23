@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 /// territory grouped by campaign day.
 struct ArchiveScreen: View {
     @Environment(\.appAccent) private var accent
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.modelContext) private var modelContext
     @Environment(AppNoticeCenter.self) private var notices
@@ -395,7 +396,7 @@ struct ArchiveScreen: View {
                     if let autoBackup {
                         ShareLink(item: autoBackup.url) {
                             Label(
-                                "Letzte automatische Sicherung: \(AutoBackupService.describe(date: autoBackup.date))",
+                                "Automatische Sicherung teilen",
                                 systemImage: "clock.arrow.circlepath"
                             )
                         }
@@ -516,12 +517,14 @@ struct ArchiveScreen: View {
                     // the accent rail and the "Aktiv" label the row already draws,
                     // with the wash at a quarter strength so the card is still
                     // distinguishable in greyscale by luminance alone.
+                    // Invariant: dark wash ≤0.04 — red over black goes muddy
+                    // (glass dark 0.03, opaque 0.02; light stays 0.08).
                     .overlay {
                         RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
                             .fill(
                                 accent.opacity(
                                     gebiet.id == highlightedGebietID
-                                        ? (LegacyChrome.isActive ? 0.05 : 0.08)
+                                        ? (LegacyChrome.isActive ? 0.05 : (colorScheme == .dark ? 0.03 : 0.08))
                                         : 0
                                 )
                             )
@@ -596,7 +599,7 @@ struct ArchiveScreen: View {
                     .compatGlassButton(prominent: true)
                     .buttonBorderShape(.capsule)
                     .accessibilityLabel("Neues Gebiet anlegen")
-                Button("Tutorial ansehen") { route = .tutorial }
+                Button("Anleitung ansehen") { route = .tutorial }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Anleitung ansehen")
@@ -1138,6 +1141,7 @@ private struct ArchiveSearchField: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .tappable()
                 .transition(.blockSwap(reduceMotion: reduceMotion))
                 .accessibilityLabel("Suche löschen")
             }
@@ -1221,10 +1225,10 @@ struct GebietRow: View, Equatable {
                 .opacity(model.isActive ? 1 : 0)
 
             VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: AppSpacing.tight) {
+                FlowLayout(spacing: AppSpacing.tight) {
                     Text(model.name)
                         .font(.headline)
-                        .lineLimit(1)
+                        .lineLimit(2)
                     if model.isActive {
                         Label("Aktiv", systemImage: "checkmark.circle.fill")
                             .font(.caption2.weight(.semibold))
@@ -1238,19 +1242,18 @@ struct GebietRow: View, Equatable {
                             .font(.caption2.weight(.bold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(StatusChipFill(.orange), in: Capsule())
+                            .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
                     }
-                    Spacer(minLength: 0)
                 }
 
                 Text([model.place, model.dateRange].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: AppSpacing.snug) {
                     // A shape, not a GeometryReader: no measuring pass per card.
-                    ProgressTrack(progress: model.progress, fill: model.open == 0 ? Color.green : Color.red)
+                    ProgressTrack(progress: model.progress, fill: model.open == 0 ? Color.green : accent)
                     Text("\(model.completed)/\(model.total)")
                         .font(.caption.weight(.medium))
                         .monospacedDigit()
@@ -1269,16 +1272,7 @@ struct GebietRow: View, Equatable {
                 .font(.caption2)
             }
 
-            // WAVE2: chevron rotates with selection, appFeedback. RM-safe: rotation
-            // is positional, so RM still gets the state change without motion via
-            // the row's opacity/scale-free highlight.
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.tertiary)
-                .rotationEffect(.degrees(model.isActive ? 90 : 0))
-                .opacity(model.isActive ? 1 : 0.6)
-                .animation(.appFeedback(reduceMotion: reduceMotion), value: model.isActive)
-                .accessibilityHidden(true)
+
         }
         .padding(.vertical, 6)
         // Only the selection is animated here. Keying the whole model would make a
@@ -1289,7 +1283,7 @@ struct GebietRow: View, Equatable {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(model.name)
         .accessibilityValue(
-            "\(model.dateRange), \(model.houseCount) Häuser, \(model.completed) von \(model.total) erledigt, "
+            "\(model.dateRange), \(model.houseCount) Häuser, \(model.completed) von \(model.total) erfasst, "
                 + "\(model.open) offen, \(model.joined) dabei"
                 + (model.isActive ? ", aktives Gebiet" : "")
         )
@@ -1338,6 +1332,7 @@ struct ShareSheet: View {
 
     var body: some View {
         NavigationStack {
+            ScrollView {
             VStack(spacing: AppSpacing.regular) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: checkSize))
@@ -1351,7 +1346,7 @@ struct ShareSheet: View {
                     )
                     .symbolEffectsRemoved(reduceMotion)
                     .accessibilityHidden(true)
-                Text("Backup erstellt")
+                Text("Datei erstellt")
                     .font(.headline)
                 Text(url.lastPathComponent)
                     .font(.caption)
@@ -1371,7 +1366,8 @@ struct ShareSheet: View {
                 .buttonBorderShape(.capsule)
             }
             .padding()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity)
+            }
             .compatSheetGlass()
             // WAVE2: success haptic once, on presentation (a `trigger: url`
             // sensory never fires — there is no change, only an appear).

@@ -1,14 +1,9 @@
 import SwiftUI
 
-/// One of the four result choices.
-///
-/// Carries the emoji *and* a distinct SF Symbol so the four outcomes stay
-/// distinguishable by shape — red, orange and pink are three warm hues that a
-/// colour-blind user cannot reliably separate at 12 pt.
+/// Shared status symbols, labels, and selection treatment for every result editor.
 struct OutcomeButton: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @ScaledMetric(relativeTo: .largeTitle) private var glyphSize: CGFloat = 30
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let outcome: VisitOutcome
     let isSelected: Bool
@@ -17,23 +12,26 @@ struct OutcomeButton: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: 5) {
-                Text(outcome.emoji)
-                    .font(.system(size: min(glyphSize, 48)))
-                    .scaleEffect(isSelected && !reduceMotion ? 1.06 : 1)
+                Image(systemName: outcome.symbolName)
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(outcome.tint)
+                    .accessibilityHidden(true)
                 Text(outcome.title)
                     .font(.subheadline.weight(.semibold))
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1, reservesSpace: true)
+                    .modifier(OutcomeTextLayout(reserveSpace: false))
+                    .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.center)
                 Text(outcome.explanation)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2, reservesSpace: true)
+                    .modifier(OutcomeTextLayout())
+                    .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
             .padding(.horizontal, 8)
-            .contentCard(cornerRadius: AppRadius.control, elevated: false)
+            .contentPanel(cornerRadius: AppRadius.control)
             .selectionRing(isSelected, tint: outcome.tint)
             .contentShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
         }
@@ -58,36 +56,50 @@ struct OutcomeButton: View {
 /// later time, and grouping it with "Dabei" would say otherwise. And a five-tile
 /// grid leaves an odd gap that reads as a missing option.
 struct LaterButton: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let isSelected: Bool
-    /// The time already booked, shown in place of the explanation.
+    /// A booked appointment replaces the unscheduled control with its time and urgency.
     let bookedAt: Date?
     let action: () -> Void
 
     private var outcome: VisitOutcome { .later }
 
     var body: some View {
+        if isSelected, let bookedAt {
+            BookedTimeGlance(bookedAt: bookedAt, action: action)
+        } else {
+            unbookedButton
+        }
+    }
+
+    private var unbookedButton: some View {
         Button(action: action) {
             HStack(spacing: AppSpacing.snug) {
-                Text(outcome.emoji)
-                    .font(.title3)
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Image(systemName: outcome.symbolName)
+                        .font(.title3)
+                        .foregroundStyle(outcome.tint)
+                }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(outcome.title)
                         .font(.subheadline.weight(.semibold))
-                    Text(bookedText)
+                    Text("Uhrzeit wählen")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
             }
             .frame(maxWidth: .infinity, minHeight: AppTouch.minimum, alignment: .leading)
             .padding(.vertical, 8)
             .padding(.horizontal, 12)
-            .contentCard(cornerRadius: AppRadius.control, elevated: false)
+            .contentPanel(cornerRadius: AppRadius.control)
             .selectionRing(isSelected, tint: outcome.tint)
             .contentShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
         }
@@ -100,14 +112,9 @@ struct LaterButton: View {
         .animation(.appFeedback(reduceMotion: reduceMotion), value: isSelected)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(outcome.title)
-        .accessibilityValue(bookedText)
+        .accessibilityValue(outcome.explanation)
         .accessibilityHint("Fragt nach einer Uhrzeit")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-    }
-
-    private var bookedText: String {
-        guard isSelected, let bookedAt else { return outcome.explanation }
-        return "Gebucht für \(RevisitPlanner.clockFormatter.string(from: bookedAt))"
     }
 }
 
@@ -131,5 +138,19 @@ struct OutcomeGlyph: View {
             .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace.downUp))
             .animation(.appFeedback(reduceMotion: reduceMotion), value: outcome)
             .accessibilityHidden(true)
+    }
+}
+
+/// Equal-height tiles at standard sizes; unrestricted wrapping at accessibility sizes.
+private struct OutcomeTextLayout: ViewModifier {
+    var reserveSpace = true
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    func body(content: Content) -> some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            content.lineLimit(nil)
+        } else {
+            content.lineLimit(2, reservesSpace: reserveSpace)
+        }
     }
 }

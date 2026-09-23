@@ -18,7 +18,6 @@ struct RevisitTimeSheet: View {
     let onClear: (() -> Void)?
 
     @State private var customTime: Date
-    @State private var isPickingCustomTime = false
     /// Frozen at presentation. Recomputing "in 30 Min" from a ticking clock while
     /// the sheet is open would move the buttons under the user's thumb.
     private let now: Date
@@ -115,14 +114,14 @@ struct RevisitTimeSheet: View {
                     )
                     .datePickerStyle(.compact)
                     // Deutsches Label „Genaue Zeit" plus 44pt-Treffläche für A11y.
-                    .frame(minHeight: 44)
-                    .onChange(of: customTime) { _, _ in isPickingCustomTime = true }
+                    .frame(minHeight: AppTouch.minimum)
 
                     // Bewusst Form-Stil statt Glas: Forms bleiben glasfrei,
                     // der CTA bleibt trotzdem prominent.
                     Button("Diese Zeit übernehmen") {
                         commit(customTime)
                     }
+                    .disabled(customTime <= now)
                     .buttonStyle(.borderedProminent)
                     .fontWeight(.semibold)
                     .frame(minHeight: AppTouch.minimum)
@@ -201,6 +200,7 @@ struct RevisitTimeSheet: View {
 /// Einmalig hier statt je Datei, damit Haus-Detail und beide Passanten-Sheets
 /// dieselbe Zeile zeigen. Tippen öffnet den Zeit-Sheet des Callers erneut.
 struct BookedTimeGlance: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let bookedAt: Date
     let action: () -> Void
@@ -215,40 +215,41 @@ struct BookedTimeGlance: View {
             action()
         } label: {
             HStack(spacing: AppSpacing.tight) {
-                Image(systemName: glance?.systemImage ?? VisitOutcome.later.symbolName)
-                    .foregroundStyle(tint)
-                    .frame(width: 24)
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Image(systemName: glance?.systemImage ?? VisitOutcome.later.symbolName)
+                        .foregroundStyle(tint)
+                }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(glance?.label ?? RevisitPlanner.clockFormatter.string(from: bookedAt))
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(tint)
                         .monospacedDigit()
                         .contentTransition(reduceMotion ? .identity : .numericText())
-                    // Überfällig steht als Wort dabei, nicht nur als Farbe.
-                    if isOverdue {
-                        Text("Überfällig")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.red)
+                    if glance?.urgency != .upcoming {
+                        Text(RevisitPlanner.clockFormatter.string(from: bookedAt))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
                     }
                 }
                 Spacer(minLength: AppSpacing.tight)
-                Text(RevisitPlanner.clockFormatter.string(from: bookedAt))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
             }
             .frame(maxWidth: .infinity, minHeight: AppTouch.minimum, alignment: .leading)
             .padding(.vertical, 8)
             .padding(.horizontal, 12)
-            .contentCard(cornerRadius: AppRadius.control, elevated: false)
+            .contentPanel(cornerRadius: AppRadius.control)
             .selectionRing(true, tint: tint)
             .contentShape(RoundedRectangle(cornerRadius: AppRadius.control, style: .continuous))
         }
         .buttonStyle(PressableRowStyle())
         .animation(.appFeedback(reduceMotion: reduceMotion), value: bookedAt)
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isSelected)
         .accessibilityLabel("Gebuchte Zeit, \(glance?.voiceOver ?? RevisitPlanner.clockFormatter.string(from: bookedAt))")
         .accessibilityHint("Fragt nach einer Uhrzeit")
     }

@@ -37,6 +37,8 @@ struct MapSearchSheet: View {
                         Button { model.query = "" } label: {
                             Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                         }
+                        .buttonStyle(.plain)
+                        .tappable()
                         .accessibilityLabel("Suche löschen")
                     }
                 }
@@ -71,35 +73,27 @@ struct MapSearchSheet: View {
                             }
                             .glassRows()
                         }
-                        ContentUnavailableView("Adresse suchen", systemImage: "mappin.and.ellipse",
-                            description: Text("Suche nach einer Straße, einem Ort oder einem Gebiet."))
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                    } else if model.isResolving, model.suggestions.isEmpty {
-                        // Skelettzeilen während der Auflösung: redacted + pulsierende
-                        // Opazität, RM-sicher statisch. Spinner-Transition bleibt.
-                        ForEach(0..<3, id: \.self) { _ in
-                            HStack(spacing: AppSpacing.snug) {
-                                Image(systemName: "mappin.circle.fill")
-                                    .foregroundStyle(.tertiary)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Musterstraße 12")
-                                        .font(.body)
-                                    Text("1234 Musterort")
-                                        .font(.caption)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .redacted(reason: .placeholder)
-                            .phaseAnimator([0.45, 0.75], trigger: model.isResolving) { content, phase in
-                                content.opacity(reduceMotion ? 0.6 : phase)
-                            } animation: { _ in
-                                reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.8)
-                            }
-                            .accessibilityHidden(true)
+                        if recent.isEmpty {
+                            ContentUnavailableView("Adresse suchen", systemImage: "mappin.and.ellipse",
+                                description: Text("Suche nach einer Straße, einem Ort oder einem Gebiet."))
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+                        }
+                    } else if model.isCompleting, model.suggestions.isEmpty {
+                        ProgressView("Orte werden gesucht …")
+                            .frame(maxWidth: .infinity, minHeight: AppTouch.minimum)
                             .listRowSeparator(.hidden)
                             .glassRows()
+                    } else if model.completionFailed {
+                        ContentUnavailableView {
+                            Label("Suche nicht verfügbar", systemImage: "wifi.exclamationmark")
+                        } description: {
+                            Text("Prüfe deine Internetverbindung und versuche es erneut.")
+                        } actions: {
+                            Button("Erneut versuchen") { model.retry() }
                         }
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                     } else if model.suggestions.isEmpty, !model.isResolving {
                         ContentUnavailableView.search(text: model.query)
                             .listRowSeparator(.hidden)
@@ -210,11 +204,15 @@ final class SearchModel: NSObject, @preconcurrency MKLocalSearchCompleterDelegat
     var query = "" {
         didSet {
             guard query != oldValue else { return }
+            suggestions = []
+            completionFailed = false
+            isCompleting = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             completer.queryFragment = query
-            if query.isEmpty { suggestions = [] }
         }
     }
     private(set) var suggestions: [Suggestion] = []
+    var isCompleting = false
+    var completionFailed = false
     var isResolving = false
     var showsError = false
 
@@ -232,6 +230,8 @@ final class SearchModel: NSObject, @preconcurrency MKLocalSearchCompleterDelegat
     }
 
     func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        isCompleting = false
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { suggestions = []; return }
         suggestions = completer.results.prefix(25).map {
             Suggestion(title: $0.title, subtitle: $0.subtitle, completion: $0)
         }
@@ -239,6 +239,15 @@ final class SearchModel: NSObject, @preconcurrency MKLocalSearchCompleterDelegat
 
     func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: any Error) {
         suggestions = []
+        isCompleting = false
+        completionFailed = !query.isEmpty
+    }
+
+    func retry() {
+        completionFailed = false
+        isCompleting = true
+        completer.queryFragment = ""
+        completer.queryFragment = query
     }
 
     func coordinate(for suggestion: Suggestion) async -> CLLocationCoordinate2D? {

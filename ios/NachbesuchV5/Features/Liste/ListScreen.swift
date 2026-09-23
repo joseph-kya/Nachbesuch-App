@@ -775,7 +775,7 @@ struct ListScreen: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             listMenu(proxy: proxy)
-                .accessibilityLabel("Filter und Reihenfolge")
+                .accessibilityLabel("Listenoptionen")
         }
         ToolbarItem(placement: .topBarTrailing) {
             exportToolbarButton
@@ -1181,8 +1181,8 @@ private struct HouseRow: View, Equatable {
                     // at 20 pt under a 15 pt header inverted the hierarchy.
                     .font(.body.weight(.semibold))
                     .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let subtitle = row.subtitle {
                     Text(subtitle)
                         .font(.caption)
@@ -1819,7 +1819,7 @@ struct StatusLegendSheet: View {
                 Section("Status") {
                     ForEach(VisitOutcome.allCases) { outcome in
                         HStack(spacing: AppSpacing.snug) {
-                            Text(outcome.emoji).font(.title3)
+                            Image(systemName: outcome.symbolName).font(.title3).foregroundStyle(outcome.tint)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(outcome.title).font(.body.weight(.medium))
                                 Text(outcome.explanation)
@@ -1840,7 +1840,7 @@ struct StatusLegendSheet: View {
             }
             .listStyle(.insetGrouped)
             .glassForm()
-            .navigationTitle("Hilfe")
+            .navigationTitle("Statuslegende")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

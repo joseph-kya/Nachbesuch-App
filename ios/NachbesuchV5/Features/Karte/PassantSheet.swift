@@ -10,6 +10,7 @@ import UIKit
 /// return time. The note is required: without it the record is a dot with
 /// nothing to say.
 struct PassantSheet: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(AppNoticeCenter.self) private var notices
@@ -34,18 +35,12 @@ struct PassantSheet: View {
                         .textInputAutocapitalization(.sentences)
                 } header: {
                     Text("Gespräch")
-                } footer: {
-                    // Zeichenzahl als Hinweis, kein Limit — lange Notizen bleiben erlaubt.
-                    Text("\(note.count)/500")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
                 }
                 .glassRows()
 
                 Section("Ergebnis (optional)") {
                     LazyVGrid(
-                        columns: [GridItem(.flexible(), spacing: AppSpacing.snug), GridItem(.flexible(), spacing: AppSpacing.snug)],
+                        columns: Array(repeating: GridItem(.flexible(), spacing: AppSpacing.snug), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2),
                         spacing: AppSpacing.snug
                     ) {
                         ForEach([VisitOutcome.joined, .earlyNo]) { result in
@@ -58,13 +53,6 @@ struct PassantSheet: View {
                     }
                     LaterButton(isSelected: outcome == .later, bookedAt: revisitAt) {
                         showsTimePicker = true
-                    }
-                    // Gebuchte Zeit mit relativem Label; tippen öffnet die
-                    // Zeitauswahl erneut — gleiche Zeile wie im Haus-Detail.
-                    if outcome == .later, let revisitAt {
-                        BookedTimeGlance(bookedAt: revisitAt) {
-                            showsTimePicker = true
-                        }
                     }
                 }
                 .glassRows()

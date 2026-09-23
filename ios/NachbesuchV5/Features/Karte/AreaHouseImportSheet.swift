@@ -58,7 +58,7 @@ struct AreaHouseImportSheet: View {
                                     .redacted(reason: .placeholder)
                             }
                         } header: {
-                            Text("Vorschau")
+                            Text("Adressen")
                         } footer: {
                             Text("Alle neuen Einträge entstehen als Einzelhäuser. Quelle: © OpenStreetMap-Mitwirkende.")
                         }
@@ -115,7 +115,7 @@ struct AreaHouseImportSheet: View {
                             .glassRows()
 
                             Section {
-                                ForEach(addresses.prefix(60)) { address in
+                                ForEach(addresses) { address in
                                     let isSelected = !deselectedIDs.contains(address.id)
                                     Button {
                                         toggleSelection(address.id)
@@ -133,19 +133,16 @@ struct AreaHouseImportSheet: View {
                                     .accessibilityLabel(address.address)
                                     .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
                                 }
-                                if addresses.count > 60 {
-                                    Text("… und \(addresses.count - 60) weitere")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
                             } header: {
                                 HStack {
-                                    Text("Vorschau")
+                                    Text("Adressen")
                                     Spacer()
                                     Button("Alle") { setAllSelected(true) }
                                         .font(.footnote)
+                                        .tappable()
                                     Button("Keine") { setAllSelected(false) }
                                         .font(.footnote)
+                                        .tappable()
                                 }
                             }
                             .glassRows()
@@ -155,6 +152,9 @@ struct AreaHouseImportSheet: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background { AppBackdrop() }
+            .disabled(phase == .saving)
             .navigationTitle("Häuser im Gebiet")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -163,6 +163,7 @@ struct AreaHouseImportSheet: View {
                         loadTask?.cancel()
                         dismiss()
                     }
+                    .disabled(phase == .saving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("\(selectedAddresses.count) anlegen") {
@@ -175,34 +176,13 @@ struct AreaHouseImportSheet: View {
                     .disabled(selectedAddresses.isEmpty || phase != .ready)
                 }
             }
-            // Floating glass action over the list: the thumb target with the live
-            // count. No opaque strip behind it — the rows scroll under the glass.
-            .safeAreaInset(edge: .bottom) {
-                if phase == .ready, !addresses.isEmpty {
-                    Button {
-                        Task { await save() }
-                    } label: {
-                        Text("\(selectedAddresses.count) anlegen")
-                            .fontWeight(.semibold)
-                            .monospacedDigit()
-                            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(selectedAddresses.count)))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .compatGlassButton(prominent: true)
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.large)
-                    .animation(.appFeedback(reduceMotion: reduceMotion), value: selectedAddresses.count)
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .disabled(selectedAddresses.isEmpty)
-                }
-            }
             .overlay {
                 if phase == .saving {
                     ProgressView("Wird gespeichert …").controlSize(.large)
                 }
             }
         }
+        .interactiveDismissDisabled(phase == .saving)
         .task { startLoading() }
         .onDisappear { loadTask?.cancel() }
     }
