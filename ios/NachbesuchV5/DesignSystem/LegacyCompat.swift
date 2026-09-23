@@ -2,18 +2,23 @@ import SwiftUI
 
 /// The iOS 18 presentation tier.
 ///
-/// iOS 18 has no Liquid Glass, so this file builds the closest equivalent from
-/// what iOS 18 does well: system materials (a real backdrop blur) for floating
-/// chrome, a blur-free frosted fill for scrolling content, and the same sheen and
-/// glossy rim on every surface. One design language on both OS versions; the
-/// cost is spent where it shows (a handful of floating panels), never per list row.
+/// iOS 18 has no Liquid Glass, so this file builds the look from parts that cost
+/// almost nothing: a dense translucent fill, a specular sheen along the top edge
+/// and the glossy rim every glass surface in the app carries.
+///
+/// **No live blur anywhere on iOS 18.** A SwiftUI `Material` re-samples and
+/// re-blurs whatever is behind it on every frame that anything behind it moves —
+/// the map while panning, the list while scrolling, the sheet while it slides.
+/// On an A12/A13 that is exactly where frames were being dropped. The fills here
+/// are dense enough (88–94 %) that what shows through is a hint of colour, which
+/// is what the eye reads as glass anyway, and they composite as plain layers.
 ///
 /// The rule every wrapper here keeps:
 ///
 /// > One view owns the shape. One view owns the fill. One view owns the border.
 /// > One view owns the pressed state. One view owns the hit region.
 ///
-/// Reduce Transparency and Increase Contrast always get an opaque surface.
+/// Reduce Transparency and Increase Contrast always get a fully opaque surface.
 
 /// Whether to render the pre-iOS 26 chrome.
 ///
@@ -95,17 +100,10 @@ enum CompatSurfaceRole {
 }
 
 extension View {
-    /// `glassEffect(_:in:)` on iOS 26, and the closest iOS 18 equivalent below it.
+    /// `glassEffect(_:in:)` on iOS 26, and a blur-free glass pane below it.
     ///
-    /// iOS 18 has no Liquid Glass, but it has the ingredients: a system material
-    /// (a real backdrop blur, the same one iOS 18's own Maps controls float on), a
-    /// specular sheen along the top edge, and the glossy rim every glass surface in
-    /// this app carries. Reduce Transparency and Increase Contrast still get an
-    /// opaque surface — see `LegacyGlassSurface`.
-    ///
-    /// Only floating chrome reaches this: content cards and list sections take the
-    /// blur-free `FrostedSurface` on iOS 18, because a live blur per scrolling card
-    /// is a backdrop pass per card per frame.
+    /// See the file header for why iOS 18 gets no material: this is a dense
+    /// translucent fill, a sheen and the glossy rim, and it costs one layer.
     @ViewBuilder
     func compatGlass(
         interactive: Bool,
@@ -158,7 +156,8 @@ struct GlassSheen<S: Shape>: View {
     }
 }
 
-/// The iOS 18 floating glass: material, sheen, rim, one shadow on the shape.
+/// The iOS 18 floating glass: dense translucent fill, sheen, rim, one shadow on
+/// the shape. No `Material` — see the file header.
 private struct LegacyGlassSurface<S: InsettableShape>: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -167,17 +166,21 @@ private struct LegacyGlassSurface<S: InsettableShape>: ViewModifier {
     let role: CompatSurfaceRole
     let shadowRadius: CGFloat
 
-    private var opaqueFill: Color {
+    /// Over MapKit the pane has to win against arbitrary tile colour, so it is
+    /// the base background and denser; over the quiet app ground, the elevated
+    /// grouped colour.
+    private var baseFill: Color {
         switch role {
         case .map: Color(uiColor: .systemBackground)
-        case .content, .card: Color(uiColor: .secondarySystemBackground)
+        case .content, .card: Color(uiColor: .secondarySystemGroupedBackground)
         }
     }
 
-    /// Over MapKit the surface has to win against arbitrary tile colour, so it
-    /// takes the thicker material; over the quiet app ground the regular one.
-    private var material: Material {
-        role == .map ? .regularMaterial : .thinMaterial
+    private var paneOpacity: Double {
+        switch role {
+        case .map: colorScheme == .dark ? 0.90 : 0.88
+        case .content, .card: 0.92
+        }
     }
 
     private func shadowOpacity(opaque: Bool) -> Double {
@@ -197,13 +200,13 @@ private struct LegacyGlassSurface<S: InsettableShape>: ViewModifier {
                 // the whole view is an offscreen pass over its text as well.
                 Group {
                     if opaque {
-                        shape.fill(opaqueFill)
+                        shape.fill(baseFill)
                     } else {
-                        shape.fill(material)
+                        shape.fill(baseFill.opacity(paneOpacity))
                             .overlay { GlassSheen(shape: shape) }
                     }
                 }
-                // Lighter under glass than under an opaque fill: a material is
+                // Lighter under glass than under an opaque fill: the pane is
                 // translucent, and a heavy shadow shows through it as a smudge.
                 .shadow(
                     color: .black.opacity(shadowRadius > 0 ? shadowOpacity(opaque: opaque) : 0),
@@ -282,17 +285,22 @@ extension View {
     /// - iOS 26: the system glass styles.
     /// - iOS 18 prominent → `LegacyGlassProminentStyle`: a tinted glass drop with a
     ///   sheen, a rim and a soft coloured shadow.
-    /// - iOS 18 plain → `LegacyGlassControlStyle`: material, sheen and rim, the
+    /// - iOS 18 plain → `LegacyGlassControlStyle`: glass pane, sheen and rim, the
     ///   label in the tint (or primary over the map).
-    /// - iOS 18 on a card → `LegacyCardControlStyle`: the glyph only — the card
-    ///   already is the surface.
+    /// - On a card (both OS versions) → `LegacyCardControlStyle`: the glyph only —
+    ///   the card already is the surface.
     @ViewBuilder
     func compatGlassButton(
         prominent: Bool = false,
         shape: CompatControlShape = .capsule,
         role: CompatSurfaceRole = .content
     ) -> some View {
-        if #available(iOS 26, *), !LegacyChrome.isForced {
+        if !prominent, role == .card {
+            // A control *on* a card: the card already is the glass. On iOS 26 a
+            // `.glass` button here was glass nested in glass — the one thing the
+            // material is explicitly not meant for — and it drew a second disc.
+            buttonStyle(LegacyCardControlStyle())
+        } else if #available(iOS 26, *), !LegacyChrome.isForced {
             if prominent {
                 buttonStyle(.glassProminent)
             } else {
@@ -347,7 +355,7 @@ private struct LegacyCardControlStyle: ButtonStyle {
     }
 }
 
-/// iOS 18 glass control: material disc or capsule with sheen and rim.
+/// iOS 18 glass control: blur-free glass disc or capsule with sheen and rim.
 ///
 /// Over the map the label stays primary — a faint tinted glyph over map tiles
 /// reads as nothing. Over content it takes the tint, as `.bordered` did.
@@ -545,22 +553,38 @@ enum LegacyBarAppearance {
         // system bar that iOS 26 draws differently anyway.
         if #available(iOS 26, *) { return }
 
-        // The system material, in both states. The default scroll-edge appearance
-        // is fully transparent, which over edge-to-edge MapKit left three loose
-        // icons floating on the tiles; an opaque strip fixed that but was the one
-        // solid slab in an otherwise glass interface. The blurred default bar is
-        // iOS 18's own glass and separates from the map on its own.
+        // Glass without the blur. A translucent colour with no background effect
+        // is composited as a plain layer; UIKit's default bar material re-blurs
+        // the map under the tab bar on every frame of a pan. The hairline keeps
+        // the bar separated from the tiles in both appearances — the default
+        // transparent scroll-edge state is what used to leave three loose icons
+        // floating on the map.
+        let barFill = UIColor { trait in
+            trait.userInterfaceStyle == .dark
+                ? UIColor.secondarySystemBackground.withAlphaComponent(0.94)
+                : UIColor.systemBackground.withAlphaComponent(0.92)
+        }
         let tabBar = UITabBarAppearance()
-        tabBar.configureWithDefaultBackground()
+        tabBar.configureWithTransparentBackground()
+        tabBar.backgroundColor = barFill
+        tabBar.shadowColor = UIColor.separator
         UITabBar.appearance().standardAppearance = tabBar
         UITabBar.appearance().scrollEdgeAppearance = tabBar
 
-        // Same reasoning one bar up: the list and archive titles sat on transparent
-        // chrome over a tinted backdrop, so the title had no ground of its own.
+        // One bar up: the same pane while content scrolls under the title, and
+        // fully clear at the top edge, where it sits on the app's own ground.
         let navigationBar = UINavigationBarAppearance()
-        navigationBar.configureWithDefaultBackground()
+        navigationBar.configureWithTransparentBackground()
+        navigationBar.backgroundColor = UIColor { trait in
+            trait.userInterfaceStyle == .dark
+                ? UIColor.systemBackground.withAlphaComponent(0.94)
+                : UIColor.systemGroupedBackground.withAlphaComponent(0.94)
+        }
+        navigationBar.shadowColor = UIColor.separator
+        let navigationEdge = UINavigationBarAppearance()
+        navigationEdge.configureWithTransparentBackground()
         UINavigationBar.appearance().standardAppearance = navigationBar
         UINavigationBar.appearance().compactAppearance = navigationBar
-        UINavigationBar.appearance().scrollEdgeAppearance = navigationBar
+        UINavigationBar.appearance().scrollEdgeAppearance = navigationEdge
     }
 }

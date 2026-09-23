@@ -73,8 +73,8 @@ struct MapChromeModifier: ViewModifier {
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         if LegacyChrome.isActive {
-            // iOS 18: material glass, sheen, rim, one shadow on the shape. The
-            // surface itself falls back to opaque under Reduce Transparency.
+            // iOS 18: blur-free glass pane, sheen, rim, one shadow on the shape.
+            // The surface itself falls back to opaque under Reduce Transparency.
             content.compatGlass(
                 interactive: isInteractive,
                 in: shape,
@@ -175,7 +175,7 @@ extension View {
 ///
 /// Opaque grouped cells are the one solid slab left in a glass sheet. This keeps
 /// the grouped geometry (the list still rounds the section corners) and lets the
-/// sheet's glass — or iOS 18's material — show through, at a density that keeps
+/// sheet's glass — or, on iOS 18, the app's tinted ground — show through, at a density that keeps
 /// text and controls fully legible. Opaque under Reduce Transparency.
 struct GlassRowFill: View {
     @Environment(\.colorScheme) private var colorScheme
@@ -201,34 +201,26 @@ extension View {
     /// A `Form` / `List` that lets its sheet's glass through.
     ///
     /// iOS 26 sheets are Liquid Glass at partial heights; an opaque grouped
-    /// background painted over them hid it completely. iOS 18 sheets get a
-    /// system material instead of the flat sheet colour.
+    /// background painted over them hid it completely. iOS 18 puts the app's
+    /// tinted ground behind the translucent rows instead — see `compatSheetGlass`.
     func glassForm() -> some View {
         scrollContentBackground(.hidden)
             .compatSheetGlass()
     }
 
-    /// The sheet's own background: system glass on iOS 26 (nothing to do), a
-    /// thick material on iOS 18, the default opaque sheet under Reduce Transparency.
+    /// The sheet's ground: the system glass on iOS 26 (nothing to do), the app's
+    /// static tinted backdrop on iOS 18.
+    ///
+    /// Not a `Material` on iOS 18: a sheet slides in over a live map, and a
+    /// material sheet background re-blurs the map on every frame of that slide
+    /// and of every drag between detents. The backdrop is one rasterised
+    /// gradient, and the translucent rows on top of it read as glass.
     @ViewBuilder
     func compatSheetGlass() -> some View {
         if LegacyChrome.isActive {
-            modifier(LegacySheetGlass())
+            background { AppBackdrop() }
         } else {
             self
-        }
-    }
-}
-
-private struct LegacySheetGlass: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorSchemeContrast) private var contrast
-
-    func body(content: Content) -> some View {
-        if GlassPreference.prefersOpaque(reduceTransparency: reduceTransparency, contrast: contrast) {
-            content.presentationBackground(Color(uiColor: .systemGroupedBackground))
-        } else {
-            content.presentationBackground(.thickMaterial)
         }
     }
 }

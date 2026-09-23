@@ -40,33 +40,15 @@ Alles ist Glas — aber nicht überall dasselbe Glas. Die Ebenen bleiben getrenn
 | Ebene | iOS 26 | iOS 18 | Was dort lebt |
 |---|---|---|---|
 | **Inhalt** | Liquid Glass (`contentCard`, `SectionSurface`) | Frostglas ohne Blur (`FrostedSurface`) | Listenzeilen, Archiv, alles Gelesene |
-| **Navigation / Steuerung** | Liquid Glass (`mapChrome` / `navigationGlass`, `.glass`-Knöpfe) | Material-Glas mit Glanz und Kante (`compatGlass`, `compatGlassButton`) | Schwebende Panels, Knöpfe, Banner |
-| **Blätter** | System-Glas des Sheets, durchscheinende Zeilen (`glassForm` + `glassRows`) | `.thickMaterial` als Sheet-Grund, gleiche Zeilen | Formulare, Detailblätter |
+| **Navigation / Steuerung** | Liquid Glass (`mapChrome` / `navigationGlass`, `.glass`-Knöpfe) | dichte Glasscheibe ohne Blur, Glanz und Kante (`compatGlass`, `compatGlassButton`) | Schwebende Panels, Knöpfe, Chips, Banner |
+| **Blätter** | System-Glas des Sheets, durchscheinende Zeilen (`glassForm` + `glassRows`) | App-Grund (`AppBackdrop`) hinter denselben Zeilen | Formulare, Detailblätter |
 
-Warum iOS 18 für Inhalt **kein** echtes Material bekommt: Eine Karte in einer
-Liste steht auf `AppBackdrop`, das sich nie bewegt. Ein Blur über etwas, das sich
-nie bewegt, sieht aus wie eine halbtransparente Füllung — kostet aber pro Karte
-pro Frame einen Backdrop-Pass. `FrostedSurface` zeichnet genau die Füllung, den
-Glanz und die Kante, ohne den Blur. Echte Materialien gibt es nur dort, wo sich
-wirklich etwas dahinter bewegt: über der Karte und über scrollendem Inhalt.
-
-**Regeln:**
-
-- **Glas nie auf Glas.** Verschachtelte `glassEffect`-Modifier sind ausdrücklich
-  unerwünscht — sie erzeugen visuelle Redundanz und Matsch. Ein Block *innerhalb*
-  einer Karte bekommt `contentPanel` (flache getönte Füllung), nie noch eine
-  Glasschicht.
-- **Ko-lokalisierte Panels teilen sich einen `GlassEffectContainer`**, damit die
-  Formen ineinander morphen und in einem Durchgang gerendert werden.
-- **Kein zusätzlicher Hintergrund, kein zusätzlicher Rahmen** an Leistenknöpfen,
-  um ihnen Gewicht zu geben. Hierarchie entsteht durch **Anordnung und
-  Gruppierung**, nicht durch Dekoration.
-- **Ein Scroll-Edge-Effekt pro Ansicht.** Nicht mischen, nicht stapeln.
-- Glas respektiert *Transparenz reduzieren* und *Kontrast erhöhen* — bei
-  Eigenbau-Panels muss der undurchsichtige Pfad ausdrücklich mitgebaut werden
-  (siehe `AdaptiveSurface.swift`).
-
----
+**iOS 18 bekommt nirgends einen Live-Blur** — kein SwiftUI-`Material`, auch nicht
+in Tab- und Navigationsleiste. Ein Material rechnet bei jedem Frame neu, in dem
+sich etwas dahinter bewegt: die Karte beim Schieben, die Liste beim Scrollen, das
+Blatt beim Hochfahren. Auf A12/A13 gehen genau dort Frames verloren. Die Scheiben
+sind dicht genug (88–94 %), dass nur ein Farbhauch durchscheint — das liest das
+Auge als Glas —, und sie werden als einfache Ebenen zusammengesetzt.
 
 ## 3. Farbe
 
@@ -149,6 +131,9 @@ Ein Akzent, sonst Semantik. Mehr nicht.
   `.appCelebrate` (Abschluss).
 - **Eine Bewegung pro Ereignis.** Ein Chip wechselt die Farbe *oder* die Zahl
   rollt — nicht zusätzlich Skalierung und Symbol-Bounce obendrauf.
+- **Tippen wird im selben Frame beantwortet.** Haptik und sichtbarer Zustand
+  (Highlight, Markierung) kommen beim Tipp, nicht erst am Ende einer Animation.
+  Druck-Highlights folgen der Form, in der sie liegen (Kartenecken, konzentrisch).
 - **Identität ist heilig.** Nie `if x { content.modifier() } else { content }`
   um einen ganzen Bildschirm: Das baut die Ansicht neu (Scrollposition weg,
   Übergänge laufen nicht). Banner leben in einem immer vorhandenen Overlay.

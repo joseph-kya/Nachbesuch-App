@@ -10,6 +10,9 @@ struct BalanceSection: View {
     let entry: ArchiveEntry?
     @Binding var scope: DayScope
     var passantCount: Int = 0
+    /// Fades the figures (never the card) while the territory is swapped — see
+    /// `ArchiveScreen.selectGebiet`.
+    var contentOpacity: Double = 1
     /// WAVE2: success fires only on false→true. A plain `trigger: isComplete`
     /// would also buzz on true→false (StreetHeader documents the same trap).
     @State private var celebrateToken = 0
@@ -90,6 +93,7 @@ struct BalanceSection: View {
                 .frame(maxWidth: .infinity, minHeight: 100)
             }
         }
+        .opacity(contentOpacity)
         .padding(AppSpacing.loose)
         .contentCard(cornerRadius: AppRadius.card)
     }

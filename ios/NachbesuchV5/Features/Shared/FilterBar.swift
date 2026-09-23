@@ -22,10 +22,8 @@ struct FilterChip: Identifiable, Equatable {
 /// There used to be two near-identical copies (`QuickFilterBar` and `ListFilterBar`),
 /// ~90 duplicated lines whose differences were all accidental.
 ///
-/// The selected chip is a prominent glass button and the rest are plain glass, so
-/// the selection travels as a material change inside one container. That replaced a
-/// hand-rolled `matchedGeometryEffect` capsule — and with it the namespace, the
-/// Reduce Motion special case and the dark-mode-broken badge colour.
+/// Every chip is one glass capsule; the selected one's glass takes the chip's
+/// tint, so the selection travels as a colour change and nothing in the row moves.
 struct FilterBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var glass
@@ -124,39 +122,35 @@ struct FilterBar: View {
         }
     }
 
-    @ViewBuilder
+    /// One button per chip, always — selection changes its *surface*, never its
+    /// identity.
+    ///
+    /// This used to be `if selected { prominent button } else { plain button }`.
+    /// Two branches are two views, so every tap removed one chip and inserted
+    /// another; for the length of the animation both sat in the `HStack`, and the
+    /// chips beside them jumped sideways and back. Now the selected chip's glass
+    /// takes the tint and the rest of the row does not move.
     private func chipButton(_ chip: FilterChip) -> some View {
-        // Nur das Icon trägt die Statusfarbe bei Abwahl — alle Chips voll
-        // getönt schreien gleichzeitig.
-        let label = HStack(spacing: 5) {
-            Image(systemName: chip.systemImage)
-                .imageScale(.small)
-                .foregroundStyle(chip.isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(chip.tint))
-            Text(chip.title)
-                .fixedSize(horizontal: true, vertical: false)
-            if let count = chip.count {
-                ChipCount(count: count)
+        Button { onSelect(chip.id) } label: {
+            HStack(spacing: 5) {
+                // Only the icon carries the status colour when not selected — a
+                // row of fully tinted chips all shouting at once reads as noise.
+                Image(systemName: chip.systemImage)
+                    .imageScale(.small)
+                    .foregroundStyle(chip.isSelected ? AnyShapeStyle(Color.white) : AnyShapeStyle(chip.tint))
+                Text(chip.title)
+                    .fixedSize(horizontal: true, vertical: false)
+                if let count = chip.count {
+                    ChipCount(count: count)
+                }
             }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(chip.isSelected ? Color.white : Color.primary)
         }
-        .font(.subheadline.weight(.semibold))
-
-        // Prominent fills with the tint; plain glass only tints its *content*, so a
-        // selected chip styled as plain glass with white text rendered invisible.
-        Group {
-            if chip.isSelected {
-                Button { onSelect(chip.id) } label: { label }
-                    .compatGlassButton(prominent: true)
-                    .tint(chip.tint)
-            } else {
-                Button { onSelect(chip.id) } label: { label }
-                    .compatGlassButton()
-                    .tint(.primary)
-            }
-        }
-            .compatGlassID("filter.\(chip.id)", in: glass)
-            .accessibilityLabel("\(contextLabel): \(chip.title)")
-            .accessibilityValue(chip.count.map { "\($0)" } ?? "")
-            .accessibilityAddTraits(chip.isSelected ? [.isButton, .isSelected] : .isButton)
+        .buttonStyle(FilterChipStyle(isSelected: chip.isSelected, tint: chip.tint))
+        .accessibilityLabel("\(contextLabel): \(chip.title)")
+        .accessibilityValue(chip.count.map { "\($0)" } ?? "")
+        .accessibilityAddTraits(chip.isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
     /// Sucht-Punkt: reserviert immer 6 pt, blendet nur die Deckkraft — still,
@@ -168,6 +162,62 @@ struct FilterBar: View {
             .opacity(isSearching ? 1 : 0)
             .animation(.appFeedback(reduceMotion: reduceMotion), value: isSearching)
             .accessibilityHidden(true)
+    }
+}
+
+/// A filter chip: capsule, glass surface, damped press.
+///
+/// iOS 26: Liquid Glass, tinted when selected — the tint crossfades inside the
+/// same glass shape. iOS 18: the blur-free chip surface below. Both scale to
+/// 0.96 under the finger on the `.appPress` spring.
+private struct FilterChipStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let isSelected: Bool
+    let tint: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(minHeight: 36)
+            .background { ChipSurface(isSelected: isSelected, tint: tint, isPressed: configuration.isPressed) }
+            .contentShape(Capsule(style: .continuous))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
+            .animation(.appPress(reduceMotion: reduceMotion), value: configuration.isPressed)
+    }
+}
+
+private struct ChipSurface: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    let isSelected: Bool
+    let tint: Color
+    let isPressed: Bool
+
+    var body: some View {
+        let shape = Capsule(style: .continuous)
+        if #available(iOS 26, *), !LegacyChrome.isForced {
+            Color.clear
+                .glassEffect(isSelected ? Glass.regular.tint(tint) : Glass.regular, in: shape)
+        } else {
+            // iOS 18: no blur. The chip bar floats over scrolling rows, so the
+            // unselected fill is dense enough to stay legible over them.
+            let opaque = GlassPreference.prefersOpaque(reduceTransparency: reduceTransparency, contrast: contrast)
+            shape
+                .fill(isSelected
+                      ? AnyShapeStyle(tint)
+                      : AnyShapeStyle(Color(uiColor: .secondarySystemGroupedBackground).opacity(opaque ? 1 : 0.92)))
+                .overlay { if !opaque { GlassSheen(shape: shape) } }
+                .overlay { shape.fill(Color.primary.opacity(isPressed ? PressHighlight.opacity : 0)) }
+                .overlay {
+                    if opaque {
+                        shape.strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5)
+                    } else {
+                        glossyRim(for: shape, colorScheme: colorScheme)
+                    }
+                }
+        }
     }
 }
 

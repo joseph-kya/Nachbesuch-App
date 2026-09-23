@@ -347,7 +347,6 @@ struct ListScreen: View {
                     onUndo: performUndo
                 )
             )
-            .sensoryFeedback(.selection, trigger: collapsedSections)
             .navigationTitle("Nachbesuche")
             .navigationBarTitleDisplayMode(.inline)
     }
@@ -395,8 +394,8 @@ struct ListScreen: View {
                         )
                         .listRowSeparator(.hidden)
                     }
-                    .listRowInsets(EdgeInsets(top: 11, leading: AppLayout.rowInset,
-                                              bottom: 11, trailing: AppLayout.rowInset))
+                    .listRowInsets(EdgeInsets(top: StreetCardMetrics.verticalInset, leading: AppLayout.rowInset,
+                                              bottom: StreetCardMetrics.verticalInset, trailing: AppLayout.rowInset))
                 }
             }
         }
@@ -672,9 +671,10 @@ struct ListScreen: View {
     }
 
     private func toggleSection(_ id: String) {
-        // Auf/zu = eine Selection-Haptik via `collapsedSections`-Trigger am Screen.
-        // Absichtlich kein zusätzlicher Impact für auf vs. zu: zwei Feedbacks auf
-        // demselben Trigger wären ein Doppel-Brumm pro Tap.
+        // Haptic on the tap itself. It used to be a `sensoryFeedback` trigger on
+        // `collapsedSections`, which also buzzed when a territory loaded and
+        // seeded its default collapse state — a tap the user never made.
+        UISelectionFeedbackGenerator().selectionChanged()
         withAnimation(.appExpand(reduceMotion: reduceMotion)) {
             if collapsedSections.contains(id) { collapsedSections.remove(id) }
             else { collapsedSections.insert(id) }
@@ -694,7 +694,8 @@ struct ListScreen: View {
     }
 
     private func setAllStreets(expanded: Bool) {
-        // Gleicher Trigger wie toggleSection: eine Selection pro Massen-Tap.
+        // One selection haptic per bulk tap, from the tap (see toggleSection).
+        UISelectionFeedbackGenerator().selectionChanged()
         withAnimation(.appExpand(reduceMotion: reduceMotion)) {
             if expanded {
                 collapsedSections.removeAll()
@@ -1078,10 +1079,19 @@ private struct ListSensors: View {
 }
 
 /// Resolves the tapped address after presentation, never inside its
-/// transaction: the sheet appears instantly with a spinner, the live model
-/// faults in behind it.
+/// transaction: the sheet starts moving on the tap, the live model faults in
+/// behind it.
+///
+/// Two things made this tap look broken. The zoom transition sat on the resolved
+/// form, which does not exist yet on the frame the presentation starts, so the row
+/// often had nothing to zoom into and the sheet slid up instead. And the spinner
+/// placeholder was swapped for the form mid-transition — a flash of "wird
+/// geöffnet …" on every tap, for a fetch that takes a millisecond. The zoom now
+/// belongs to the host, and the placeholder is empty glass that the form fades
+/// into; a spinner appears only if resolving is genuinely slow.
 private struct HouseSheetHost: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AppNoticeCenter.self) private var notices
     let id: UUID
     let scope: DayScope
@@ -1089,25 +1099,37 @@ private struct HouseSheetHost: View {
     let zoom: Namespace.ID
     @State private var house: House?
     @State private var didResolve = false
+    @State private var isSlow = false
 
     var body: some View {
-        Group {
+        ZStack {
             if let house {
                 HouseDetailSheet(house: house, scope: scope, writeDay: writeDay)
-                    // The row grows into the sheet, and dragging it back down
-                    // collapses it into the same row.
-                    .navigationTransition(.zoom(sourceID: id, in: zoom))
+                    .transition(.opacity)
             } else if didResolve {
                 ContentUnavailableView {
                     Label("Adresse nicht gefunden", systemImage: "questionmark.circle")
                 } description: {
                     Text("Sie wurde möglicherweise gelöscht.")
                 }
+                .transition(.opacity)
             } else {
-                ProgressView("Adresse wird geöffnet …")
+                Color.clear
                     .frame(maxWidth: .infinity, minHeight: 200)
+                    .overlay {
+                        if isSlow {
+                            ProgressView("Adresse wird geöffnet …")
+                                .transition(.opacity)
+                        }
+                    }
+                    .compatSheetGlass()
             }
         }
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: didResolve)
+        .animation(.appFeedback(reduceMotion: reduceMotion), value: isSlow)
+        // The row grows into the sheet, and dragging it back down collapses it
+        // into the same row. On the host, so it is there from the first frame.
+        .navigationTransition(.zoom(sourceID: id, in: zoom))
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .task(id: id) {
@@ -1120,6 +1142,11 @@ private struct HouseSheetHost: View {
                 notices.report(error, context: "Haus konnte nicht geöffnet werden")
             }
             didResolve = true
+        }
+        .task {
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, !didResolve else { return }
+            isSlow = true
         }
     }
 }
@@ -1285,30 +1312,70 @@ private struct OpenCountBadge: View {
 
 // MARK: - Street card (one List row per street)
 
-/// Tast-Feedback ohne Geometrie-Bruch: nur Highlight, kein Scale.
+/// Geometry the street card and its press highlights share.
+private enum StreetCardMetrics {
+    /// The list row's top/bottom inset — card edge to header content.
+    static let verticalInset: CGFloat = 11
+    /// Header content to the hairline under it when the street is open.
+    static let headerToHairline: CGFloat = 7
+    /// How far an address highlight reaches past the row's content.
+    static let rowOutset = CGSize(width: 8, height: 6)
+}
+
+/// Street header press: highlights the header's slice of the card, edge to edge.
 ///
-/// `PressableRowStyle` skaliert auf 0.98 — richtig für frei schwebende Karten,
-/// falsch in dieser durchgehenden Glaskarte: Die Zeile reißt sichtbar von den
-/// Nachbarn ab. Darum hier wie `GroupedRowStyle` nur `.primary.opacity(0.08)`
-/// als Overlay in Kartenform, Scale bleibt 1.0. Overlay statt Background, damit
-/// das Highlight auch über `contentPanel`-Füllungen liegt.
+/// Highlight only, never scale — the header shares one glass surface with its
+/// addresses, and scaling would tear it away from them. The highlight used to be
+/// a card-radius shape drawn on the *inset* header content, so it floated inside
+/// the card as a smaller blob with corners that matched nothing. It now reaches
+/// out to the card's edges (and down to the hairline when the street is open), so
+/// its corners are the card's corners.
 private struct StreetHeaderPressStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    var isLast: Bool
+    var isExpanded: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .overlay {
-                sectionShape(isFirst: true, isLast: isLast)
+            .background {
+                sectionShape(isFirst: true, isLast: !isExpanded)
                     .fill(.primary.opacity(configuration.isPressed ? PressHighlight.opacity : 0))
+                    .padding(.horizontal, -AppLayout.rowInset)
+                    .padding(.top, -StreetCardMetrics.verticalInset)
+                    .padding(.bottom, isExpanded ? -StreetCardMetrics.headerToHairline : -StreetCardMetrics.verticalInset)
                     .allowsHitTesting(false)
             }
             .animation(.appPress(reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 }
 
-/// Gleiches Highlight für Adresszeilen und Paging-Fuß: kleine Radien, kein Tear.
-private struct StreetRowPressStyle: ButtonStyle {
+/// Address press: a rounded pill a little larger than the row, concentric with
+/// the card around it.
+///
+/// It used to be exactly the size of the row's content, so the highlight touched
+/// the glyph and the chevron and read as a box drawn around the text. Behind the
+/// content, not over it, so the text never greys under the finger.
+private struct AddressRowPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background {
+                RoundedRectangle(
+                    cornerRadius: AppRadius.card - StreetCardMetrics.rowOutset.width,
+                    style: .continuous
+                )
+                .fill(.primary.opacity(configuration.isPressed ? PressHighlight.opacity : 0))
+                .padding(.horizontal, -StreetCardMetrics.rowOutset.width)
+                .padding(.vertical, -StreetCardMetrics.rowOutset.height)
+                .allowsHitTesting(false)
+            }
+            .animation(.appPress(reduceMotion: reduceMotion), value: configuration.isPressed)
+    }
+}
+
+/// Press for the paging pills ("Weitere anzeigen", "Nach oben"): the highlight
+/// lies over the pill's own fill, in the pill's own shape.
+private struct PanelPressStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
@@ -1341,6 +1408,16 @@ private struct StreetCard: View {
     let onJumpTop: () -> Void
     @State private var visibleCount = Self.pageSize
 
+    private var clipRoom: EdgeInsets {
+        let outset = StreetCardMetrics.rowOutset
+        return EdgeInsets(top: 0, leading: outset.width, bottom: outset.height, trailing: outset.width)
+    }
+
+    private var clipRoomReturned: EdgeInsets {
+        EdgeInsets(top: -clipRoom.top, leading: -clipRoom.leading,
+                   bottom: -clipRoom.bottom, trailing: -clipRoom.trailing)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // VoiceOver: Button trägt Label+Value ("erweitert/reduziert")+Hint —
@@ -1352,10 +1429,9 @@ private struct StreetCard: View {
                     .padding(.vertical, 4)
                     .contentShape(.rect)
             }
-            // Kein `.plain`: ohne Stil kein Press-Feedback. Header-Highlight wie
-            // GroupedRowStyle (primary 0.08), Scale 1.0 — kein Tear an den Ecken.
-            // Form folgt dem Kartenrand: zu = rundum, offen = nur oben rund.
-            .buttonStyle(StreetHeaderPressStyle(isLast: !isExpanded))
+            // Not `.plain`: that has no press state. Highlight only, in the card's
+            // own corners — all round when shut, top only when open.
+            .buttonStyle(StreetHeaderPressStyle(isExpanded: isExpanded))
             .accessibilityLabel("Straße \(section.title)")
             // SwiftUI kennt kein .isExpanded-Trait — der Zustand wandert darum
             // ins Value: „erweitert"/„reduziert" wird mit angesagt.
@@ -1376,7 +1452,7 @@ private struct StreetCard: View {
                         .fill(.separator)
                         .frame(height: 0.5)
                         .padding(.leading, AppLayout.glyphColumn + AppLayout.glyphGap)
-                        .padding(.top, 7)
+                        .padding(.top, StreetCardMetrics.headerToHairline)
                     ForEach(visible) { row in
                         Button { onOpen(row.id) } label: {
                             // The clock only reaches rows with a booked time:
@@ -1387,9 +1463,9 @@ private struct StreetCard: View {
                                 .frame(maxWidth: .infinity, minHeight: AppTouch.minimum, alignment: .leading)
                                 .contentShape(.rect)
                         }
-                        // Gleiches Highlight wie Header, nie Scale: Zeilen teilen
-                        // sich eine Fläche, Scale würde die Kante aufreißen.
-                        .buttonStyle(StreetRowPressStyle())
+                        // Highlight, never scale: rows share one surface, and a
+                        // scaled row would tear its edge away from its neighbours.
+                        .buttonStyle(AddressRowPressStyle())
                         .matchedTransitionSource(id: row.id, in: zoom)
                         .padding(.top, 11)
                         .padding(.bottom, row.id == lastID ? 4 : 11)
@@ -1421,7 +1497,7 @@ private struct StreetCard: View {
                             .contentPanel()
                             .contentShape(.rect)
                         }
-                        .buttonStyle(StreetRowPressStyle())
+                        .buttonStyle(PanelPressStyle())
                         .accessibilityLabel("Weitere \(section.rows.count - visible.count) Adressen anzeigen")
                         .accessibilityHint("Zeigt mehr Adressen dieser Straße")
                     }
@@ -1450,7 +1526,7 @@ private struct StreetCard: View {
                             .contentPanel()
                             .contentShape(.rect)
                         }
-                        .buttonStyle(StreetRowPressStyle())
+                        .buttonStyle(PanelPressStyle())
                         .accessibilityLabel("Nach oben springen")
                         .accessibilityHint("Zeigt wieder die ersten Adressen dieser Straße")
                     }
@@ -1468,7 +1544,13 @@ private struct StreetCard: View {
                         removal: AnyTransition.opacity.animation(.easeOut(duration: 0.14))
                     )
                 )
+                // The clip is widened by the address highlight's outset (and
+                // handed back as negative padding, so layout is unchanged):
+                // clipped at the content edge, a pressed row's pill lost its
+                // rounded ends and the last row's lost its bottom.
+                .padding(clipRoom)
                 .clipped()
+                .padding(clipRoomReturned)
             }
         }
         .animation(.appExpand(reduceMotion: reduceMotion), value: isExpanded)

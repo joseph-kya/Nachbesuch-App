@@ -15,7 +15,7 @@ import SwiftUI
 /// radius, and the shapes inside it are gone.
 ///
 /// **Two scales, one material.** Both tiers now draw glass — Liquid Glass on
-/// iOS 26, material glass with sheen and rim on iOS 18 — and glass needs a
+/// iOS 26, a blur-free glass pane with sheen and rim on iOS 18 — and glass needs a
 /// generous radius to read as a pane rather than a plastic sheet. iOS 26's glass
 /// is thicker and lensing, so it takes the larger values; iOS 18's flatter glass
 /// sits between the old system radii and iOS 26's, where a full-width card still

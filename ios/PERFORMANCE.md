@@ -7,16 +7,20 @@ device; the Xcode build and the checks below are still to be run.
   undo banner were installed with `if banner { content.safeAreaBar } else { content }`.
   Each appearance rebuilt the whole `TabView` (or `List`), discarding scroll position
   and state. Both are now always-present overlays.
-- **Glass cost is spent where it shows.** iOS 26 uses system Liquid Glass. iOS 18
-  uses a real material only for floating chrome (a handful of panels over the map)
-  and a blur-free frosted fill for anything that scrolls, so a list row never
-  samples its backdrop.
+- **No live blur on iOS 18.** iOS 26 uses system Liquid Glass. iOS 18 draws every
+  glass surface — panels, controls, chips, banners, list cards, sheets and the tab
+  and navigation bars — as a dense translucent fill with a sheen and a rim. No
+  SwiftUI `Material`, no UIKit bar blur: nothing re-samples the map while it pans
+  or the list while it scrolls.
 - **Shadows sit on shapes, not views.** A `.shadow` on a whole card rendered its
   text offscreen as well. Scrolling cards (archive, list) no longer cast shadows,
   and iOS 26 glass gets none, because glass brings its own.
 - **Progress bars without `GeometryReader`.** `ProgressFillShape` gets its rect for
   free and interpolates its own width: one less measuring pass per bar, which was
   six per balance card plus one per archive card.
+- **Taps answer on the frame they land.** Filter chips no longer swap two button
+  views (which briefly doubled the chip row's layout); archive cards take the
+  active marker and haptic on the tap instead of after a half-second scroll.
 - **Dead animation modifiers removed.** Street headers and list rows carried numeric
   morphs, bounces and celebrate springs that never ran, because the list swaps data
   with animations disabled. They were still evaluated per row.

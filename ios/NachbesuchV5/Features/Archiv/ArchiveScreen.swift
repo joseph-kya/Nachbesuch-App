@@ -24,7 +24,19 @@ struct ArchiveScreen: View {
     @State private var results: [ArchiveSearchResult] = []
     @State private var searchText = ""
     @State private var debouncedQuery = ""
+    /// The chip that is selected. Moves on the tap.
     @State private var filter: ArchiveFilter = .all
+    /// The filter the cards below are currently showing. Follows `filter` once
+    /// the old cards have faded out, so the chip never waits for the content and
+    /// the content never cuts.
+    @State private var shownFilter: ArchiveFilter = .all
+    /// Opacity of everything under the filter bar during a filter swap.
+    @State private var resultsOpacity: Double = 1
+    /// Opacity of the balance's contents while it changes territory.
+    @State private var balanceOpacity: Double = 1
+    /// The card just tapped, shown as active immediately while the list scrolls
+    /// back to the balance — the tap is acknowledged on the frame it lands.
+    @State private var pendingGebietID: UUID?
     @State private var route: ArchiveRoute?
     @State private var confirmation: ArchiveConfirmation?
     @State private var backupURL: URL?
@@ -122,6 +134,11 @@ struct ArchiveScreen: View {
         gebiete.first { $0.id == selectedGebietID } ?? gebiete.first
     }
 
+    /// Which card wears the active marker: the one just tapped, else the active one.
+    private var highlightedGebietID: UUID? {
+        pendingGebietID ?? activeGebiet?.id
+    }
+
     /// Territories by id, built once per body pass.
     ///
     /// `daySections` and `gebietCard` both resolved a result back to its territory
@@ -140,7 +157,6 @@ struct ArchiveScreen: View {
                 .navigationTitle("Archiv")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbarMenu }
-                .sensoryFeedback(.selection, trigger: selectedGebietID)
                 .overlay { if isWorking { ProgressView().controlSize(.large) } }
                 .sheet(item: $route, content: sheet(for:))
                 #if DEBUG
@@ -195,7 +211,13 @@ struct ArchiveScreen: View {
             if isActive { refreshActivePassantCount() }
         }
         .onChange(of: isActive) { _, active in
-            if !active { areaSwitchRequest = nil }
+            if !active {
+                // An interrupted switch must not leave a card marked active that
+                // is not, or the balance half-faded.
+                areaSwitchRequest = nil
+                pendingGebietID = nil
+                balanceOpacity = 1
+            }
             if active {
                 refreshActivePassantCount()
                 refreshAutoBackup()
@@ -237,7 +259,7 @@ struct ArchiveScreen: View {
                     backupAgeRow
                         .padding(.horizontal, AppSpacing.regular)
 
-                    if let activeGebiet, debouncedQuery.isEmpty, filter == .all {
+                    if let activeGebiet, debouncedQuery.isEmpty, shownFilter == .all {
                         ArchiveSectionLabel(
                             title: activeGebiet.displayName,
                             systemImage: "checkmark.circle.fill",
@@ -245,14 +267,17 @@ struct ArchiveScreen: View {
                             trailing: "Aktiv"
                         )
                         .padding(.horizontal, AppSpacing.regular)
+                        .opacity(resultsOpacity * balanceOpacity)
 
                     BalanceSection(
                         gebiet: activeGebiet,
                         entry: index.entry(for: activeGebiet.id),
                         scope: $scope,
-                        passantCount: passantCounts[activeGebiet.id] ?? 0
+                        passantCount: passantCounts[activeGebiet.id] ?? 0,
+                        contentOpacity: balanceOpacity
                     )
                     .padding(.horizontal, AppSpacing.regular)
+                    .opacity(resultsOpacity)
                     }
 
                     let byID = gebietByID
@@ -264,6 +289,7 @@ struct ArchiveScreen: View {
                             }
                         }
                         .padding(.horizontal, AppSpacing.regular)
+                        .opacity(resultsOpacity)
                     }
 
                     if daySections.isEmpty {
@@ -272,6 +298,7 @@ struct ArchiveScreen: View {
                             .padding(AppSpacing.regular)
                             .contentCard(cornerRadius: AppRadius.card)
                             .padding(.horizontal, AppSpacing.regular)
+                            .opacity(resultsOpacity)
                     }
                 }
                 .padding(.top, AppSpacing.tight)
@@ -462,7 +489,7 @@ struct ArchiveScreen: View {
                             place: gebiet.districtOrCity,
                             dateRange: gebiet.formattedDateRange,
                             isTwoDay: gebiet.isTwoDay,
-                            isActive: gebiet.id == activeGebiet?.id,
+                            isActive: gebiet.id == highlightedGebietID,
                             houseCount: entry?.houseCount ?? 0,
                             completed: entry?.overall.completed ?? 0,
                             total: entry?.overall.unitCount ?? 0,
@@ -493,7 +520,7 @@ struct ArchiveScreen: View {
                         RoundedRectangle(cornerRadius: AppRadius.card, style: .continuous)
                             .fill(
                                 accent.opacity(
-                                    gebiet.id == activeGebiet?.id
+                                    gebiet.id == highlightedGebietID
                                         ? (LegacyChrome.isActive ? 0.05 : 0.08)
                                         : 0
                                 )
@@ -501,10 +528,9 @@ struct ArchiveScreen: View {
                             .allowsHitTesting(false)
                     }
                 }
-                // WAVE2: press highlight only, scale 1.0 — a scaled card tears away
-                // from the glass wash and the menu button above it. Selection haptic
-                // comes from the `.sensoryFeedback(trigger: selectedGebietID)` on the
-                // NavigationStack (once, not per row).
+                // Press highlight only, scale 1.0 — a scaled card tears away from
+                // the accent wash and the menu button above it. The selection
+                // haptic fires from `selectGebiet`, on the tap.
                 .buttonStyle(GebietCardStyle())
 
                 Menu {
@@ -721,7 +747,7 @@ struct ArchiveScreen: View {
     /// Memoized: the search used to run inside `body`, so it re-executed against an
     /// unchanged query on every keystroke, filter tap and notice.
     private func recomputeResults() {
-        results = searchResults(filter: filter)
+        results = searchResults(filter: shownFilter)
     }
 
     private func searchResults(filter: ArchiveFilter) -> [ArchiveSearchResult] {
@@ -733,59 +759,110 @@ struct ArchiveScreen: View {
         return found
     }
 
-    /// Balance visibility and the filtered cards change atomically and without a
-    /// layout animation. "Offen" hides the balance card outright, and animating the
-    /// *removal* of a glass card leaves a compositor snapshot behind for several
-    /// frames, so the balance flashed over the new list. That is still true, so the
-    /// swap itself stays frozen — but the list is returned to the top afterwards,
-    /// because a filter that drops half the cards otherwise leaves the user parked at
-    /// an offset that no longer refers to anything they were looking at.
+    /// A filter tap: the chip moves at once, the cards follow as fade-out → swap
+    /// → fade-in.
+    ///
+    /// Not a crossfade: "Offen" removes the balance card and half the list, and a
+    /// crossfade overlaps two layouts of different heights (and, on iOS 26, fades a
+    /// glass card over the new list — the flash this screen was reported for).
+    /// Sequenced, the swap and the return to the top happen while nothing is
+    /// visible, so there is no jump to see. It used to be a hard cut plus a
+    /// half-second scroll animation racing it.
     private func applyFilter(_ value: ArchiveFilter, proxy: ScrollViewProxy) {
         guard filter != value else { return }
         areaSwitchRequest = nil
-        let nextResults = searchResults(filter: value)
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            filter = value
-            results = nextResults
-        }
-        // Scroll is the only animated part here — the card swap itself is frozen
-        // to avoid a glass snapshot. Keep the scroll silky, not snappy.
-        withAnimation(.appSettle(reduceMotion: reduceMotion)) {
+        pendingGebietID = nil
+        filter = value
+        guard !reduceMotion else {
+            shownFilter = value
+            recomputeResults()
             returnToBalance(proxy)
+            return
+        }
+        withAnimation(.easeOut(duration: 0.12)) {
+            resultsOpacity = 0
+        } completion: {
+            // A newer tap owns the swap now.
+            guard filter == value else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                shownFilter = value
+                recomputeResults()
+                returnToBalance(proxy)
+            }
+            withAnimation(.appFeedback(reduceMotion: false)) {
+                resultsOpacity = 1
+            }
         }
     }
 
-    /// Scroll the existing layout first. Changing the territory inside that
-    /// animation also changes the balance height and makes the scroll target move.
-    /// Once at the top, replace unrelated statistics without numeric/layout morphs.
-    /// WAVE2: tapping the already-selected card recenters it with appSettle
-    /// (no data swap, so no freeze needed). Selection haptic stays on the
-    /// `.sensoryFeedback(trigger: selectedGebietID)` above — once, not per row.
+    /// A territory tap.
+    ///
+    /// 1. On the tap: haptic, and the card takes the active marker (rail, wash,
+    ///    "Aktiv") — the old version showed nothing for the length of the scroll
+    ///    and buzzed only when it ended.
+    /// 2. The list glides back to the balance, which is where the change happens.
+    /// 3. The balance's figures fade out, the territory swaps (its height change
+    ///    animates, so the cards below glide rather than jump), and the new
+    ///    figures fade in. Unrelated numbers never roll from one territory's
+    ///    values to another's.
+    ///
+    /// Tapping the card that is already active takes you to its balance.
     private func selectGebiet(_ id: UUID, proxy: ScrollViewProxy) {
-        guard selectedGebietID != id else {
+        UISelectionFeedbackGenerator().selectionChanged()
+        guard selectedGebietID != id || pendingGebietID != nil else {
             areaSwitchRequest = nil
             withAnimation(.appSettle(reduceMotion: reduceMotion)) {
-                proxy.scrollTo(id, anchor: .center)
+                returnToBalance(proxy)
             }
             return
         }
         let request = UUID()
         areaSwitchRequest = request
+        withAnimation(.appFeedback(reduceMotion: reduceMotion)) {
+            pendingGebietID = id == selectedGebietID ? nil : id
+        }
         withAnimation(.appSettle(reduceMotion: reduceMotion), completionCriteria: .removed) {
             returnToBalance(proxy)
         } completion: {
-            guard areaSwitchRequest == request,
-                  gebiete.contains(where: { $0.id == id }) else { return }
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
+            guard areaSwitchRequest == request else { return }
+            guard gebiete.contains(where: { $0.id == id }) else {
+                // Deleted while the list scrolled: drop the marker, change nothing.
+                withAnimation(.appFeedback(reduceMotion: reduceMotion)) { pendingGebietID = nil }
+                areaSwitchRequest = nil
+                return
+            }
+            guard selectedGebietID != id else {
+                pendingGebietID = nil
+                areaSwitchRequest = nil
+                return
+            }
+            let commit: () -> Void = {
                 if scope == .day2, gebiete.first(where: { $0.id == id })?.isTwoDay != true {
                     scope = .combined
                 }
                 selectedGebietID = id
+                pendingGebietID = nil
                 areaSwitchRequest = nil
+            }
+            guard !reduceMotion else {
+                commit()
+                return
+            }
+            withAnimation(.easeOut(duration: 0.12)) {
+                balanceOpacity = 0
+            } completion: {
+                guard areaSwitchRequest == request else {
+                    withAnimation(.appFeedback(reduceMotion: false)) { balanceOpacity = 1 }
+                    return
+                }
+                withAnimation(.appSettle(reduceMotion: false)) {
+                    commit()
+                }
+                withAnimation(.appFeedback(reduceMotion: false).delay(0.06)) {
+                    balanceOpacity = 1
+                }
             }
         }
     }
