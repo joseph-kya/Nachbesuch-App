@@ -12,4 +12,3 @@ Sichern, Teilen und Löschen
 Du kannst JSON-Sicherungen und PDF-/Textexporte selbst erstellen und an von dir gewählte Speicherorte oder Apps weitergeben. Diese Dateien können personenbezogene Inhalte enthalten. Gelöschte Einträge werden nicht aus bestehenden Exporten oder Sicherungskopien entfernt. Entferne solche Dateien separat. Die automatische Android-Systemsicherung der App-Daten ist deaktiviert; sichere deine Daten vor einem Gerätewechsel über das Archiv.
 
 Kontakt
-Anbieter, Support und die veröffentlichte Datenschutzerklärung sind nach der Veröffentlichung in den Einstellungen und im Play-Store-Eintrag erreichbar. Teile bei Support-Anfragen keine personenbezogenen Besuchsnotizen.

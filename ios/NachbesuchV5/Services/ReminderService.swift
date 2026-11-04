@@ -70,8 +70,7 @@ nonisolated enum ReminderService {
     #if DEBUG
     /// Einmalig pro Prozess gelesen: `ProcessInfo.environment` baut bei jedem
     /// Zugriff ein neues Dictionary — pro Berechtigungsprüfung wäre das Dauer-
-    /// Overhead im heißen Pfad (gleiche Konvention wie Map-/DesignSystem-Agenten).
-    /// Der Harness setzt die Variable beim Start, also ist Cachen korrekt.
+    /// Overhead im heißen Pfad. Der Test-Harness setzt die Variable beim Start, also ist Cachen korrekt.
     private static let debugNotificationsDisabled: Bool =
         ProcessInfo.processInfo.environment["NACHBESUCH_NO_NOTIFICATIONS"] != nil
     #endif

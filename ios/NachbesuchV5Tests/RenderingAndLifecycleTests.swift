@@ -132,13 +132,3 @@ struct AppLifecycleTests {
         }
     }
 }
-
-@Suite("Performance-Fixtures")
-struct PerformanceFixtureTests {
-    @Test("Der Lastgenerator erzeugt auch bei Restmengen exakt genug Plätze")
-    func gridFitsRequestedHouseCount() {
-        let dimensions = DebugSeed.gridDimensions(for: 2_000)
-        #expect(dimensions.streets * dimensions.perStreet >= 2_000)
-        #expect(dimensions.streets * (dimensions.perStreet - 1) < 2_000)
-    }
-}

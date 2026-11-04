@@ -17,7 +17,7 @@ struct AddHouseSheet: View {
     /// a house created on day 2 recorded its first result against day 1.
     let writeDay: Int
     let onCreated: (House) -> Void
-    /// Opens the already-recorded house instead of creating a second pin (B8).
+    /// Opens the already-recorded house instead of creating a second pin.
     let onOpenExisting: (House) -> Void
 
     @State private var address = ""

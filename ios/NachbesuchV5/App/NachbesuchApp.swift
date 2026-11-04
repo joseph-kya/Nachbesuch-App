@@ -72,7 +72,7 @@ struct NachbesuchApp: App {
     }
 }
 
-/// WAVE2: overdone launch screen — logo settles, then the store arrives.
+/// overdone launch screen — logo settles, then the store arrives.
 /// Async AppStore load kept; this view never blocks, it only covers the wait.
 private struct LaunchView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -119,7 +119,7 @@ private struct LaunchView: View {
 }
 
 /// Shown only when the database cannot be opened.
-/// WAVE4: zeigt Dateipfad + Kopie + „Neu anfangen" (destruktiv, mit Bestätigung).
+/// zeigt Dateipfad + Kopie + „Neu anfangen" (destruktiv, mit Bestätigung).
 /// Schema V2 steht im Text, damit eine Support-Anfrage ohne Nachfragen
 /// einordbar ist. Die Diagnose hängt an der Kopie (nur Zähler-freier Text:
 /// Pfad + Fehler + Schema, keine Adressen — die stehen nie im Store-Fehler).

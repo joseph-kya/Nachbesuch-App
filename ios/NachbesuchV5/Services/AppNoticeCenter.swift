@@ -3,13 +3,6 @@ import Observation
 import SwiftData
 import SwiftUI
 
-/// WAVE4: Fehler-Details öffnen die Diagnose — aber nur im DEBUG (das Blatt ist
-/// DEBUG-only, im Release gibt es keine Route dorthin). Darum kein
-/// Navigation-Ziel hier, sondern eine Mitteilung, die das Archiv auffängt.
-extension Notification.Name {
-    static let openDiagnostics = Notification.Name("nachbesuch.openDiagnostics")
-}
-
 /// Transient user-facing messages.
 ///
 /// `@Observable` rather than `ObservableObject`: as an `@EnvironmentObject` this
@@ -82,7 +75,7 @@ extension ModelContext {
 struct AppNoticeBanner: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AppNoticeCenter.self) private var notices
-    /// WAVE2: dismiss haptic (once per tap) + swipe offset + 5s timer progress.
+    /// dismiss haptic (once per tap) + swipe offset + 5s timer progress.
     @State private var dismissTaps = 0
     @State private var timerProgress: CGFloat = 1
     @State private var dragOffset: CGFloat = 0
@@ -98,24 +91,6 @@ struct AppNoticeBanner: View {
                         .font(.subheadline)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    #if DEBUG
-                    // WAVE4: Fehler tragen eine Details-Aktion (Diagnoseblatt).
-                    // Release kennt das Blatt nicht — dort bleibt nur Schließen.
-                    if notice.isError {
-                        Button {
-                            dismissTaps += 1
-                            notices.dismiss()
-                            NotificationCenter.default.post(name: .openDiagnostics, object: nil)
-                        } label: {
-                            Text("Details")
-                                .font(.caption.weight(.semibold))
-                                .frame(minHeight: AppTouch.minimum)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tint)
-                        .accessibilityLabel("Fehlerdetails in der Diagnose öffnen")
-                    }
-                    #endif
                     Button {
                         dismissTaps += 1
                         notices.dismiss()
@@ -130,7 +105,7 @@ struct AppNoticeBanner: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Hinweis schließen")
                 }
-                // WAVE2: linear 5s timer mirrors the center's auto-dismiss.
+                // linear 5s timer mirrors the center's auto-dismiss.
                 // Errors stay until dismissed, so no bar there. RM: opacity only.
                 if !notice.isError {
                     Capsule(style: .continuous)

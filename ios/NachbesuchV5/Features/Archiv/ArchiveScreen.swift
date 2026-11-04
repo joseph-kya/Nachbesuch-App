@@ -42,14 +42,11 @@ struct ArchiveScreen: View {
     @State private var confirmation: ArchiveConfirmation?
     @State private var backupURL: URL?
     /// Untertitel für den Backup-Teilen-Bogen („Enthält N Häuser") — reiner
-    /// Index-Stand, kein Fetch (WAVE4).
+    /// Index-Stand, kein Fetch.
     @State private var shareSubtitle: String?
     @State private var showsImporter = false
     @State private var isWorking = false
     @State private var areaSwitchRequest: UUID?
-    #if DEBUG
-    @State private var showsDiagnostics = false
-    #endif
     /// The newest automatic safety backup, if one exists yet. Read on appear
     /// and after every save — the launch backup may finish while this screen
     /// is already open.
@@ -160,13 +157,7 @@ struct ArchiveScreen: View {
                 .toolbar { toolbarMenu }
                 .overlay { if isWorking { ProgressView().controlSize(.large) } }
                 .sheet(item: $route, content: sheet(for:))
-                #if DEBUG
-                .sheet(isPresented: $showsDiagnostics) { DiagnosticsSheet() }
-                .onReceive(NotificationCenter.default.publisher(for: .openDiagnostics)) { _ in
-                    showsDiagnostics = true
-                }
-                #endif
-                // WAVE4: Löschen als Bestätigungsdialog mit Sicherungs-Option
+                // Löschen als Bestätigungsdialog mit Sicherungs-Option
                 // (doppelt: Menü-Tipp + Dialog), Wiederherstellen bleibt Alert.
                 .confirmationDialog(
                     Text(deleteTitle),
@@ -255,7 +246,7 @@ struct ArchiveScreen: View {
                         }
                     )
 
-                    // WAVE4: Sicherungsalter als reine Lese-Zeile — `autoBackup`
+                    // Sicherungsalter als reine Lese-Zeile — `autoBackup`
                     // kommt aus dem Dateisystem-Stand (kein Fetch, kein Zähler).
                     backupAgeRow
                         .padding(.horizontal, AppSpacing.regular)
@@ -310,35 +301,6 @@ struct ArchiveScreen: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .compatSoftScrollEdges()
-            #if DEBUG
-            .task(id: isActive) {
-                guard isActive,
-                      let raw = ProcessInfo.processInfo.environment["NACHBESUCH_AREA_STRESS"],
-                      let count = Int(raw), count > 0 else { return }
-                // Exercise the same handler as a territory-row tap, from below
-                // the variable-height balance, including empty/populated areas.
-                for _ in 0..<100 {
-                    if builtIndexKey != nil, gebiete.count > 1 { break }
-                    try? await Task.sleep(for: .milliseconds(100))
-                    guard !Task.isCancelled else { return }
-                }
-                guard gebiete.count > 1 else { return }
-                for _ in 0..<count {
-                    guard let target = gebiete.first(where: { $0.id != selectedGebietID })?.id else { return }
-                    proxy.scrollTo(target, anchor: .center)
-                    try? await Task.sleep(for: .milliseconds(150))
-                    guard !Task.isCancelled else { return }
-                    selectGebiet(target, proxy: proxy)
-                    try? await Task.sleep(for: .milliseconds(700))
-                    guard !Task.isCancelled else { return }
-                    guard selectedGebietID == target else {
-                        FileHandle.standardOutput.write(Data("[AreaStress] FAILED selection\n".utf8))
-                        return
-                    }
-                }
-                FileHandle.standardOutput.write(Data("[AreaStress] completed \(count) switches\n".utf8))
-            }
-            #endif
         }
     }
 
@@ -390,9 +352,6 @@ struct ArchiveScreen: View {
                     Button { showsImporter = true } label: {
                         Label("Backup importieren", systemImage: "arrow.up.doc")
                     }
-                    Button { Task { await exportDiagnostics() } } label: {
-                        Label("Diagnose exportieren", systemImage: "stethoscope")
-                    }
                     if let autoBackup {
                         ShareLink(item: autoBackup.url) {
                             Label(
@@ -404,13 +363,6 @@ struct ArchiveScreen: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    #if DEBUG
-                    // Hidden diagnostics (B4): no visible entry point on purpose.
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 0.8)
-                            .onEnded { _ in showsDiagnostics = true }
-                    )
-                    #endif
             }
             .accessibilityLabel("Archivoptionen")
         }
@@ -512,7 +464,7 @@ struct ArchiveScreen: View {
                     // lets the old and the new card trade the highlight in one motion.
                     // On iOS 26 the wash sits under glass and reads as a tint. On an
                     // opaque iOS 18 card it is a flat pink rectangle the size of the
-                    // record — the "large translucent red field" the audit rejects,
+                    // record — a large translucent red field,
                     // and on this screen red already means "offen". iOS 18 leans on
                     // the accent rail and the "Aktiv" label the row already draws,
                     // with the wash at a quarter strength so the card is still
@@ -587,7 +539,7 @@ struct ArchiveScreen: View {
         if !debouncedQuery.isEmpty {
             ContentUnavailableView.search(text: debouncedQuery)
         } else {
-            // WAVE2: icon bounce on appear (RM-gated), prominent glass CTA +
+            // icon bounce on appear (RM-gated), prominent glass CTA +
             // secondary Tutorial link. ContentUnavailableView keeps dark/light
             // legibility via semantic styles.
             ContentUnavailableView {
@@ -679,7 +631,7 @@ struct ArchiveScreen: View {
         autoBackup = AutoBackupService.latest()
     }
 
-    /// WAVE4: „Letzte Sicherung: vor X" — liest nur den gemerkten Stand aus
+    /// „Letzte Sicherung: vor X" — liest nur den gemerkten Stand aus
     /// `autoBackup` (Dateisystem, kein Store-Fetch). Orange Warnung erst nach
     /// mehr als 7 Tagen ohne Sicherung.
     private var backupAgeRow: some View {
@@ -918,7 +870,7 @@ struct ArchiveScreen: View {
         }
     }
 
-    // MARK: Bestätigungen (WAVE4)
+    // MARK: Bestätigungen
 
     /// Das Löschziel aus der Bestätigung — steuert Titel und Inhalt des Dialogs.
     private var deleteTarget: (id: UUID, name: String)? {
@@ -1037,42 +989,6 @@ struct ArchiveScreen: View {
         return "Enthält \(houses) \(hausWort) in \(gebiete.count) \(gebietWort)"
     }
 
-    /// Health report without donor data (B11): counts only, never addresses,
-    /// notes, coordinates or territory names.
-    private func exportDiagnostics() async {
-        isWorking = true
-        defer { isWorking = false }
-        var doors = 0
-        var recorded = 0
-        for gebiet in gebiete {
-            if let tally = index.entry(for: gebiet.id)?.overall {
-                doors += tally.unitCount
-                recorded += tally.completed
-            }
-        }
-        let storeURL = modelContext.container.configurations.first?.url
-        let storeSizeKB = storeURL
-            .flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? Int }
-            .map { $0 / 1024 }
-        let text = DiagnosticsExport.makeText(
-            counts: .init(
-                territories: gebiete.count,
-                houses: (try? modelContext.fetchCount(FetchDescriptor<House>())) ?? 0,
-                doors: doors,
-                recordedDoors: recorded
-            ),
-            autoBackup: autoBackup.map { AutoBackupService.describe(date: $0.date) },
-            storeSizeKB: storeSizeKB,
-            system: "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)",
-            model: UIDevice.current.model
-        )
-        do {
-            route = .share(try DiagnosticsExport.writeFile(text))
-        } catch {
-            notices.report(error, context: "Diagnose konnte nicht erstellt werden")
-        }
-    }
-
     private func handleImportSelection(_ result: Result<[URL], any Error>) {
         switch result {
         case .success(let urls):
@@ -1150,7 +1066,7 @@ private struct ArchiveSearchField: View {
         .padding(.horizontal, AppSpacing.regular)
         .frame(minHeight: AppTouch.minimum)
         .navigationGlass(cornerRadius: AppRadius.control)
-        // WAVE2: focused ring, accent 1.5pt via the shared helper. Filter chips
+        // focused ring, accent 1.5pt via the shared helper. Filter chips
         // keep their matched-glass morph inside FilterBar (glassEffectID).
         .selectionRing(isFocused, tint: accent, cornerRadius: AppRadius.control)
         .accessibilityElement(children: .contain)
@@ -1302,7 +1218,7 @@ struct GebietRow: View, Equatable {
 
 // MARK: - Share sheet
 
-/// WAVE2: card press is highlight-only at scale 1.0. The card already carries
+/// card press is highlight-only at scale 1.0. The card already carries
 /// `contentCard` + accent wash; scaling it tore the wash away from the glass
 /// edge and from the sibling menu button. `.primary.opacity(0.08)` matches the
 /// grouped-row highlight elsewhere.
@@ -1326,7 +1242,7 @@ struct ShareSheet: View {
     @ScaledMetric(relativeTo: .largeTitle) private var checkSize: CGFloat = 46
     @State private var appeared = false
     let url: URL
-    /// WAVE4: „Enthält N Häuser" — Dateigröße/Seiten wären je Exportlauf neu zu
+    /// „Enthält N Häuser" — Dateigröße/Seiten wären je Exportlauf neu zu
     /// messen, der Zähler dagegen steht bereits (kein Fetch).
     var subtitle: String?
 
@@ -1369,7 +1285,7 @@ struct ShareSheet: View {
             .frame(maxWidth: .infinity)
             }
             .compatSheetGlass()
-            // WAVE2: success haptic once, on presentation (a `trigger: url`
+            // success haptic once, on presentation (a `trigger: url`
             // sensory never fires — there is no change, only an appear).
             .onAppear {
                 appeared = true

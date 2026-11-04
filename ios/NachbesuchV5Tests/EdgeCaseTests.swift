@@ -5,7 +5,7 @@ import Testing
 import UIKit
 @testable import NachbesuchV5
 
-/// Wave-4-Reserven: Belege für Verhalten, das bisher nur per Konvention galt —
+/// Belege für Verhalten, das bisher nur per Konvention galt —
 /// Batch-Abbildung der Erinnerungen, Export-Deckel, ID-Läufe, Boundary-
 /// Kurzschluss, Token-Deckel und PinArt-Rückschnitt. Schnell, keine UI-Tests.
 
@@ -67,7 +67,7 @@ struct ReminderBatchMappingTests {
 }
 
 @Suite("Export-IDs")
-struct Wave4ExportIDsTests {
+struct ExportIDsTests {
 
     private func container() throws -> ModelContainer {
         let schema = Schema(versionedSchema: SchemaV2.self)

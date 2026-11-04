@@ -40,12 +40,8 @@ captures/
 .DS_Store
 ._*
 
-# ── Agent / tooling scratch ─────────────────────────────
+# ── Misc ────────────────────────────────────────────────
 *.log
-/scratch/
-# Screenshots are verification artefacts, not source. Real app icons are
-# explicitly force-added with a comment in the staging command.
-*.png
 
 # ── FIELD DATA — never commit ───────────────────────────
 # Backup files contain donor addresses, outcomes and free-text notes.

@@ -257,9 +257,8 @@ nonisolated enum HouseListBuilder {
 
     static func filter(_ rows: [HouseRowModel], filter: ListFilter, query: String) -> [HouseRowModel] {
         // Token-Deckel: mehr als 10 Token prüft niemand per Hand — begrenzt die
-        // contains-Durchläufe pro Zeile auf eine Konstante. Absprache mit dem
-        // List-Agenten: Query-seitig gilt derselbe Deckel; dieses `prefix(10)` ist
-        // die Builder-seitige Abwehr-Tiefe, keine zweite Token-Logik.
+        // contains-Durchläufe pro Zeile auf eine Konstante. Query-seitig gilt
+        // derselbe Deckel; dieses `prefix(10)` ist nur die Builder-seitige Absicherung.
         let tokens = Array(SearchText.tokenize(query).prefix(10))
         guard !tokens.isEmpty || filter != .all else { return rows }
         return rows.filter { row in

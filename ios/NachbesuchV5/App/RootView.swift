@@ -70,15 +70,6 @@ struct RootView: View {
         default: return .map
         }
     }()
-    private static let debugTabStressCount: Int? = {
-        guard let raw = ProcessInfo.processInfo.environment["NACHBESUCH_TAB_STRESS"],
-              let switches = Int(raw), switches > 0 else { return nil }
-        return switches
-    }()
-    private static let debugTabStressInterval: Int = {
-        ProcessInfo.processInfo.environment["NACHBESUCH_TAB_STRESS_MS"]
-            .flatMap(Int.init) ?? 350
-    }()
     #endif
 
     @State private var tab: AppTab = {
@@ -145,12 +136,6 @@ struct RootView: View {
         .task {
             await migrateLegacyDaysIfNeeded()
             createFirstGebietIfNeeded()
-            #if DEBUG
-            if let count = DebugSeed.requestedCount,
-               let seeded = DebugSeed.populate(modelContext, count: count) {
-                selectedGebietID = seeded
-            }
-            #endif
             ensureSelection()
             initializationComplete = true
         }
@@ -173,35 +158,6 @@ struct RootView: View {
             // Repair notifications only after initialization and backup finish.
             await reconcileReminders()
         }
-        #if DEBUG
-        // The regression harness for the iOS 18 freeze.
-        //
-        // Switching tabs by hand is exactly the gesture that used to lock the app up,
-        // and it is the one thing a screenshot run cannot do. This drives the tab bar
-        // instead, so the failure has a number attached to it: before the fix, one
-        // single switch away from a built map tab pinned the CPU at ~90 % and grew
-        // RSS by ~2.7 MB/s **for as long as the app was left running**. After it, 120
-        // switches settle back to 0 % with flat memory.
-        //
-        //     SIMCTL_CHILD_NACHBESUCH_TAB_STRESS=120 \
-        //     SIMCTL_CHILD_NACHBESUCH_TAB_STRESS_MS=350 \
-        //     xcrun simctl launch booted at.volkshilfe.nachbesuch.v5
-        //
-        // Then watch `ps -o %cpu=,rss= -p <pid>`: it has to fall to zero once the run
-        // ends. A freeze shows up as CPU that never comes down.
-        .task {
-            guard let switches = Self.debugTabStressCount
-            else { return }
-            let interval = Self.debugTabStressInterval
-            let sequence: [AppTab] = [.list, .archive, .map]
-            for index in 0..<switches {
-                try? await Task.sleep(for: .milliseconds(interval))
-                guard !Task.isCancelled else { return }
-                tab = sequence[index % sequence.count]
-            }
-            FileHandle.standardOutput.write(Data("[TabStress] completed \(switches) switches\n".utf8))
-        }
-        #endif
         .onChange(of: gebiete.count) { _, _ in
             ensureSelection()
         }

@@ -33,20 +33,4 @@ class InformationConsistencyTest {
             assertEquals(row.openCount > 0, pin.hasOpenWork)
         }
     }
-
-    @Test fun `large territory projection benchmark`() {
-        val houses = (1..10_000).map { index ->
-            House(address = "Testgasse $index", latitude = 48.2, longitude = 16.3,
-                gebietID = "test", units = listOf(DoorResult(label = "1", outcome = VisitOutcome.NOT_HOME)))
-        }
-        repeat(2) { HouseListBuilder.rows(houses, DayScope.DAY_1) }
-        val samples = (1..5).map {
-            val start = System.nanoTime()
-            val rows = HouseListBuilder.rows(houses, DayScope.DAY_1)
-            val sections = HouseListBuilder.sections(HouseListBuilder.sort(rows))
-            assertEquals(10_000, sections.sumOf { it.houseCount })
-            (System.nanoTime() - start) / 1_000_000.0
-        }.sorted()
-        println("10,000-house projection median ms: ${samples[2]}; samples: $samples")
-    }
 }

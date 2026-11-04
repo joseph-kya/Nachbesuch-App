@@ -3,7 +3,7 @@ import Testing
 @testable import NachbesuchV5
 
 /// The manual add sheet must offer to *open* the existing house rather than
-/// silently doubling it (B8). The match rule: same normalised address, or the
+/// silently doubling it. The match rule: same normalised address, or the
 /// same normalised address within 12 m — a different address nearby is a
 /// legitimate second entrance, never a warning.
 @Suite("Duplikatprüfung beim Anlegen")

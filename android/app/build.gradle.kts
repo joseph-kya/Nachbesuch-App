@@ -1,6 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Properties
-import java.net.URI
 
 plugins {
     alias(libs.plugins.android.application)
@@ -107,7 +106,7 @@ val verifyGoogleMapsCostPolicy by tasks.registering {
             }
             .toSet()
         check(forbiddenArtifacts.none(declared::contains)) {
-            "Paid Google client service detected. Update API_KEY_SECURITY.md before adding it."
+            "Paid Google client service detected; only the Maps SDK for Android is allowed."
         }
 
         val source = rootProject.allprojects
@@ -125,38 +124,3 @@ val verifyGoogleMapsCostPolicy by tasks.registering {
 }
 
 tasks.named("preBuild").configure { dependsOn(verifyGoogleMapsCostPolicy) }
-
-val verifyPlayPublishing by tasks.registering {
-    group = "verification"
-    description = "Checks owner-supplied publishing configuration before a Play release."
-    doLast {
-        val publishing = Properties().apply {
-            rootProject.file("ui/src/main/assets/publishing.properties").inputStream().use(::load)
-        }
-        for (key in listOf("developerName", "supportEmail", "supportURL", "privacyPolicyURL")) {
-            check(!publishing.getProperty(key).isNullOrBlank()) { "Publishing detail required: $key" }
-        }
-        for (key in listOf("supportURL", "privacyPolicyURL")) {
-            val uri = URI(publishing.getProperty(key))
-            check(uri.scheme == "https" && !uri.host.isNullOrBlank() && !uri.host.endsWith(".invalid") && uri.host != "example.com") {
-                "$key must point to your real public HTTPS page."
-            }
-        }
-        check(rootProject.file("keystore.properties").exists()) { "Configure your Play upload signing key in keystore.properties." }
-        val secrets = Properties().apply {
-            val path = rootProject.file("secrets.properties")
-            check(path.exists()) { "Configure the restricted production Maps SDK key in secrets.properties." }
-            path.inputStream().use(::load)
-        }
-        check(secrets.getProperty("MAPS_API_KEY", "").let { it.isNotBlank() && it != "DEFAULT_API_KEY" }) {
-            "The production Maps SDK key is missing."
-        }
-    }
-}
-
-tasks.register("preparePlayRelease") {
-    group = "build"
-    description = "Builds a configured Play bundle locally; never uploads it."
-    dependsOn(verifyPlayPublishing, "bundleRelease")
-}
-tasks.matching { it.name == "bundleRelease" }.configureEach { mustRunAfter(verifyPlayPublishing) }

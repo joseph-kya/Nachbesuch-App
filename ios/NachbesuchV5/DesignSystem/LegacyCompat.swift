@@ -82,7 +82,7 @@ struct CompatGlassContainer<Content: View>: View {
 
 /// Which backdrop a floating surface has to stay legible against.
 ///
-/// The audit's §3.4 finding: one surface recipe was being used over a pale grouped
+/// One surface recipe was being used over a pale grouped
 /// background, over an elevated sheet and over dark satellite imagery. A regular
 /// material that reads correctly over the first disappears over the third. iOS 18
 /// therefore picks its fill from the backdrop, not from a house style.
@@ -94,8 +94,8 @@ enum CompatSurfaceRole {
     case map
     /// Sitting *on* a content card that already provides the surface. A control here
     /// needs no fill of its own — giving it one is how the archive's overflow ended
-    /// up as a pale pink disc floating on a white card, which the audit calls out by
-    /// name. It still needs its 44 pt region and its own press state.
+    /// up as a pale pink disc floating on a white card. It still needs its 44 pt
+    /// region and its own press state.
     case card
 }
 
@@ -536,7 +536,7 @@ extension View {
 
 /// Makes the iOS 18 tab bar a surface again.
 ///
-/// The audit's highest-priority defect: over the map the bar "visually dissolves
+/// Over the map the bar "visually dissolves
 /// into the content", leaving three loose icons floating above the tiles, and dark
 /// mode makes it worse because bar and map share values. The cause is the default
 /// scroll-edge appearance, which is transparent — correct behind a scroll view whose

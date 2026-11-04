@@ -74,7 +74,7 @@ final class LocationService: NSObject {
     }
     /// "Ungefährer Standort": the fix is kilometres off and every distance, the
     /// puck and the sort order would be nonsense. Distances hide and the puck
-    /// goes uncertain while this holds (B6).
+    /// goes uncertain while this holds.
     private(set) var isReducedAccuracy = false
     /// One-time explainer state for the reduced-accuracy grant. The UI shows it
     /// once and routes to Settings; the flag survives so it never nags twice.
@@ -107,14 +107,6 @@ final class LocationService: NSObject {
     /// Completions waiting for the next usable fix (supermarket search, recenter).
     private var freshFixWaiters: [(CLLocation?) -> Void] = []
     private var freshFixTimeout: Task<Void, Never>?
-
-    #if DEBUG
-    /// Fix counter and accuracy aggregates for the hidden diagnostics view
-    /// (B4). Present in debug builds only; nothing leaves the device.
-    private(set) var debugFixCount = 0
-    private(set) var debugAccuracySum = 0.0
-    private(set) var debugUncertainFixes = 0
-    #endif
 
     override init() {
         authorization = manager.authorizationStatus
@@ -297,7 +289,7 @@ final class LocationService: NSObject {
         for waiter in waiters { waiter(location) }
     }
 
-    // MARK: - Reduced accuracy (B6)
+    // MARK: - Reduced accuracy
 
     nonisolated static func shouldExplainReducedAccuracy(
         authorization: CLAuthorizationStatus,
@@ -338,18 +330,6 @@ final class LocationService: NSObject {
         guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
         UIApplication.shared.open(url)
     }
-
-    #if DEBUG
-    /// One block for the hidden diagnostics view (B4): fix count, mean
-    /// accuracy, share of fixes above the puck's uncertainty threshold.
-    var debugDiagnostics: String {
-        let mean = debugFixCount > 0 ? debugAccuracySum / Double(debugFixCount) : 0
-        let share = debugFixCount > 0
-            ? Double(debugUncertainFixes) / Double(debugFixCount) * 100 : 0
-        return String(format: "Fixes: %d · mittlere Genauigkeit: %.0f m · ungenau: %.0f %%",
-                      debugFixCount, mean, share)
-    }
-    #endif
 }
 
 // MARK: - CLLocationManagerDelegate
@@ -389,7 +369,7 @@ extension LocationService: CLLocationManagerDelegate {
     ) {
         guard let newest = locations.last else { return }
         #if DEBUG
-        // One Instruments event per fix (B4): intervals cannot span the hop onto
+        // One Instruments event per fix: intervals cannot span the hop onto
         // the main actor, events mark the stream without that.
         if PerformanceTrace.signposter.isEnabled {
             PerformanceTrace.signposter.emitEvent("location-fix")
@@ -400,11 +380,6 @@ extension LocationService: CLLocationManagerDelegate {
             // otherwise teleport the dot across the city.
             guard newest.horizontalAccuracy >= 0, newest.horizontalAccuracy < 500 else { return }
             self.location = newest
-            #if DEBUG
-            self.debugFixCount += 1
-            self.debugAccuracySum += newest.horizontalAccuracy
-            if newest.horizontalAccuracy > 25 { self.debugUncertainFixes += 1 }
-            #endif
             if newest.horizontalAccuracy <= 65 {
                 self.resolveFreshFixWaiters(with: newest)
             }

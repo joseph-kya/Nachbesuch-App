@@ -7,7 +7,7 @@ import SwiftUI
 /// `contentCard` and the app backdrop, so iOS 26 renders them in glass and
 /// iOS 18 on the opaque branch — the same split every other screen uses.
 /// Reached deliberately from Archiv → ⋯ → Anleitung, never unasked.
-/// WAVE4: bewusst kein „Nicht mehr zeigen"-Schalter und kein Auto-Zeigen nach
+/// bewusst kein „Nicht mehr zeigen"-Schalter und kein Auto-Zeigen nach
 /// Schemawechsel — die Anleitung erscheint nur auf Wunsch aus dem Archiv, ein
 /// Schalter hätte nichts zu schalten und ein Auto-Aufpoppen bräche genau das.
 struct TutorialView: View {
@@ -16,7 +16,7 @@ struct TutorialView: View {
     @Environment(\.appAccent) private var accent
 
     @State private var page = TutorialView.initialPage
-    /// WAVE2: single selection haptic per Weiter-tap, including the final
+    /// single selection haptic per Weiter-tap, including the final
     /// "Los geht's" which changes no page and would miss a page-trigger.
     @State private var advanceTaps = 0
 
@@ -47,7 +47,7 @@ struct TutorialView: View {
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .animation(.appSettle(reduceMotion: reduceMotion), value: page)
 
-                // WAVE2: active pill morph — Capsule 16 vs 6, appFeedback.
+                // active pill morph — Capsule 16 vs 6, appFeedback.
                 // System dots hidden above; these carry German VO labels.
                 HStack(spacing: 6) {
                     ForEach(TutorialPage.all) { entry in

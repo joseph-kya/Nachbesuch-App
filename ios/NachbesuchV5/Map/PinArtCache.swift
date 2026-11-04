@@ -144,7 +144,7 @@ final class PinArtCache {
 
     /// Rückschnitt bei Speicherdruck (Memory Warning).
     ///
-    /// Wave-4-Absprache mit dem Map-Agenten: EIN Trimmpfad, keine Duplikate —
+    /// EIN Trimmpfad, keine Duplikate —
     /// die Logik trägt `trim(keeping:)` (dort hängt auch der echte Aufrufer in
     /// `MapScreen`), diese Methode ist nur der spezifizierte Alias und reicht
     /// geklemmt durch. `purge()` bleibt der harte Schnitt beim Hintergrundgang.

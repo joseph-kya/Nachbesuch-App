@@ -42,7 +42,7 @@ struct FilterBar: View {
         // It was the last item *inside* the scroll view, which made it two things it
         // is not: a filter, and optional — with five chips it scrolled off the right
         // edge and stopped existing for anyone who did not think to swipe a row of
-        // filters. That is the audit's §6.16, and pinning it fixes it.
+        // filters. Pinning it fixes that.
         //
         // iOS 26 keeps it inside. There the chips and the help button share one
         // `GlassEffectContainer` so the shapes merge and render in one pass, and the

@@ -18,10 +18,9 @@ Erinnerungen
 Mit deiner Zustimmung stellt iOS lokale Mitteilungen zu geplanten Besuchen und täglichen Erinnerungen zu. Diese können Adressen oder eingegebene Texte anzeigen, auch auf dem Sperrbildschirm. Du kannst Mitteilungen und Vorschauen in den iOS-Einstellungen einschränken.
 
 Sicherung und Weitergabe
-Die App legt automatische Sicherungsdateien im Dokumentenbereich der App an und behält bis zu sieben automatische Sicherungen. Manuelle JSON-Sicherungen und PDF- oder Textexporte können personenbezogene Inhalte enthalten. Eine Weitergabe über das Teilen-Menü erfolgt auf deine Initiative an die von dir gewählte App oder Person. Diagnoseexporte enthalten keine Adress- oder Gesprächsnotiztexte.
+Die App legt automatische Sicherungsdateien im Dokumentenbereich der App an und behält bis zu sieben automatische Sicherungen. Manuelle JSON-Sicherungen und PDF- oder Textexporte können personenbezogene Inhalte enthalten. Eine Weitergabe über das Teilen-Menü erfolgt auf deine Initiative an die von dir gewählte App oder Person.
 
 Löschen
 Du kannst Einträge und Gebiete in der App löschen. Bereits erstellte Sicherungen und Exporte werden dadurch nicht nachträglich geändert. Entferne nicht mehr benötigte Dateien zusätzlich in der Dateien-App sowie bei Empfängern und aus eigenen Sicherungen. Das Entfernen der App löscht ihre lokalen App-Daten; bereits exportierte Dateien oder Gerätesicherungen können bestehen bleiben.
 
 Kontakt
-Die veröffentlichten Anbieter- und Kontaktangaben sowie die vollständige Datenschutzerklärung findest du unter „Datenschutz & Support“ und im App-Store-Eintrag.

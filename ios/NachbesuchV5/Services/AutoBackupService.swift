@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 import os
 
-/// The automatic daily safety backup (next-steps B1).
+/// The automatic daily safety backup.
 ///
 /// The entire risk story of this project is "one device, one copy", and the
 /// manual menu item relies on a human remembering to tap it. This runs at most
@@ -65,15 +65,6 @@ actor AutoBackupService {
         guard let newest = files.first else { return nil }
         let values = try? newest.resourceValues(forKeys: [.creationDateKey])
         return (values?.creationDate ?? .distantPast, newest)
-    }
-
-    nonisolated static func describe(date: Date, now: Date = .now) -> String {
-        let calendar = Calendar.current
-        let time = date.formatted(.dateTime.hour().minute().locale(Locale(identifier: "de_AT")))
-        if calendar.isDateInToday(date) { return "heute, \(time)" }
-        if calendar.isDateInYesterday(date) { return "gestern, \(time)" }
-        let day = date.formatted(.dateTime.day().month().year().locale(Locale(identifier: "de_AT")))
-        return "\(day), \(time)"
     }
 
     // MARK: - Private

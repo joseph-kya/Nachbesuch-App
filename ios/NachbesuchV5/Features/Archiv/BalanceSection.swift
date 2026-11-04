@@ -13,7 +13,7 @@ struct BalanceSection: View {
     /// Fades the figures (never the card) while the territory is swapped — see
     /// `ArchiveScreen.selectGebiet`.
     var contentOpacity: Double = 1
-    /// WAVE2: success fires only on false→true. A plain `trigger: isComplete`
+    /// success fires only on false→true. A plain `trigger: isComplete`
     /// would also buzz on true→false (StreetHeader documents the same trap).
     @State private var celebrateToken = 0
 
@@ -26,7 +26,7 @@ struct BalanceSection: View {
         }
     }
 
-    /// WAVE2: true only at 100 %. Drives celebration (once per transition),
+    /// true only at 100 %. Drives celebration (once per transition),
     /// never routine count motion which stays appFeedback.
     private var isComplete: Bool {
         tally.unitCount > 0 && tally.completionFraction >= 1.0
@@ -113,7 +113,7 @@ struct BalanceSection: View {
             }
             // Voll = grün statt Akzent — ruhige Bestätigung ohne Konfetti.
             ProgressTrack(progress: tally.completionFraction, fill: isComplete ? Color.green : accent)
-            // WAVE2: completion swaps the open-count line for a checkmark badge.
+            // completion swaps the open-count line for a checkmark badge.
             // blockSwap kept for the swap; appCelebrate ONLY on the isComplete flip.
             Group {
                 if isComplete {

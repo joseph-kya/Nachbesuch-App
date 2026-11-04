@@ -82,10 +82,8 @@ extension Optional where Wrapped == VisitOutcome {
 /// A chip that draws its label and its fill from the same hue needs the two far
 /// enough apart to stay legible, and how far apart is not one number: over a white
 /// card a 12 % wash is a clear field behind a saturated glyph, while over a dark
-/// card the same wash lands within a couple of steps of the text on top of it. The
-/// audit's dark-mode requirement — "pale red selected backgrounds must not become
-/// brown/gray against dark surfaces" — is exactly this case. Dark mode takes a
-/// heavier fill so the separation survives.
+/// card the same wash lands within a couple of steps of the text on top of it.
+/// Dark mode takes a heavier fill so the separation survives.
 ///
 /// One definition, because the open-count badge, the revisit chip and the two-day
 /// marker were each carrying their own number and had already drifted apart.

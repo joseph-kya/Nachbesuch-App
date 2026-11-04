@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 import UIKit
 
-/// Deletes a territory with everything hanging off it (B12).
+/// Deletes a territory with everything hanging off it.
 ///
 /// Extracted from `ArchiveScreen.delete` so the export sheet can offer the
 /// same deletion after an export: one meaning of "delete a territory",
